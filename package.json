@@ -1,0 +1,11 @@
+{
+  "name": "cortx",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "dev": "bun run --filter '*' dev",
+    "lint": "bun run --filter '*' lint",
+    "test": "bun test"
+  }
+}

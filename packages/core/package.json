@@ -1,0 +1,18 @@
+{
+  "name": "@cortx/core",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@cortx/sdk": "workspace:*",
+    "@synax-ai/core": "link:@synax-ai/core",
+    "@synax-ai/sdk": "link:@synax-ai/sdk"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.9"
+  }
+}
