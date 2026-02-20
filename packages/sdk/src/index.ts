@@ -1,14 +1,14 @@
+import type { Logger } from '@nerax-ai/logger';
+
+export type { Logger };
+
 import type {
   LanguageMessage,
-  LanguageTool,
   LanguageToolCallContent,
   LanguageToolResultContent,
-  LanguageTokenUsage,
 } from '@synax-ai/sdk';
 
-export type { LanguageMessage, LanguageTool, LanguageToolCallContent, LanguageToolResultContent };
-
-// --- Tool ---
+export type { LanguageMessage, LanguageToolCallContent, LanguageToolResultContent };
 
 export interface ToolResult {
   success: boolean;
@@ -19,7 +19,9 @@ export interface ToolResult {
 export interface ToolContext {
   sessionId: string;
   workingDirectory: string;
+  logger: Logger;
   reportProgress?: (text: string) => void;
+  askUser?: (question: string) => Promise<string>;
 }
 
 export interface Tool {
@@ -29,10 +31,28 @@ export interface Tool {
   execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 }
 
-// --- Events ---
+export interface ToolExecuteBeforeResult {
+  skip?: boolean;
+  result?: string;
+}
 
+export interface CortxPlugin {
+  'messages.transform'?: (messages: LanguageMessage[]) => LanguageMessage[] | Promise<LanguageMessage[]>;
+  'system.transform'?: (system: string) => string | Promise<string>;
+  'tool.execute.before'?: (tc: LanguageToolCallContent, ctx: ToolContext) => ToolExecuteBeforeResult | Promise<ToolExecuteBeforeResult>;
+  'tool.execute.after'?: (tc: LanguageToolCallContent, result: ToolResult) => ToolResult | Promise<ToolResult>;
+  'event'?: (event: AgentEvent) => void | Promise<void>;
+  tools?: Tool[];
+}
+
+// AgentEvent is needed by CortxPlugin['event'], defined here to avoid circular deps
 export type AgentEvent =
+  | { type: 'turn_start'; iteration: number }
+  | { type: 'turn_end'; iteration: number; toolCallCount: number }
+  | { type: 'text_delta'; delta: string }
   | { type: 'text'; content: string }
+  | { type: 'thinking_delta'; delta: string }
+  | { type: 'thinking'; content: string }
   | { type: 'tool_use'; toolCall: LanguageToolCallContent }
   | { type: 'tool_progress'; toolCallId: string; text: string }
   | { type: 'tool_result'; toolCallId: string; result: unknown; isError?: boolean }
@@ -41,53 +61,4 @@ export type AgentEvent =
   | { type: 'error'; error: Error }
   | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } };
 
-// --- Controller ---
-
-export interface AgentController {
-  steer(message: string | LanguageMessage): void;
-  followUp(message: string | LanguageMessage): void;
-  abort(reason?: string): void;
-  readonly isSteered: boolean;
-  readonly isAborted: boolean;
-  readonly hasFollowUps: boolean;
-  consumeFollowUps(): LanguageMessage[];
-}
-
-export class AgentLoopController implements AgentController {
-  private _steer?: LanguageMessage;
-  private _followUps: LanguageMessage[] = [];
-  private _aborted = false;
-  private _abortReason?: string;
-
-  private toMsg(m: string | LanguageMessage): LanguageMessage {
-    return typeof m === 'string' ? { role: 'user', content: m } : m;
-  }
-
-  steer(message: string | LanguageMessage): void { this._steer = this.toMsg(message); }
-  followUp(message: string | LanguageMessage): void { this._followUps.push(this.toMsg(message)); }
-  abort(reason?: string): void { this._aborted = true; this._abortReason = reason; }
-
-  get isSteered(): boolean { return this._steer !== undefined; }
-  get isAborted(): boolean { return this._aborted; }
-  get abortReason(): string | undefined { return this._abortReason; }
-  get hasFollowUps(): boolean { return this._followUps.length > 0; }
-
-  consumeSteer(): LanguageMessage | undefined {
-    const m = this._steer; this._steer = undefined; return m;
-  }
-  consumeFollowUps(): LanguageMessage[] {
-    const m = this._followUps; this._followUps = []; return m;
-  }
-}
-
-// --- Config ---
-
-export interface AgentConfig {
-  model: string;
-  system?: string;
-  tools?: Tool[];
-  maxIterations?: number;
-  maxOutputTokens?: number;
-  temperature?: number;
-  workingDirectory?: string;
-}
+export type { PluginModule, PluginContext, PluginManifest, InlinePlugin } from '@nerax-ai/plugin';
