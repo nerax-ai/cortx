@@ -1,0 +1,36 @@
+{
+  "name": "@cortx/tui",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "cortx": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "start": "bun src/cli.ts"
+  },
+  "dependencies": {
+    "@cortx/core": "workspace:*",
+    "@cortx/code": "workspace:*",
+    "@cortx/sdk": "workspace:*",
+    "@synax-ai/core": "link:@synax-ai/core",
+    "@synax-ai/sdk": "link:@synax-ai/sdk",
+    "@nerax-ai/storage": "link:@nerax-ai/storage",
+    "@nerax-ai/plugin": "link:@nerax-ai/plugin",
+    "@nerax-ai/logger": "link:@nerax-ai/logger"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

@@ -110,6 +110,9 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           tools: sdkTools.length ? sdkTools : undefined,
         })) {
           const p = part as LanguageStreamPart;
+          if (p.type === 'tool-input-start' || p.type === 'tool-input-delta' || p.type === 'tool-input-end') {
+            logger.debug(`[loop] ${p.type} id=${p.id} ${p.type === 'tool-input-delta' ? 'delta=' + JSON.stringify(p.delta) : ''}`);
+          }
           if (p.type === 'text-delta') {
             textBuffer += p.delta;
             const e: AgentEvent = { type: 'text_delta', delta: p.delta };
@@ -229,8 +232,25 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       if (skipped) continue;
 
       try {
-        const input = (typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input) as Record<string, unknown>;
+        const input = (typeof tc.input === 'string' ? (tc.input ? JSON.parse(tc.input) : {}) : tc.input ?? {}) as Record<string, unknown>;
+        // Validate required parameters before executing the tool
+        const requiredParams = tool.inputSchema?.required as string[] | undefined;
+        if (requiredParams?.length) {
+          const missingParams = requiredParams.filter(param => {
+            const value = input[param];
+            return value === undefined || value === null || value === '';
+          });
+          if (missingParams.length > 0) {
+            const err = `Missing required parameter(s): ${missingParams.join(', ')}. Please provide valid values.`;
+            const re: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: err, isError: true };
+            await emit(plugins, re); yield re;
+            toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, result: { type: 'error-text', value: err }, isError: true });
+            continue;
+          }
+        }
+        
         let result = await tool.execute(input, ctx);
+
         for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result)) ?? result;
         for (const text of progressMessages) {
           const e: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
