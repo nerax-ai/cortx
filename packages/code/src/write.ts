@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { mkdir, writeFile } from 'fs/promises';
+import { dirname, resolve } from 'path';
 import type { Tool } from '@cortx/sdk';
 
 export function createWriteTool(cwd: string): Tool {

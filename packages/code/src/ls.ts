@@ -1,5 +1,5 @@
-import { readdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readdir } from 'fs/promises';
+import { resolve } from 'path';
 import type { Tool } from '@cortx/sdk';
 
 export function createLsTool(cwd: string): Tool {
@@ -15,7 +15,7 @@ export function createLsTool(cwd: string): Tool {
     execute: async ({ path }) => {
       const abs = resolve(cwd, (path as string) ?? '.');
       const entries = await readdir(abs, { withFileTypes: true });
-      const output = entries.map((e: import('node:fs').Dirent) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n');
+      const output = entries.map((e: import('fs').Dirent) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n');
       return { success: true, output: output || '(empty)' };
     },
   };

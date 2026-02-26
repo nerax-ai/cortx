@@ -1,5 +1,5 @@
-import { readFile, writeFile, access, constants } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile, writeFile, access, constants } from 'fs/promises';
+import { resolve } from 'path';
 import type { Tool } from '@cortx/sdk';
 
 export function createEditTool(cwd: string): Tool {

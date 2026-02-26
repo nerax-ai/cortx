@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile } from 'fs/promises';
+import { resolve } from 'path';
 import type { Tool } from '@cortx/sdk';
 
 const MAX_LINES = 2000;

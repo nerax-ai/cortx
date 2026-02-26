@@ -1,7 +1,7 @@
-import { spawn, ChildProcess } from 'node:child_process';
-import { platform } from 'node:os';
-import { accessSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { spawn, ChildProcess } from 'child_process';
+import { platform } from 'os';
+import { accessSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
 import type { Tool } from '@cortx/sdk';
 
 type ShellType = 'bash' | 'powershell' | 'cmd';

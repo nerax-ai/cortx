@@ -1,5 +1,5 @@
-import * as readline from 'node:readline';
-import { createInterface } from 'node:readline';
+import * as readline from 'readline';
+import { createInterface } from 'readline';
 import { createLogger } from '@nerax-ai/logger';
 import { Cortx } from '@cortx/core';
 import { createCodingTools } from '@cortx/code';
