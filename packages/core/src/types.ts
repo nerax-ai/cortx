@@ -1,7 +1,7 @@
 import type { LanguageMessage } from '@synax-ai/sdk';
-import type { Logger, CortxPlugin, AgentEvent, Tool } from '@cortx/sdk';
+import type { Logger, CortxPlugin, AgentEvent, Tool, ErrorCode } from '@cortx/sdk';
 
-export type { CortxPlugin, AgentEvent };
+export type { CortxPlugin, AgentEvent, ErrorCode };
 
 export type DeliveryMode = 'all' | 'one-at-a-time';
 
@@ -74,4 +74,7 @@ export interface CortxConfig {
   maxOutputTokens?: number;
   temperature?: number;
   workingDirectory?: string;
+  autoContinueLimit?: number;
+  toolResultBudget?: number;
+  skillPaths?: string[];
 }

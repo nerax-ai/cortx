@@ -4,6 +4,8 @@ import type { LanguageMessage, Tool } from '@cortx/sdk';
 import { AgentLoopController, isPluginConfig } from './types.js';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { agentLoop } from './loop.js';
+import { discoverSkills } from './skill/discover.js';
+import { createSkillPlugin } from './skill/plugin.js';
 
 type CortxFactoryMap = { cortx: () => CortxPlugin | Promise<CortxPlugin> };
 
@@ -26,6 +28,7 @@ export class Cortx {
   private readonly tools = new Map<string, Tool>();
   private _messages: LanguageMessage[] = [];
   private _controller = new AgentLoopController();
+  private _skillPlugin: CortxPlugin | null = null;
 
   constructor(language: LanguageClient, config: CortxConfig) {
     this.language = language;
@@ -44,12 +47,19 @@ export class Cortx {
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
     const plugins = await resolvePlugins(this.config.plugins);
+
+    // Discover skills and create skill plugin
+    const cwd = this.config.workingDirectory ?? process.cwd();
+    const skills = await discoverSkills(cwd, this.config);
+    this._skillPlugin = skills.length ? createSkillPlugin(skills, cwd) : null;
+
+    const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
     const messages = [...this._messages];
     messages.push(typeof userMessage === 'string' ? { role: 'user', content: userMessage } : userMessage);
 
     for await (const event of agentLoop({
       ...this.config,
-      plugins,
+      plugins: allPlugins,
       language: this.language,
       tools: [...this.tools.values()],
       messages,
@@ -62,10 +72,11 @@ export class Cortx {
 
   async *continue(): AsyncGenerator<AgentEvent> {
     const plugins = await resolvePlugins(this.config.plugins);
+    const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
     const messages = [...this._messages];
     for await (const event of agentLoop({
       ...this.config,
-      plugins,
+      plugins: allPlugins,
       language: this.language,
       tools: [...this.tools.values()],
       messages,
