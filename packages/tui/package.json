@@ -18,19 +18,23 @@
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "start": "bun src/cli.ts"
+    "start": "bun src/cli.tsx"
   },
   "dependencies": {
-    "@cortx/core": "workspace:*",
     "@cortx/code": "workspace:*",
+    "@cortx/core": "workspace:*",
     "@cortx/sdk": "workspace:*",
+    "@nerax-ai/logger": "link:@nerax-ai/logger",
+    "@nerax-ai/plugin": "link:@nerax-ai/plugin",
+    "@nerax-ai/storage": "link:@nerax-ai/storage",
     "@synax-ai/core": "link:@synax-ai/core",
     "@synax-ai/sdk": "link:@synax-ai/sdk",
-    "@nerax-ai/storage": "link:@nerax-ai/storage",
-    "@nerax-ai/plugin": "link:@nerax-ai/plugin",
-    "@nerax-ai/logger": "link:@nerax-ai/logger"
+    "cli-highlight": "^2.1.11",
+    "ink": "^7.0.1",
+    "react": "^19.1.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.1.0"
   }
 }

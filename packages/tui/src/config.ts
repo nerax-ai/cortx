@@ -14,7 +14,7 @@ export interface CortxConfig {
 const DEFAULT_CONFIG: CortxConfig = {
   model: 'default',
   system: 'You are a helpful coding assistant. You have access to tools to read, write, and execute code.',
-  maxIterations: 50,
+  maxIterations: 200,
 };
 
 const storage = getStorage('cortx');
