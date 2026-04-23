@@ -22,8 +22,8 @@ export function createReadTool(cwd: string): Tool {
       const abs = resolve(cwd, path as string);
       const text = await readFile(abs, 'utf-8');
       const lines = text.split('\n');
-      const start = offset ? Math.max(0, (offset as number) - 1) : 0;
-      const end = limit ? Math.min(start + (limit as number), lines.length) : Math.min(start + MAX_LINES, lines.length);
+      const start = offset ? Math.max(0, Number(offset) - 1) : 0;
+      const end = limit ? Math.min(start + Number(limit), lines.length) : Math.min(start + MAX_LINES, lines.length);
       const slice = lines.slice(start, end).join('\n');
       const note = end < lines.length ? `\n\n[Showing lines ${start + 1}-${end} of ${lines.length}. Use offset=${end + 1} to continue.]` : '';
       return { success: true, output: slice + note };

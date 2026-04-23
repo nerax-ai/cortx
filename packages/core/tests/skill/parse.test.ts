@@ -31,6 +31,15 @@ describe('parseFrontmatter', () => {
 
   test('throws when no frontmatter delimiters', () => {
     expect(() => parseFrontmatter('no frontmatter here')).toThrow(SkillParseError);
+    expect(() => parseFrontmatter('no frontmatter here')).toThrow(/no frontmatter delimiters found/);
+  });
+
+  test('throws when YAML is not a mapping (scalar)', () => {
+    expect(() => parseFrontmatter('---\njust a string\n---\nBody')).toThrow(/frontmatter must be a YAML mapping/);
+  });
+
+  test('throws when YAML is an array', () => {
+    expect(() => parseFrontmatter('---\n- item1\n- item2\n---\nBody')).toThrow(/frontmatter must be a YAML mapping/);
   });
 });
 
@@ -65,5 +74,15 @@ describe('parseSkillFile', () => {
   test('throws when name is not a string', () => {
     const raw = '---\nname: 123\ndescription: Test\n---\nBody';
     expect(() => parseSkillFile(raw, 'SKILL.md', '/dir')).toThrow(/missing or invalid "name"/);
+  });
+
+  test('throws when description is not a string', () => {
+    const raw = '---\nname: test\ndescription: 456\n---\nBody';
+    expect(() => parseSkillFile(raw, 'SKILL.md', '/dir')).toThrow(/missing or invalid "description"/);
+  });
+
+  test('throws when arguments contains non-string values', () => {
+    const raw = '---\nname: test\ndescription: Test\narguments:\n  - valid\n  - 123\n---\nBody';
+    expect(() => parseSkillFile(raw, 'SKILL.md', '/dir')).toThrow(/must be an array of strings/);
   });
 });

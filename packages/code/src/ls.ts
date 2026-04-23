@@ -13,7 +13,7 @@ export function createLsTool(cwd: string): Tool {
       },
     },
     execute: async ({ path }) => {
-      const abs = resolve(cwd, (path as string) ?? '.');
+      const abs = resolve(cwd, typeof path === 'string' ? path : '.');
       const entries = await readdir(abs, { withFileTypes: true });
       const output = entries.map((e: import('fs').Dirent) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n');
       return { success: true, output: output || '(empty)' };

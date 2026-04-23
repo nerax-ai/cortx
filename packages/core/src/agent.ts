@@ -34,6 +34,7 @@ export class Cortx {
     this.language = language;
     this.config = config;
     for (const t of config.tools ?? []) this.tools.set(t.name, t);
+    this.tools.set('agent', this.createAgentTool());
   }
 
   get messages(): LanguageMessage[] { return [...this._messages]; }
@@ -98,4 +99,77 @@ export class Cortx {
 
   clearHistory(): void { this._messages = []; }
   replaceMessages(messages: LanguageMessage[]): void { this._messages = messages.slice(); }
+
+  private createAgentTool(): Tool {
+    const language = this.language;
+    const config = this.config;
+    const getTools = () => [...this.tools.values()].filter(t => t.name !== 'agent');
+
+    return {
+      name: 'agent',
+      description: 'Launch a sub-agent to handle a specific sub-task in isolation. The sub-agent has access to file tools (Read, Write, Edit, Bash, Grep, Find) and can perform research, analysis, or implementation work.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The task description for the sub-agent' },
+          description: { type: 'string', description: 'Short description (3-5 words) of the task' },
+        },
+        required: ['prompt'],
+      },
+      async execute(input: Record<string, unknown>, ctx): Promise<import('@cortx/sdk').ToolResult> {
+        const prompt = input.prompt as string;
+        if (!prompt || typeof prompt !== 'string') {
+          return { success: false, error: 'Parameter "prompt" is required and must be a non-empty string.' };
+        }
+
+        const desc = (input.description as string | undefined) ?? 'sub-agent';
+        ctx.reportProgress(`⏳ ${desc}: starting...`);
+        const subSystem = `You are a sub-agent. Complete the task using available tools.`;
+
+        let output = '';
+        let iterations = 0;
+        let toolCallCount = 0;
+        try {
+          for await (const event of agentLoop({
+            language,
+            model: config.model,
+            system: subSystem,
+            tools: getTools(),
+            messages: [{ role: 'user', content: prompt } as unknown as LanguageMessage],
+            workingDirectory: ctx.workingDirectory,
+            logger: ctx.logger,
+            maxIterations: 10,
+            maxOutputTokens: config.maxOutputTokens,
+          })) {
+            if (event.type === 'turn_start') {
+              iterations++;
+              if (iterations > 1) ctx.reportProgress(`⏳ ${desc}: iteration ${iterations}...`);
+            }
+            if (event.type === 'tool_use') {
+              toolCallCount++;
+              const tcInput = typeof event.toolCall.input === 'string'
+                ? (() => { try { return JSON.parse(event.toolCall.input); } catch { return {}; } })()
+                : event.toolCall.input ?? {};
+              const summary = event.toolCall.toolName === 'bash'
+                ? String(tcInput.command ?? '').slice(0, 60)
+                : event.toolCall.toolName === 'read' || event.toolCall.toolName === 'write' || event.toolCall.toolName === 'edit'
+                  ? String(tcInput.file_path ?? tcInput.path ?? '')
+                  : event.toolCall.toolName === 'grep'
+                    ? String(tcInput.pattern ?? '').slice(0, 40)
+                    : '';
+              ctx.reportProgress(`  → ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`);
+            }
+            if (event.type === 'text') output += event.content;
+            if (event.type === 'done' || event.type === 'error') break;
+          }
+          ctx.reportProgress(`✓ ${desc}: done (${iterations} iterations, ${toolCallCount} tool calls)`);
+          const preview = output.length > 800 ? output.slice(0, 800) + `\n... (${output.length} chars total)` : output;
+          return { success: true, output: preview || '(sub-agent produced no text output)' };
+        } catch (e) {
+          ctx.reportProgress(`✗ ${desc}: failed`);
+          return { success: false, error: `Sub-agent failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+      },
+    };
+  }
 }

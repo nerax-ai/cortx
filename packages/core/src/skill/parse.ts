@@ -1,4 +1,4 @@
-import type { SkillFrontmatter, SkillInfo } from '@cortx/sdk';
+import type { SkillInfo } from '@cortx/sdk';
 
 export class SkillParseError extends Error {
   constructor(filePath: string, reason: string) {
@@ -13,7 +13,11 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, unk
 
   const yaml = match[1];
   const body = match[2];
-  const frontmatter = Bun.YAML.parse(yaml) as Record<string, unknown>;
+  const parsed = Bun.YAML.parse(yaml);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new SkillParseError('<string>', 'frontmatter must be a YAML mapping');
+  }
+  const frontmatter = parsed as Record<string, unknown>;
   return { frontmatter, body };
 }
 
@@ -27,9 +31,13 @@ export function parseSkillFile(raw: string, filePath: string, dirPath: string): 
     throw new SkillParseError(filePath, 'missing or invalid "description" in frontmatter');
   }
 
-  const args = Array.isArray(frontmatter.arguments)
-    ? frontmatter.arguments.map(String)
-    : undefined;
+  let args: string[] | undefined;
+  if (Array.isArray(frontmatter.arguments)) {
+    if (!frontmatter.arguments.every((a: unknown) => typeof a === 'string')) {
+      throw new SkillParseError(filePath, '"arguments" must be an array of strings');
+    }
+    args = frontmatter.arguments as string[];
+  }
 
   return {
     name: frontmatter.name,

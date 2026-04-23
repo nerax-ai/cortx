@@ -1,6 +1,6 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { LanguageStreamPart, LanguageTokenUsage } from '@synax-ai/sdk';
-import type { Logger, CortxPlugin, LanguageMessage, LanguageToolCallContent, LanguageToolResultContent, Tool, ToolContext } from '@cortx/sdk';
+import type { LanguageTokenUsage } from '@synax-ai/sdk';
+import type { Logger, CortxPlugin, LanguageMessage, LanguageToolCallContent, LanguageToolResultContent, Tool, ToolContext, ErrorCode } from '@cortx/sdk';
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
 
 const noopLogger: Logger = {
@@ -17,10 +17,33 @@ export interface AgentLoopOptions extends Omit<CortxConfig, 'plugins'> {
   messages?: LanguageMessage[];
   controller?: AgentController;
   skipInitialLlm?: boolean;
+  skillContinueLimit?: number;
 }
 
 async function emit(plugins: CortxPlugin[], event: AgentEvent): Promise<void> {
   for (const p of plugins) await p['event']?.(event);
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((p): p is { type: string; text: string } => typeof p === 'object' && p !== null && 'type' in p && p.type === 'text' && typeof p.text === 'string')
+      .map(p => p.text)
+      .join('');
+  }
+  return '';
+}
+
+function classifyError(e: unknown): ErrorCode {
+  const err = e instanceof Error ? e : new Error(String(e));
+  const msg = err.message.toLowerCase();
+  const status = (err as { statusCode?: number; status?: number })?.statusCode ?? (err as { statusCode?: number; status?: number })?.status ?? 0;
+  if (status === 413 || msg.includes('context length') || msg.includes('context window') || msg.includes('prompt is too long') || msg.includes('too many tokens')) return 'context_overflow';
+  if (status === 429 || msg.includes('rate limit') || msg.includes('too many requests')) return 'rate_limited';
+  if (status >= 400 && status < 500) return 'client_error';
+  if (status >= 500 || msg.includes('503') || msg.includes('500') || msg.includes('server error')) return 'stream_error';
+  return 'stream_error';
 }
 
 export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEvent> {
@@ -55,30 +78,42 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
   const systemMessages: LanguageMessage[] = resolvedSystem ? [{ role: 'system', content: resolvedSystem }] : [];
   let iteration = 0;
   let resumeFromToolCalls: LanguageToolCallContent[] | undefined;
+  let isResuming = false;
 
   // If skipInitialLlm, extract tool calls from last assistant message
   if (skipInitialLlm) {
     const last = messages[messages.length - 1];
     if (last?.role === 'assistant' && Array.isArray(last.content)) {
-      resumeFromToolCalls = (last.content as LanguageToolCallContent[]).filter((c) => c.type === 'tool-call');
+      resumeFromToolCalls = (last.content as unknown[]).filter((c): c is LanguageToolCallContent => typeof c === 'object' && c !== null && 'type' in c && c.type === 'tool-call');
     }
     if (!resumeFromToolCalls?.length) {
-      const e: AgentEvent = { type: 'error', error: new Error('continue() requires last message to be an assistant message with tool calls') };
+      const e: AgentEvent = { type: 'error', error: new Error('continue() requires last message to be an assistant message with tool calls'), code: 'stream_error' };
       await emit(plugins, e); yield e; return;
     }
   }
 
+  const autoContinueLimit = opts.autoContinueLimit ?? 2;
+  let autoContinueCount = 0;
+  const skillContinueLimit = opts.skillContinueLimit ?? 5;
+  let skillContinueCount = 0;
+  let skillActive = false;
+  let retryCount = 0;
+  const maxRetries = 1;
+  let overflowRecoveryCount = 0;
+  const maxOverflowRecoveries = 3;
+
   mainLoop: while (true) {
     const ctrl = controller;
     if (ctrl?.isAborted) {
-      const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted') };
+      const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted'), code: 'user_abort' };
       await emit(plugins, e); yield e; return;
     }
     if (iteration >= maxIterations) {
-      const e: AgentEvent = { type: 'error', error: new Error(`Max iterations (${maxIterations}) reached`) };
+      const e: AgentEvent = { type: 'error', error: new Error(`Max iterations (${maxIterations}) reached`), code: 'max_iterations' };
       await emit(plugins, e); yield e; return;
     }
     iteration++;
+    isResuming = false;
     const turnStart: AgentEvent = { type: 'turn_start', iteration };
     await emit(plugins, turnStart); yield turnStart;
 
@@ -93,12 +128,30 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     if (resumeFromToolCalls) {
       toolCalls.push(...resumeFromToolCalls);
       resumeFromToolCalls = undefined;
+      isResuming = true;
       finishReason = 'tool-calls';
     } else {
       // Apply messages.transform hooks
       let transformedMessages: LanguageMessage[] = [...systemMessages, ...messages];
       for (const p of plugins) {
         if (p['messages.transform']) transformedMessages = await p['messages.transform'](transformedMessages);
+      }
+      // Sync plugin transforms (e.g., skill expansion) back to messages for persistence across turns
+      const offset = systemMessages.length;
+      for (let i = 0; i < messages.length && offset + i < transformedMessages.length; i++) {
+        if (messages[i] !== transformedMessages[offset + i]) {
+          messages[i] = transformedMessages[offset + i];
+        }
+      }
+      // Detect skill activation from any message in the array
+      if (!skillActive) {
+        for (const m of messages) {
+          if (m.role === 'user' && extractText(m.content).includes('Skill execution active')) {
+            skillActive = true;
+            logger.info(`[loop] skillActive = true detected`);
+            break;
+          }
+        }
       }
 
       try {
@@ -109,7 +162,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           temperature,
           tools: sdkTools.length ? sdkTools : undefined,
         })) {
-          const p = part as LanguageStreamPart;
+          const p = part;
           if (p.type === 'text-delta') {
             textBuffer += p.delta;
             const e: AgentEvent = { type: 'text_delta', delta: p.delta };
@@ -137,7 +190,56 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           }
         }
       } catch (e) {
-        const err: AgentEvent = { type: 'error', error: e instanceof Error ? e : new Error(String(e)) };
+        const error = e instanceof Error ? e : new Error(String(e));
+        const code = classifyError(e);
+
+        // Context overflow: try context.overflow plugin hook
+        if (code === 'context_overflow') {
+          overflowRecoveryCount++;
+          const overflowEvent: AgentEvent = { type: 'context_overflow', messages: [...messages] };
+          await emit(plugins, overflowEvent); yield overflowEvent;
+
+          const hasOverflowHook = plugins.some(p => p['context.overflow']);
+          if (hasOverflowHook && overflowRecoveryCount <= maxOverflowRecoveries) {
+            let compressed: LanguageMessage[] | null = null;
+            for (const p of plugins) {
+              const result = await p['context.overflow']?.([...messages]);
+              if (result) { compressed = result; break; }
+            }
+            if (compressed) {
+              messages.length = 0;
+              for (const m of compressed) messages.push(m);
+              continue mainLoop;
+            }
+          }
+
+          const err: AgentEvent = { type: 'error', error, code: 'context_overflow' };
+          await emit(plugins, err); yield err; return;
+        }
+
+        // Try error.recover plugin hook first
+        let shouldRetry = false;
+        let retryDelay = 1000;
+
+        const hasRecoverHook = plugins.some(p => p['error.recover']);
+        if (hasRecoverHook) {
+          const errorEvent: AgentEvent & { type: 'error' } = { type: 'error', error, code };
+          for (const p of plugins) {
+            const result = await p['error.recover']?.(errorEvent);
+            if (result?.retry && retryCount < maxRetries) { shouldRetry = true; retryDelay = result.delay ?? 1000; break; }
+          }
+        } else {
+          // Default: retry once on rate_limited or server errors
+          shouldRetry = (code === 'rate_limited' || code === 'stream_error') && retryCount < maxRetries;
+        }
+
+        if (shouldRetry) {
+          retryCount++;
+          await new Promise(r => setTimeout(r, retryDelay));
+          continue mainLoop;
+        }
+
+        const err: AgentEvent = { type: 'error', error, code };
         await emit(plugins, err); yield err; return;
       }
 
@@ -149,11 +251,53 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const e: AgentEvent = { type: 'text', content: textBuffer };
         await emit(plugins, e); yield e;
       }
+      retryCount = 0;
     }
 
     const isToolUse = finishReason === 'tool-calls';
+    logger.info(`[loop] iter=${iteration} finishReason=${finishReason} isToolUse=${isToolUse} toolCalls=${toolCalls.length} textLen=${textBuffer.length} skillActive=${skillActive} skillCont=${skillContinueCount}`);
 
     if (!isToolUse || !toolCalls.length) {
+      // Auto-continue on output truncation
+      const isTruncated = finishReason === 'length';
+      if (isTruncated && autoContinueCount < autoContinueLimit) {
+        autoContinueCount++;
+        messages.push({
+          role: 'assistant',
+          content: [
+            ...(thinkingBuffer ? [{ type: 'reasoning' as const, reasoning: thinkingBuffer }] : []),
+            ...(textBuffer ? [{ type: 'text' as const, text: textBuffer }] : []),
+          ],
+        });
+        messages.push({ role: 'user', content: [{ type: 'text' as const, text: 'Continue where you left off.' }] });
+        const e: AgentEvent = { type: 'follow_up', message: 'auto-continue (output truncated)' };
+        await emit(plugins, e); yield e;
+        const te: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };
+        await emit(plugins, te); yield te;
+        continue mainLoop;
+      }
+      // Non-truncated turn: reset auto-continue budget
+      if (!isTruncated) autoContinueCount = 0;
+
+      // Skill continuation: keep the loop going when a skill is active
+      if (skillActive && skillContinueCount < skillContinueLimit) {
+        logger.info(`[loop] skill continuation firing (${skillContinueCount + 1}/${skillContinueLimit})`);
+        skillContinueCount++;
+        messages.push({
+          role: 'assistant',
+          content: [
+            ...(thinkingBuffer ? [{ type: 'reasoning' as const, reasoning: thinkingBuffer }] : []),
+            ...(textBuffer ? [{ type: 'text' as const, text: textBuffer }] : []),
+          ],
+        });
+        messages.push({ role: 'user', content: [{ type: 'text' as const, text: 'Continue executing the skill. Use your available tools (Agent, Bash, Read, Write, Edit) to make progress. Do not summarize or stop — take concrete action.' }] });
+        const e: AgentEvent = { type: 'follow_up', message: `skill continuation (${skillContinueCount}/${skillContinueLimit})` };
+        await emit(plugins, e); yield e;
+        const te: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };
+        await emit(plugins, te); yield te;
+        continue mainLoop;
+      }
+
       if (controller?.hasFollowUps) {
         for (const msg of controller.consumeFollowUps()) {
           messages.push(msg);
@@ -174,16 +318,18 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       return;
     }
 
+    if (!isResuming) {
     messages.push({
       role: 'assistant',
       content: [
+        ...(thinkingBuffer ? [{ type: 'reasoning' as const, reasoning: thinkingBuffer }] : []),
         ...(textBuffer ? [{ type: 'text' as const, text: textBuffer }] : []),
         ...toolCalls,
       ],
     });
+    }
 
     const toolResults: LanguageToolResultContent[] = [];
-
     for (const tc of toolCalls) {
       const ctrl = controller;
       if (ctrl?.isSteered) {
@@ -195,7 +341,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         continue mainLoop;
       }
       if (ctrl?.isAborted) {
-        const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted') };
+        const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted'), code: 'user_abort' };
         await emit(plugins, e); yield e; return;
       }
 
@@ -207,7 +353,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const err = `Unknown tool: ${tc.toolName}`;
         const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: err, isError: true };
         await emit(plugins, e); yield e;
-        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, result: { type: 'error-text', value: err }, isError: true });
+        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'error-text', value: err }, isError: true });
         continue;
       }
 
@@ -221,7 +367,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           const out = r.result ?? 'skipped';
           const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: out, isError: false };
           await emit(plugins, e); yield e;
-          toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, result: { type: 'text', value: out }, isError: false });
+          toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'text', value: out }, isError: false });
           skipped = true;
           break;
         }
@@ -229,17 +375,33 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       if (skipped) continue;
 
       try {
-        const input = (typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input) as Record<string, unknown>;
+        const parsed = typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input;
+        const input: Record<string, unknown> = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed : {};
         let result = await tool.execute(input, ctx);
+        // Truncate large tool results before plugin hooks
+        const budget = opts.toolResultBudget ?? 10240;
+        let output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+        if (output.length > budget) {
+          const marker = `\n\n... (truncated, ${output.length} chars total) ...\n\n`;
+          const window = Math.max(0, Math.floor((budget - marker.length) / 2));
+          if (window === 0) {
+            output = output.slice(0, budget);
+          } else {
+            const head = output.slice(0, window);
+            const tail = output.slice(-window);
+            output = `${head}${marker}${tail}`;
+          }
+          result = { ...result, output };
+        }
         for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result)) ?? result;
         for (const text of progressMessages) {
           const e: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
           await emit(plugins, e); yield e;
         }
-        const output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
-        const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: output, isError: !result.success };
+        const finalOutput = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+        const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: finalOutput, isError: !result.success };
         await emit(plugins, e); yield e;
-        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, result: { type: 'text', value: output }, isError: !result.success });
+        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'text', value: finalOutput }, isError: !result.success });
       } catch (e) {
         for (const text of progressMessages) {
           const pe: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
@@ -248,7 +410,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const err = e instanceof Error ? e.message : String(e);
         const re: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: err, isError: true };
         await emit(plugins, re); yield re;
-        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, result: { type: 'error-text', value: err }, isError: true });
+        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'error-text', value: err }, isError: true });
       }
     }
 

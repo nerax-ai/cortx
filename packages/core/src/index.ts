@@ -10,4 +10,4 @@ export { createSkillPlugin } from './skill/plugin.js';
 export { parseInvocation, substituteArgs } from './skill/substitute.js';
 export { parseSkillFile, parseFrontmatter, SkillParseError } from './skill/parse.js';
 export { renderSkillSummary } from './skill/render.js';
-export type { SkillInfo, SkillFrontmatter } from '@cortx/sdk';
+export type { SkillInfo } from '@cortx/sdk';

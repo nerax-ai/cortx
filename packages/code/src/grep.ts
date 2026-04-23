@@ -23,9 +23,9 @@ export function createGrepTool(cwd: string): Tool {
       try {
         const { stdout } = await execFileAsync('grep', args, { cwd, maxBuffer: 2 * 1024 * 1024 });
         return { success: true, output: stdout.trim() || '(no matches)' };
-      } catch (e: any) {
-        if (e.code === 1) return { success: true, output: '(no matches)' };
-        return { success: false, error: e.message };
+      } catch (e: unknown) {
+        if ((e as { code?: number }).code === 1) return { success: true, output: '(no matches)' };
+        return { success: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
   };

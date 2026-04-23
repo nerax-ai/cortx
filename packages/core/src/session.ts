@@ -17,7 +17,7 @@ export class CortxSession {
     error: undefined,
   };
 
-  constructor(private readonly cortx: Cortx) {}
+  constructor(readonly cortx: Cortx) {}
 
   get controller(): AgentController { return this.cortx.controller; }
 

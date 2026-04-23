@@ -216,7 +216,7 @@ export function createBashTool(cwd: string): Tool {
           const output = [stdout, stderr].filter(Boolean).join('\n').trim();
           resolve({
             success: false,
-            error: `Command timed out after ${timeout} seconds. Partial output:\n${output}`,
+            error: `Command timed out after ${timeout ?? 120} seconds. Partial output:\n${output}`,
           });
         }, timeoutMs);
 
@@ -268,11 +268,11 @@ export function createBashTool(cwd: string): Tool {
               });
             }
           });
-        } catch (e: any) {
+        } catch (e: unknown) {
           clearTimeout(timeoutId);
           resolve({
             success: false,
-            error: `Failed to spawn shell: ${e.message}`,
+            error: `Failed to spawn shell: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
       });

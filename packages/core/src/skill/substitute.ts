@@ -1,4 +1,4 @@
-const INVOCATION_RE = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/;
+const INVOCATION_RE = /^\/([a-zA-Z0-9_:-]+)(?:\s+([\s\S]*))?$/;
 
 export function parseInvocation(message: string): { skillName: string; argsString: string; positionalArgs: string[] } | null {
   const match = message.match(INVOCATION_RE);

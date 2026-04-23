@@ -3,9 +3,7 @@ import type { SkillInfo } from '@cortx/sdk';
 import { readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
-export function createSkillTool(skills: SkillInfo[], cwd: string): Tool {
-  const skillMap = new Map(skills.map(s => [s.name, s]));
-
+export function createSkillTool(skillMap: Map<string, SkillInfo>, skills: SkillInfo[]): Tool {
   return {
     name: 'skill',
     description: 'Load a skill\'s full instructions by name. Use this when the task matches a skill\'s description.',
@@ -17,16 +15,16 @@ export function createSkillTool(skills: SkillInfo[], cwd: string): Tool {
       required: ['name'],
     },
     async execute(input: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
-      const name = input.name as string;
+      if (typeof input.name !== 'string') return { success: false, error: 'Skill name must be a string' };
+      const name = input.name;
       const skill = skillMap.get(name);
       if (!skill) {
-        const available = skills.map(s => s.name).join(', ') || 'none';
+        const available = skills.length > 20 ? skills.slice(0, 20).map(s => s.name).join(', ') + '...' : skills.map(s => s.name).join(', ');
         return { success: false, error: `Skill "${name}" not found. Available: ${available}` };
       }
 
       let output = `# Skill: ${skill.name}\n\n${skill.content}`;
 
-      // List companion files
       try {
         const companionFiles = await listCompanionFiles(skill.dirPath);
         if (companionFiles.length) {
@@ -58,7 +56,7 @@ async function listCompanionFiles(dirPath: string, maxFiles = 10): Promise<strin
       if (entry.isFile()) {
         results.push(relative(dirPath, full));
         count++;
-      } else if (entry.isDirectory()) {
+      } else if (entry.isDirectory() && !entry.isSymbolicLink()) {
         await walk(full, depth + 1);
       }
     }

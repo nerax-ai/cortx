@@ -30,6 +30,19 @@ describe('parseInvocation', () => {
     const result = parseInvocation('/my_skill-name arg');
     expect(result!.skillName).toBe('my_skill-name');
   });
+
+  test('handles skill name with colons (e.g. ce:ideate)', () => {
+    const result = parseInvocation('/ce:ideate');
+    expect(result).not.toBeNull();
+    expect(result!.skillName).toBe('ce:ideate');
+    expect(result!.argsString).toBe('');
+  });
+
+  test('handles colon-prefixed skill with args', () => {
+    const result = parseInvocation('/ce:plan some feature');
+    expect(result!.skillName).toBe('ce:plan');
+    expect(result!.argsString).toBe('some feature');
+  });
 });
 
 describe('substituteArgs', () => {
@@ -64,5 +77,27 @@ describe('substituteArgs', () => {
   test('preserves special characters in args', () => {
     const result = substituteArgs('Msg: $ARGUMENTS', 'fix(core)!: breaking change', ['fix(core)!:']);
     expect(result).toBe('Msg: fix(core)!: breaking change');
+  });
+
+  test('$0 resolves to empty string (1-based indexing)', () => {
+    const result = substituteArgs('$0 should be empty', 'arg', ['arg']);
+    expect(result).toBe(' should be empty');
+  });
+
+  test('odd number of fences leaves trailing content in code state', () => {
+    // Single opening fence: everything after is treated as code
+    const body = 'Before $ARGUMENTS\n```bash\necho $ARGUMENTS';
+    const result = substituteArgs(body, 'hello', ['hello']);
+    expect(result).toContain('Before hello');
+    // After the single fence, content is treated as code so $ARGUMENTS is preserved
+    expect(result).toContain('echo $ARGUMENTS');
+  });
+
+  test('three fences (open-close-open) correctly protects middle block', () => {
+    const body = 'Text $1\n```\ncode $1\n```\nMore text $1\n```\ncode $1';
+    const result = substituteArgs(body, 'arg', ['arg']);
+    expect(result).toContain('Text arg');
+    expect(result).toContain('code $1');
+    expect(result).toContain('More text arg');
   });
 });

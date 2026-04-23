@@ -23,8 +23,8 @@ export function createFindTool(cwd: string): Tool {
           cwd, maxBuffer: 2 * 1024 * 1024,
         });
         return { success: true, output: stdout.trim() || '(no files found)' };
-      } catch (e: any) {
-        return { success: false, error: e.message };
+      } catch (e: unknown) {
+        return { success: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
   };

@@ -16,12 +16,13 @@ export function createEditTool(cwd: string): Tool {
       required: ['path', 'oldText', 'newText'],
     },
     execute: async ({ path, oldText, newText }) => {
-      const abs = resolve(cwd, path as string);
+      if (typeof path !== 'string' || typeof oldText !== 'string' || typeof newText !== 'string')
+        return { success: false, error: 'path, oldText, and newText must be strings' };
+      const abs = resolve(cwd, path);
       await access(abs, constants.R_OK | constants.W_OK);
       const content = await readFile(abs, 'utf-8');
-      const old = oldText as string;
-      if (!content.includes(old)) return { success: false, error: `Text not found in ${path}` };
-      const updated = content.replace(old, newText as string);
+      if (!content.includes(oldText)) return { success: false, error: `Text not found in ${path}` };
+      const updated = content.replace(oldText, newText);
       await writeFile(abs, updated, 'utf-8');
       return { success: true, output: `Edited ${path}` };
     },

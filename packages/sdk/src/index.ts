@@ -72,4 +72,4 @@ export type AgentEvent =
   | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } };
 
 export type { PluginModule, PluginContext, PluginManifest, InlinePlugin } from '@nerax-ai/plugin';
-export type { SkillFrontmatter, SkillInfo } from './skill.js';
+export type { SkillInfo } from './skill.js';
