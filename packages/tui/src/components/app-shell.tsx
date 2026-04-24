@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore, useCallback, useMemo } from 'react';
 import { Box, useInput, useWindowSize } from 'ink';
 import { OutputRegion } from './output-region.js';
 import { InputArea } from './input-area.js';
+import { ToolRegion } from './tool-region.js';
 import { CommandPalette, buildItems, filterItems, moveSelection } from './command-palette.js';
 import { SessionPicker } from './session-picker.js';
 import type { TuiStore } from '../store.js';
@@ -47,6 +48,7 @@ export function AppShell({
   const [paletteSelectedIndex, setPaletteSelectedIndex] = useState(0);
   const [paletteFilter, setPaletteFilter] = useState('');
   const [injectedValue, setInjectedValue] = useState<string | undefined>(undefined);
+  const [toolExpanded, setToolExpanded] = useState(false);
   const anyOverlayActive = paletteOpen || sessionPickerOpen;
   const { rows } = useWindowSize();
   const inputAreaRows = 5;
@@ -119,11 +121,17 @@ export function AppShell({
       store.scrollUp(1);
       return;
     }
+    if (input === 'T' && key.shift && !key.ctrl) {
+      setToolExpanded((prev) => !prev);
+      return;
+    }
   });
 
   return (
     <Box flexDirection="column" height="100%">
       <OutputRegion store={store} height={viewportHeight} />
+
+      <ToolRegion store={store} collapsed={!toolExpanded} />
 
       <InputArea
         onSubmit={onSubmit}

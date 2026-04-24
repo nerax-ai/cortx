@@ -9,33 +9,12 @@ export interface OutputRegionProps {
 }
 
 interface OutputBlock {
-  type: 'user' | 'assistant' | 'thinking' | 'tool-header' | 'tool-result';
+  type: 'user' | 'assistant' | 'thinking';
   content: string;
-}
-
-function formatToolSummary(toolName: string, input: unknown): string {
-  try {
-    const parsed = typeof input === 'string' ? JSON.parse(input) : input;
-    if (toolName === 'agent') {
-      const prompt = String(parsed?.prompt ?? '').slice(0, 80);
-      const desc = String(parsed?.description ?? '');
-      return desc ? `${desc}: ${prompt}` : prompt;
-    }
-    if (toolName === 'bash') {
-      return String(parsed?.command ?? '').slice(0, 100);
-    }
-    if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
-      return String(parsed?.file_path ?? parsed?.path ?? '').slice(0, 100);
-    }
-    return '';
-  } catch {
-    return '';
-  }
 }
 
 function buildBlocks(
   turns: { role: string; content: string; duration?: number }[],
-  toolCalls: Map<string, { toolName: string; input: unknown; result?: unknown; isError?: boolean; status: string; progress?: string }>,
   currentText: string,
   currentThinking: string,
 ): OutputBlock[] {
@@ -43,26 +22,14 @@ function buildBlocks(
 
   for (const turn of turns) {
     if (turn.role === 'tool') {
-      blocks.push({ type: 'tool-result', content: turn.content });
+      // Tool turns are displayed in ToolRegion, skip here
+      continue;
     } else if (turn.role === 'user') {
       const durationTag = turn.duration != null && turn.duration > 0.1 ? ` (${turn.duration.toFixed(1)}s)` : '';
       blocks.push({ type: 'user', content: turn.content + durationTag });
     } else {
       const durationTag = turn.duration != null && turn.duration > 0.1 ? ` (${turn.duration.toFixed(1)}s)` : '';
       blocks.push({ type: 'assistant', content: turn.content + durationTag });
-    }
-  }
-
-  for (const entry of toolCalls.values()) {
-    const icon = entry.status === 'pending' ? '◷' : entry.isError ? '✗' : '✓';
-    const summary = formatToolSummary(entry.toolName, entry.input);
-    blocks.push({ type: 'tool-header', content: summary ? `${icon} ${entry.toolName}: ${summary}` : `${icon} ${entry.toolName}` });
-    if (entry.progress) {
-      blocks.push({ type: 'tool-result', content: entry.progress });
-    }
-    if (entry.result !== undefined) {
-      const resultStr = String(entry.result).length > 300 ? String(entry.result).slice(0, 300) + '...' : String(entry.result);
-      blocks.push({ type: 'tool-result', content: resultStr });
     }
   }
 
@@ -107,11 +74,6 @@ export function OutputRegion({ store, height }: OutputRegionProps) {
     useCallback(() => store.select((s) => s.messages).get(), [store]),
   );
 
-  const toolCalls = useSyncExternalStore(
-    useCallback((listener) => store.select((s) => s.toolCalls).subscribe(listener), [store]),
-    useCallback(() => store.select((s) => s.toolCalls).get(), [store]),
-  );
-
   const scrollOffset = useSyncExternalStore(
     useCallback((listener) => store.select((s) => s.scrollOffset).subscribe(listener), [store]),
     useCallback(() => store.select((s) => s.scrollOffset).get(), [store]),
@@ -124,8 +86,8 @@ export function OutputRegion({ store, height }: OutputRegionProps) {
 
   const { turns, currentText, currentThinking } = messages;
   const blocks = useMemo(
-    () => buildBlocks(turns, toolCalls, currentText, currentThinking),
-    [turns, toolCalls, currentText, currentThinking],
+    () => buildBlocks(turns, currentText, currentThinking),
+    [turns, currentText, currentThinking],
   );
 
   // Compute cumulative heights for scroll calculation
@@ -184,16 +146,7 @@ function BlockRenderer({ block }: { block: OutputBlock }) {
       );
 
     case 'assistant':
-      return <Markdown text={block.content} />;
-
-    case 'tool-header': {
-      const isError = block.content.startsWith('✗');
-      const isPending = block.content.startsWith('◷');
-      return <Text color={isPending ? 'yellow' : isError ? 'red' : 'green'} bold>{block.content}</Text>;
-    }
-
-    case 'tool-result':
     default:
-      return <Text dimColor>{'  '}{block.content}</Text>;
+      return <Markdown text={block.content} />;
   }
 }

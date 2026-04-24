@@ -17,6 +17,26 @@ export interface ToolRegionProps {
  *   - expanded: shows all tool calls with input/result details
  *   - Toggle with 't' key when agent is idle
  */
+function formatToolSummary(toolName: string, input: unknown): string {
+  try {
+    const parsed = typeof input === 'string' ? JSON.parse(input) : input;
+    if (toolName === 'agent') {
+      const prompt = String(parsed?.prompt ?? '').slice(0, 60);
+      const desc = String(parsed?.description ?? '');
+      return desc ? `${desc}: ${prompt}` : prompt;
+    }
+    if (toolName === 'bash') {
+      return String(parsed?.command ?? '').slice(0, 80);
+    }
+    if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
+      return String(parsed?.file_path ?? parsed?.path ?? '').slice(0, 80);
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
   const toolCalls = useSyncExternalStore(
     useCallback(
@@ -32,7 +52,7 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
 
   // Collapsed: show only the latest tool call summary
   if (collapsed) {
-    const [latestId, latestEntry] = entries[entries.length - 1];
+    const [, latestEntry] = entries[entries.length - 1];
     const statusIcon = latestEntry.status === 'pending'
       ? '\u25F7'  // ◷ running
       : latestEntry.isError
@@ -56,13 +76,17 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
             {' '}
             <Text bold>{latestEntry.toolName}</Text>
           </Text>
+          {(() => {
+            const summary = formatToolSummary(latestEntry.toolName, latestEntry.input);
+            return summary ? <Text dimColor>{': '}{summary}</Text> : null;
+          })()}
           {totalCount > 1 && (
             <Text dimColor>
               {' '}
               ({pendingCount > 0 ? `${pendingCount}/${totalCount} running` : `${totalCount} tools`})
             </Text>
           )}
-          <Text dimColor>{' [t] expand'}</Text>
+          <Text dimColor>{' [Shift+T] expand'}</Text>
         </Box>
       </Box>
     );
@@ -73,7 +97,7 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
     <Box flexDirection="column" paddingX={1}>
       <Box>
         <Text bold color="cyan">Tool Calls</Text>
-        <Text dimColor>{' [t] collapse'}</Text>
+        <Text dimColor>{' [Shift+T] collapse'}</Text>
       </Box>
       {entries.map(([id, entry]) => {
         const statusIcon = entry.status === 'pending'
@@ -94,6 +118,10 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
               <Text color={statusColor}>{statusIcon}</Text>
               {' '}
               <Text bold>{entry.toolName}</Text>
+              {(() => {
+                const summary = formatToolSummary(entry.toolName, entry.input);
+                return summary ? <Text dimColor>{': '}{summary}</Text> : null;
+              })()}
             </Text>
             {entry.result !== undefined && (
               <Box marginLeft={2}>
