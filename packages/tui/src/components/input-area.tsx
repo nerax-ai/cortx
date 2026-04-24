@@ -432,7 +432,6 @@ export function InputArea({
   });
 
   const activity = deriveActivity(status, toolCalls);
-  const displayTotal = totalElapsed + (elapsed > 0 ? elapsed : 0);
 
   const prompt = isRunning ? 'Follow-up > ' : '> ';
   const lines = value.split('\n');
@@ -441,7 +440,7 @@ export function InputArea({
     <Box flexDirection="column">
       {/* Activity indicator line */}
       <Box>
-        <ActivityIndicator activity={activity} model={model} iteration={iteration} elapsed={elapsed} totalElapsed={displayTotal} tokenUsage={tokenUsage} toolCalls={toolCalls} />
+        <ActivityIndicator activity={activity} model={model} iteration={iteration} elapsed={elapsed} totalElapsed={totalElapsed} tokenUsage={tokenUsage} toolCalls={toolCalls} />
       </Box>
 
       {/* Separator */}
