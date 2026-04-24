@@ -57,10 +57,11 @@ export function AppShell({
   // Mouse wheel scrolling
   useEffect(() => {
     const stdin = process.stdin;
-    if (!stdin.isTTY) return;
+    const stdout = process.stdout;
+    if (!stdin.isTTY || !stdout.isTTY) return;
 
-    // Enable SGR mouse tracking (button events + scroll)
-    stdin.write('\x1b[?1000h\x1b[?1006h');
+    // Enable SGR mouse tracking (write escape sequences to stdout)
+    stdout.write('\x1b[?1000h\x1b[?1006h');
 
     let buffer = '';
     const onData = (data: Buffer) => {
@@ -100,7 +101,7 @@ export function AppShell({
     return () => {
       stdin.off('data', onData);
       // Disable mouse tracking
-      stdin.write('\x1b[?1000l\x1b[?1006l');
+      stdout.write('\x1b[?1000l\x1b[?1006l');
     };
   }, [store, anyOverlayActive]);
 
