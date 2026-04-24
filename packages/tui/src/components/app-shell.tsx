@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, useCallback, useMemo } from 'react';
-import { Box, useInput } from 'ink';
+import { Box, useInput, useWindowSize } from 'ink';
 import { OutputRegion } from './output-region.js';
 import { InputArea } from './input-area.js';
 import { ToolRegion } from './tool-region.js';
@@ -32,7 +32,6 @@ export function AppShell({
   store,
   registry,
   model,
-  cwd,
   skills,
   onSubmit,
   onAbort,
@@ -53,6 +52,9 @@ export function AppShell({
   const [injectedValue, setInjectedValue] = useState<string | undefined>(undefined);
   const [toolExpanded, setToolExpanded] = useState(false);
   const anyOverlayActive = paletteOpen || sessionPickerOpen;
+  const { rows } = useWindowSize();
+  const inputAreaRows = 5;
+  const contentHeight = Math.max(3, rows - inputAreaRows);
 
   const paletteItems = useMemo(
     () => buildItems(registry.getCommands(), skills),
@@ -99,48 +101,20 @@ export function AppShell({
   // Session picker overlay
   if (sessionPickerOpen && onSessionSelect && onSessionPickerClose) {
     return (
-      <SessionPicker
-        sessions={sessionList}
-        onSelect={onSessionSelect}
-        onClose={onSessionPickerClose}
-      />
-    );
-  }
-
-  // Command palette overlay
-  if (paletteOpen) {
-    return (
-      <Box flexDirection="column">
-        <CommandPalette
-          items={paletteItems}
-          filter={paletteFilter}
-          selectedIndex={paletteSelectedIndex}
-          maxHeight={10}
-        />
-        <InputArea
-          onSubmit={onSubmit}
-          isRunning={status === 'running'}
-          onAbort={onAbort}
-          onForceExit={onForceExit}
-          onOpenPalette={() => { setPaletteOpen(true); setPaletteSelectedIndex(0); setPaletteFilter(''); }}
-          onPaletteNavigate={handlePaletteNavigate}
-          onPaletteSelect={handlePaletteSelect}
-          onPaletteClose={handlePaletteClose}
-          onPaletteFilterChange={(f) => setPaletteFilter(f)}
-          overlayActive={false}
-          paletteOpen={paletteOpen}
-          store={store}
-          model={model}
-          injectedValue={injectedValue}
+      <Box flexDirection="column" height="100%">
+        <SessionPicker
+          sessions={sessionList}
+          onSelect={onSessionSelect}
+          onClose={onSessionPickerClose}
         />
       </Box>
     );
   }
 
-  // Normal mode
+  // Normal mode (palette is inline in InputArea, no separate overlay needed)
   return (
-    <Box flexDirection="column">
-      <OutputRegion store={store} />
+    <Box flexDirection="column" height="100%">
+      <OutputRegion store={store} height={contentHeight} />
       <ToolRegion store={store} collapsed={!toolExpanded} />
       <InputArea
         onSubmit={onSubmit}
@@ -158,6 +132,17 @@ export function AppShell({
         model={model}
         injectedValue={injectedValue}
       />
+
+      {paletteOpen && (
+        <Box flexDirection="column" position="absolute" bottom={inputAreaRows} left={0} right={0}>
+          <CommandPalette
+            items={paletteItems}
+            filter={paletteFilter}
+            selectedIndex={paletteSelectedIndex}
+            maxHeight={contentHeight}
+          />
+        </Box>
+      )}
     </Box>
   );
 }

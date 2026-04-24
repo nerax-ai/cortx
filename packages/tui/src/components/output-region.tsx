@@ -9,6 +9,7 @@ const selectMessages = (s: TuiState) => s.messages;
 
 export interface OutputRegionProps {
   store: TuiStore;
+  height?: number;
 }
 
 interface OutputBlock {
@@ -46,7 +47,7 @@ function buildBlocks(
   return blocks;
 }
 
-export function OutputRegion({ store }: OutputRegionProps) {
+export function OutputRegion({ store, height }: OutputRegionProps) {
   const messages = useSyncExternalStore(
     useCallback((listener) => store.select(selectMessages).subscribe(listener), [store]),
     useCallback(() => store.select(selectMessages).get(), [store]),
@@ -61,7 +62,7 @@ export function OutputRegion({ store }: OutputRegionProps) {
   if (blocks.length === 0) return null;
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" flexGrow={1} overflowY="hidden" paddingX={1} {...(height ? { height } : {})}>
       {blocks.map((block, index) => (
         <BlockRenderer key={`block-${index}`} block={block} />
       ))}
