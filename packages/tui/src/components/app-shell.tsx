@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, useCallback, useMemo } from 'react';
+import { useState, useSyncExternalStore, useCallback, useMemo, useEffect } from 'react';
 import { Box, useInput, useWindowSize } from 'ink';
 import { OutputRegion } from './output-region.js';
 import { InputArea } from './input-area.js';
@@ -53,6 +53,56 @@ export function AppShell({
   const { rows } = useWindowSize();
   const inputAreaRows = 5;
   const viewportHeight = Math.max(3, rows - inputAreaRows);
+
+  // Mouse wheel scrolling
+  useEffect(() => {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) return;
+
+    // Enable SGR mouse tracking (button events + scroll)
+    stdin.write('\x1b[?1000h\x1b[?1006h');
+
+    let buffer = '';
+    const onData = (data: Buffer) => {
+      buffer += data.toString('binary');
+
+      // Process complete SGR mouse sequences: ESC [ < button ; x ; y M/m
+      const sgrRegex = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+      let match: RegExpExecArray | null;
+      let lastIndex = 0;
+
+      while ((match = sgrRegex.exec(buffer)) !== null) {
+        lastIndex = sgrRegex.lastIndex;
+        const button = parseInt(match[1], 10);
+
+        // Button 64 = scroll up, Button 65 = scroll down
+        if (!anyOverlayActive) {
+          if (button === 64) {
+            store.scrollUp(3);
+          } else if (button === 65) {
+            store.scrollDown(3);
+          }
+        }
+      }
+
+      // Keep unprocessed data in buffer
+      if (lastIndex > 0) {
+        buffer = buffer.slice(lastIndex);
+      }
+      // Prevent buffer from growing unbounded
+      if (buffer.length > 1024) {
+        buffer = '';
+      }
+    };
+
+    stdin.on('data', onData);
+
+    return () => {
+      stdin.off('data', onData);
+      // Disable mouse tracking
+      stdin.write('\x1b[?1000l\x1b[?1006l');
+    };
+  }, [store, anyOverlayActive]);
 
   const paletteItems = useMemo(
     () => buildItems(registry.getCommands(), skills),
