@@ -117,9 +117,7 @@ export function OutputRegion({ store, height }: OutputRegionProps) {
 
   return (
     <Box flexDirection="column" flexGrow={1} overflowY="hidden" paddingX={1} {...(height ? { height } : {})}>
-      {totalLines === 0 ? (
-        <Text dimColor>Waiting for output...</Text>
-      ) : (
+      {totalLines === 0 ? null : (
         <>
           {visibleLines.map((line, i) => {
             switch (line.type) {

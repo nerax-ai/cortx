@@ -37,10 +37,11 @@ export interface TokenUsage {
 export interface TuiState {
   /** Unique session identifier (e.g. "sess_1234_abc"). */
   sessionId: string;
-  /** Accumulated turns plus the current streaming text. */
+  /** Accumulated turns plus the current streaming text and thinking. */
   messages: {
     turns: TurnEntry[];
     currentText: string;
+    currentThinking: string;
   };
   /** Current iteration number (incremented on turn_start). */
   iteration: number;

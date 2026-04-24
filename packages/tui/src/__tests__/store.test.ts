@@ -5,7 +5,7 @@ describe('TuiStore', () => {
   test('initial state', () => {
     const store = new TuiStore();
     const state = store.getState();
-    expect(state.messages).toEqual({ turns: [], currentText: '' });
+    expect(state.messages).toEqual({ turns: [], currentText: '', currentThinking: '' });
     expect(state.iteration).toBe(0);
     expect(state.toolCalls.size).toBe(0);
     expect(state.tokenUsage).toEqual({ inputTokens: 0, outputTokens: 0 });
@@ -301,7 +301,7 @@ describe('TuiStore', () => {
     store.reset();
 
     const state = store.getState();
-    expect(state.messages).toEqual({ turns: [], currentText: '' });
+    expect(state.messages).toEqual({ turns: [], currentText: '', currentThinking: '' });
     expect(state.iteration).toBe(0);
     expect(state.toolCalls.size).toBe(0);
     expect(state.status).toBe('idle');
@@ -578,7 +578,7 @@ describe('TuiStore', () => {
 
     const state = store.getState();
     expect(state.sessionId).toBe('custom-sess-id');
-    expect(state.messages).toEqual({ turns: [], currentText: '' });
+    expect(state.messages).toEqual({ turns: [], currentText: '', currentThinking: '' });
     expect(state.iteration).toBe(0);
     expect(state.status).toBe('idle');
   });
@@ -642,5 +642,65 @@ describe('TuiStore', () => {
 
     expect(store.getState().messages.turns).toEqual([]);
     expect(store.getState().messages.currentText).toBe('');
+  });
+
+  // --- thinking_delta / thinking ---
+
+  test('dispatch thinking_delta accumulates into currentThinking', () => {
+    const store = new TuiStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 });
+    store.dispatch({ type: 'thinking_delta', delta: 'Let me think' });
+    store.dispatch({ type: 'thinking_delta', delta: ' about this...' });
+
+    expect(store.getState().messages.currentThinking).toBe('Let me think about this...');
+  });
+
+  test('dispatch thinking finalizes currentThinking', () => {
+    const store = new TuiStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 });
+    store.dispatch({ type: 'thinking_delta', delta: 'partial...' });
+    store.dispatch({ type: 'thinking', content: 'Finalized reasoning' });
+
+    expect(store.getState().messages.currentThinking).toBe('Finalized reasoning');
+  });
+
+  test('turn_start resets currentThinking', () => {
+    const store = new TuiStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 });
+    store.dispatch({ type: 'thinking_delta', delta: 'some thinking' });
+    expect(store.getState().messages.currentThinking).toBe('some thinking');
+
+    store.dispatch({ type: 'turn_start', iteration: 2 });
+    expect(store.getState().messages.currentThinking).toBe('');
+  });
+
+  test('thinking_delta with empty string is no-op', () => {
+    const store = new TuiStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 });
+    store.dispatch({ type: 'thinking_delta', delta: '' });
+
+    expect(store.getState().messages.currentThinking).toBe('');
+  });
+
+  test('multiple thinking_delta without thinking event accumulates', () => {
+    const store = new TuiStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 });
+    store.dispatch({ type: 'thinking_delta', delta: 'step 1. ' });
+    store.dispatch({ type: 'thinking_delta', delta: 'step 2. ' });
+    store.dispatch({ type: 'thinking_delta', delta: 'step 3.' });
+    store.dispatch({ type: 'text_delta', delta: 'response' });
+
+    expect(store.getState().messages.currentThinking).toBe('step 1. step 2. step 3.');
+    expect(store.getState().messages.currentText).toBe('response');
+  });
+
+  test('reset clears currentThinking', () => {
+    const store = new TuiStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 });
+    store.dispatch({ type: 'thinking_delta', delta: 'some thinking' });
+
+    store.reset();
+
+    expect(store.getState().messages.currentThinking).toBe('');
   });
 });

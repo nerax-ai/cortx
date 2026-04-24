@@ -31,7 +31,7 @@ export class TuiStore {
   constructor() {
     this.state = {
       sessionId: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      messages: { turns: [], currentText: '' },
+      messages: { turns: [], currentText: '', currentThinking: '' },
       iteration: 0,
       toolCalls: new Map(),
       tokenUsage: { inputTokens: 0, outputTokens: 0 },
@@ -128,7 +128,7 @@ export class TuiStore {
           ...this.state,
           iteration: event.iteration,
           status: 'running',
-          messages: { turns, currentText: '' },
+          messages: { turns, currentText: '', currentThinking: '' },
           toolCalls: new Map(),
           totalElapsed: this.state.totalElapsed + prevElapsed,
           elapsed: 0,
@@ -152,7 +152,13 @@ export class TuiStore {
       }
 
       case 'thinking_delta': {
-        // Future: separate thinking buffer
+        this.state = {
+          ...this.state,
+          messages: {
+            ...this.state.messages,
+            currentThinking: this.state.messages.currentThinking + event.delta,
+          },
+        };
         break;
       }
 
@@ -169,7 +175,13 @@ export class TuiStore {
       }
 
       case 'thinking': {
-        // Finalized thinking content -- no special action for now
+        this.state = {
+          ...this.state,
+          messages: {
+            ...this.state.messages,
+            currentThinking: event.content,
+          },
+        };
         break;
       }
 
@@ -190,7 +202,7 @@ export class TuiStore {
         } satisfies ToolCallEntry);
         this.state = {
           ...this.state,
-          messages: { turns: turnsTU, currentText: '' },
+          messages: { turns: turnsTU, currentText: '', currentThinking: '' },
           toolCalls: newToolCalls,
         };
         break;
@@ -246,7 +258,7 @@ export class TuiStore {
         this.state = {
           ...this.state,
           status: 'idle',
-          messages: { turns: turnsDone, currentText: '' },
+          messages: { turns: turnsDone, currentText: '', currentThinking: '' },
           tokenUsage: usage,
           totalElapsed: this.state.totalElapsed + this.state.elapsed,
           elapsed: 0,
@@ -265,7 +277,7 @@ export class TuiStore {
         this.state = {
           ...this.state,
           status: 'error',
-          messages: { turns: turnsErr, currentText: '' },
+          messages: { turns: turnsErr, currentText: '', currentThinking: '' },
           error: event.error.message,
           elapsed: 0,
         };
@@ -353,7 +365,7 @@ export class TuiStore {
     this.totalStartTime = 0;
     this.state = {
       sessionId: sessionId ?? `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      messages: { turns: [], currentText: '' },
+      messages: { turns: [], currentText: '', currentThinking: '' },
       iteration: 0,
       toolCalls: new Map(),
       tokenUsage: { inputTokens: 0, outputTokens: 0 },
@@ -374,7 +386,7 @@ export class TuiStore {
   loadTurns(turns: TurnEntry[]): void {
     this.state = {
       ...this.state,
-      messages: { turns, currentText: '' },
+      messages: { turns, currentText: '', currentThinking: '' },
     };
     this.notifySelectors();
   }

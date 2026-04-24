@@ -129,22 +129,83 @@ export function openInEditor(initialContent: string): string | null {
 // Component
 // ---------------------------------------------------------------------------
 
-function getBorderColor(status: string): string {
-  switch (status) {
-    case 'running': return 'yellow';
-    case 'interrupting': return 'red';
-    case 'error': return 'red';
-    default: return 'gray';
+type ActivityState = 'idle' | 'thinking' | 'executing' | 'interrupting' | 'error';
+
+function deriveActivity(
+  status: string,
+  toolCalls: Map<string, { status: string; toolName: string }>,
+): ActivityState {
+  if (status === 'interrupting') return 'interrupting';
+  if (status === 'error') return 'error';
+  if (status === 'running') {
+    const hasPending = [...toolCalls.values()].some((e) => e.status === 'pending');
+    return hasPending ? 'executing' : 'thinking';
   }
+  return 'idle';
 }
 
-function getStatusIcon(status: string): { icon: string; color: string } {
-  switch (status) {
-    case 'running': return { icon: '\u25B6', color: 'yellow' };
-    case 'interrupting': return { icon: '\u23F8', color: 'red' };
-    case 'error': return { icon: '\u2717', color: 'red' };
-    default: return { icon: '\u2764', color: 'green' };
+function ActivityIndicator({
+  activity,
+  model,
+  iteration,
+  elapsed,
+  totalElapsed,
+  tokenUsage,
+  toolCalls,
+}: {
+  activity: ActivityState;
+  model: string;
+  iteration: number;
+  elapsed: number;
+  totalElapsed: number;
+  tokenUsage: { inputTokens: number; outputTokens: number };
+  toolCalls: Map<string, { status: string; toolName: string }>;
+}) {
+  const parts: React.ReactNode[] = [];
+
+  switch (activity) {
+    case 'thinking':
+      parts.push(<Text color="yellow" bold>{'⏳'} Thinking...</Text>);
+      break;
+    case 'executing': {
+      const latestTool = [...toolCalls.values()].find((e) => e.status === 'pending');
+      const name = latestTool?.toolName ?? 'tool';
+      parts.push(<Text color="cyan" bold>{'⚙'} {name}</Text>);
+      break;
+    }
+    case 'interrupting':
+      parts.push(<Text color="red" bold>{'⏹'} Interrupting...</Text>);
+      break;
+    case 'error':
+      parts.push(<Text color="red" bold>{'✗'} Error</Text>);
+      break;
+    default:
+      parts.push(<Text color="green">{'✓'} Ready</Text>);
+      break;
   }
+
+  parts.push(<Text dimColor>{' │ '} {model}</Text>);
+
+  if (iteration > 0 && activity !== 'idle') {
+    parts.push(<Text dimColor>{' │ '} iter: {iteration}</Text>);
+  }
+
+  if (elapsed > 0) {
+    parts.push(<Text dimColor>{' │ '} {elapsed}s</Text>);
+  }
+
+  if (activity === 'idle') {
+    if (tokenUsage.inputTokens > 0 || tokenUsage.outputTokens > 0) {
+      const inK = tokenUsage.inputTokens >= 1000 ? `${(tokenUsage.inputTokens / 1000).toFixed(1)}k` : String(tokenUsage.inputTokens);
+      const outK = tokenUsage.outputTokens >= 1000 ? `${(tokenUsage.outputTokens / 1000).toFixed(1)}k` : String(tokenUsage.outputTokens);
+      parts.push(<Text dimColor>{' │ '} {inK}+{outK} tokens</Text>);
+    }
+    if (totalElapsed > 0) {
+      parts.push(<Text dimColor>{' │ '} {totalElapsed}s</Text>);
+    }
+  }
+
+  return <Box>{parts}</Box>;
 }
 
 export function InputArea({
@@ -198,6 +259,11 @@ export function InputArea({
   const totalElapsed = useSyncExternalStore(
     useCallback((listener) => store.select((s) => s.totalElapsed).subscribe(listener), [store]),
     useCallback(() => store.select((s) => s.totalElapsed).get(), [store]),
+  );
+
+  const toolCalls = useSyncExternalStore(
+    useCallback((listener) => store.select((s) => s.toolCalls).subscribe(listener), [store]),
+    useCallback(() => store.select((s) => s.toolCalls).get(), [store]),
   );
 
   // Sync status with isRunning prop
@@ -353,38 +419,22 @@ export function InputArea({
     }
   });
 
-  const borderColor = getBorderColor(status);
-  const { icon, color: iconColor } = getStatusIcon(status);
-
-  // Build status line parts
-  const statusParts: string[] = [];
-  if (status === 'idle') statusParts.push('idle');
-  else if (status === 'running') statusParts.push('running');
-  else if (status === 'interrupting') statusParts.push('interrupting');
-  statusParts.push(model);
-  if (iteration > 0) statusParts.push(`iter: ${iteration}`);
-  if (tokenUsage.inputTokens > 0 || tokenUsage.outputTokens > 0) {
-    statusParts.push(`tokens: ${tokenUsage.inputTokens}+${tokenUsage.outputTokens}`);
-  }
-  if (elapsed > 0) statusParts.push(`${elapsed}s`);
+  const activity = deriveActivity(status, toolCalls);
   const displayTotal = totalElapsed + (elapsed > 0 ? elapsed : 0);
-  if (displayTotal > 0 && status === 'idle') statusParts.push(`total: ${displayTotal}s`);
 
   const prompt = isRunning ? 'Follow-up > ' : '> ';
   const lines = value.split('\n');
 
   return (
     <Box flexDirection="column">
-      {/* Separator line with status */}
+      {/* Activity indicator line */}
       <Box>
-        <Text color={borderColor}>{'\u250C'}</Text>
-        <Text color={borderColor}>{'\u2500'.repeat(2)}</Text>
-        <Text color={borderColor}>{' '}</Text>
-        <Text color={iconColor}>{icon}</Text>
-        <Text dimColor>{' ' + statusParts.join(' \u2502 ')}</Text>
-        <Text color={borderColor}>{' '}</Text>
-        <Text color={borderColor}>{'\u2500'.repeat(2)}</Text>
-        <Text color={borderColor}>{'\u2510'}</Text>
+        <ActivityIndicator activity={activity} model={model} iteration={iteration} elapsed={elapsed} totalElapsed={displayTotal} tokenUsage={tokenUsage} toolCalls={toolCalls} />
+      </Box>
+
+      {/* Separator */}
+      <Box>
+        <Text color="gray">{'\u2500'.repeat(80)}</Text>
       </Box>
 
       {/* Input lines */}
@@ -416,15 +466,8 @@ export function InputArea({
 
         {/* Help line */}
         <Text dimColor>
-          /= commands | Enter= submit | Shift+Enter= newline | Ctrl+E= editor | Ctrl+C= cancel
+          Ctrl+K palette \u2502 Ctrl+E editor \u2502 Ctrl+C cancel
         </Text>
-      </Box>
-
-      {/* Bottom border */}
-      <Box>
-        <Text color={borderColor}>{'\u2514'}</Text>
-        <Text color={borderColor}>{'\u2500'.repeat(2)}</Text>
-        <Text color={borderColor}>{'\u2518'}</Text>
       </Box>
     </Box>
   );

@@ -101,7 +101,7 @@ export default function App({ session, model, cwd }: AppProps) {
 
     const sessPlugin = sessionPlugin({
       getSessionId: () => store.getState().sessionId,
-      getMessages: () => store.getState().messages,
+      getMessages: () => store.getState().messages.turns,
       getModel: () => model,
       openSessionPicker: handleOpenSessionPicker,
       onRestoreSession: async (sessionId: string) => {
