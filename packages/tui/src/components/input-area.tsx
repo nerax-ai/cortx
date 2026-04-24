@@ -22,7 +22,7 @@ export interface InputAreaProps {
   onForceExit?: () => void;
   onOpenPalette?: () => void;
   onPaletteNavigate?: (dir: 'up' | 'down') => void;
-  onPaletteSelect?: () => void;
+  onPaletteSelect?: () => boolean;
   onPaletteClose?: () => void;
   onPaletteFilterChange?: (filter: string) => void;
   overlayActive?: boolean;
@@ -301,7 +301,18 @@ export function InputArea({
         return;
       }
       if (key.return && !key.shift) {
-        onPaletteSelect?.();
+        const handled = onPaletteSelect?.() ?? false;
+        if (handled) {
+          // Palette item was selected — clear the typed filter text
+          setValue('');
+        } else {
+          // No matching palette item — submit the typed text as a regular command
+          const trimmed = value.trim();
+          if (trimmed) {
+            onSubmit(trimmed);
+          }
+          setValue('');
+        }
         return;
       }
       if (key.upArrow) {

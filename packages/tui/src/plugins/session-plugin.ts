@@ -36,8 +36,10 @@ export interface SessionMetadata {
   lastUserMessage: string;
   /** Session completion status. */
   status: 'completed' | 'crashed';
-  /** Serialized message history (full turns array). */
+  /** Serialized message history (full turns array for TUI display). */
   messages: TurnEntry[];
+  /** Agent messages with expanded skill content for session restore. */
+  agentMessages?: unknown[];
 }
 
 /** Summary info used in session listing (without full messages). */
@@ -111,6 +113,7 @@ export function buildSessionMetadata(
   messages: TurnEntry[],
   status: 'completed' | 'crashed',
   startTime: string,
+  agentMessages?: unknown[],
 ): SessionMetadata {
   return {
     sessionId,
@@ -119,6 +122,7 @@ export function buildSessionMetadata(
     lastUserMessage: extractFirstUserMessage(messages),
     status,
     messages,
+    agentMessages,
   };
 }
 
@@ -316,17 +320,19 @@ export async function listSessions(
 export function createAutoSaveHandler(deps: {
   getSessionId: () => string;
   getMessages: () => TurnEntry[];
+  getAgentMessages: () => unknown[];
   getModel: () => string;
   sessionsDir: string;
   startTime: string;
 }): (eventType: string) => Promise<void> {
-  const { getSessionId, getMessages, getModel, sessionsDir, startTime } = deps;
+  const { getSessionId, getMessages, getAgentMessages, getModel, sessionsDir, startTime } = deps;
 
   return async (eventType: string): Promise<void> => {
     if (eventType !== 'done' && eventType !== 'error') return;
 
     const sessionId = getSessionId();
     const messages = getMessages();
+    const agentMsgs = getAgentMessages();
     const model = getModel();
     const status = eventType === 'done' ? 'completed' as const : 'crashed' as const;
 
@@ -336,6 +342,7 @@ export function createAutoSaveHandler(deps: {
       messages,
       status,
       startTime,
+      agentMsgs,
     );
 
     try {

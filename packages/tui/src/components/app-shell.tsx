@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, useCallback, useMemo } from 'react';
-import { Box, useInput, useWindowSize } from 'ink';
+import { Box, useInput } from 'ink';
 import { OutputRegion } from './output-region.js';
 import { InputArea } from './input-area.js';
 import { ToolRegion } from './tool-region.js';
@@ -52,9 +52,6 @@ export function AppShell({
   const [injectedValue, setInjectedValue] = useState<string | undefined>(undefined);
   const [toolExpanded, setToolExpanded] = useState(false);
   const anyOverlayActive = paletteOpen || sessionPickerOpen;
-  const { rows } = useWindowSize();
-  const inputAreaRows = 5;
-  const contentHeight = Math.max(3, rows - inputAreaRows);
 
   const paletteItems = useMemo(
     () => buildItems(registry.getCommands(), skills),
@@ -70,8 +67,13 @@ export function AppShell({
     setPaletteSelectedIndex((prev) => moveSelection(prev, dir, filteredPaletteItems.length));
   }, [filteredPaletteItems]);
 
-  const handlePaletteSelect = useCallback(() => {
-    if (filteredPaletteItems.length === 0) return;
+  const handlePaletteSelect = useCallback((): boolean => {
+    if (filteredPaletteItems.length === 0) {
+      setPaletteOpen(false);
+      setPaletteSelectedIndex(0);
+      setPaletteFilter('');
+      return false;
+    }
     const idx = Math.min(paletteSelectedIndex, filteredPaletteItems.length - 1);
     const selected = filteredPaletteItems[idx];
     setPaletteOpen(false);
@@ -83,7 +85,12 @@ export function AppShell({
       const cmd = registry.getCommands().find((c) => c.name === selected.name);
       if (cmd) registry.executeCommand(cmd.name, '', { args: '', abort: () => {} });
     }
+    return true;
   }, [filteredPaletteItems, paletteSelectedIndex, registry]);
+
+  const handlePaletteFilterChange = useCallback((filter: string) => {
+    setPaletteFilter(filter);
+  }, []);
 
   const handlePaletteClose = useCallback(() => {
     setPaletteOpen(false);
@@ -101,20 +108,18 @@ export function AppShell({
   // Session picker overlay
   if (sessionPickerOpen && onSessionSelect && onSessionPickerClose) {
     return (
-      <Box flexDirection="column" height="100%">
-        <SessionPicker
-          sessions={sessionList}
-          onSelect={onSessionSelect}
-          onClose={onSessionPickerClose}
-        />
-      </Box>
+      <SessionPicker
+        sessions={sessionList}
+        onSelect={onSessionSelect}
+        onClose={onSessionPickerClose}
+      />
     );
   }
 
-  // Normal mode (palette is inline in InputArea, no separate overlay needed)
+  // Normal mode: streaming content + input area
   return (
-    <Box flexDirection="column" height="100%">
-      <OutputRegion store={store} height={contentHeight} />
+    <Box flexDirection="column">
+      <OutputRegion store={store} />
       <ToolRegion store={store} collapsed={!toolExpanded} />
       <InputArea
         onSubmit={onSubmit}
@@ -125,7 +130,7 @@ export function AppShell({
         onPaletteNavigate={handlePaletteNavigate}
         onPaletteSelect={handlePaletteSelect}
         onPaletteClose={handlePaletteClose}
-        onPaletteFilterChange={(f) => setPaletteFilter(f)}
+        onPaletteFilterChange={handlePaletteFilterChange}
         overlayActive={sessionPickerOpen}
         paletteOpen={paletteOpen}
         store={store}
@@ -134,14 +139,11 @@ export function AppShell({
       />
 
       {paletteOpen && (
-        <Box flexDirection="column" position="absolute" bottom={inputAreaRows} left={0} right={0}>
-          <CommandPalette
-            items={paletteItems}
-            filter={paletteFilter}
-            selectedIndex={paletteSelectedIndex}
-            maxHeight={contentHeight}
-          />
-        </Box>
+        <CommandPalette
+          items={paletteItems}
+          filter={paletteFilter}
+          selectedIndex={paletteSelectedIndex}
+        />
       )}
     </Box>
   );

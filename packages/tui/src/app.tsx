@@ -51,8 +51,13 @@ export default function App({ session, model, cwd }: AppProps) {
         if (meta && meta.messages) {
           store.reset(meta.sessionId);
           store.loadTurns(meta.messages as TurnEntry[]);
-          const agentMessages = (meta.messages as TurnEntry[]).map(
-            (t: TurnEntry) => ({ role: t.role, content: t.content }),
+          // Use saved agent messages (with expanded skill content) if available,
+          // otherwise fall back to mapping store turns (which have raw skill invocations)
+          const agentMessages = (meta.agentMessages
+            ? meta.agentMessages
+            : (meta.messages as TurnEntry[]).map(
+                (t: TurnEntry) => ({ role: t.role, content: t.content }),
+              )
           ) as unknown as import('@cortx/sdk').LanguageMessage[];
           session.cortx.replaceMessages(agentMessages);
           if (meta.status === 'crashed') {
@@ -123,16 +128,19 @@ export default function App({ session, model, cwd }: AppProps) {
     const autoSaveHandler = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getAgentMessages: () => session.cortx.messages,
       getModel: () => model,
       sessionsDir,
       startTime: new Date().toISOString(),
     });
 
     const unsubscribe = session.subscribe((event) => {
-      processEvent(event, store, registry);
+      // Auto-save BEFORE processEvent flushes turns to the terminal,
+      // so the session metadata captures the full conversation.
       if (event.type === 'done' || event.type === 'error') {
         autoSaveHandler(event.type).catch(() => {});
       }
+      processEvent(event, store, registry, true);
     });
     return () => {
       unsubscribe();

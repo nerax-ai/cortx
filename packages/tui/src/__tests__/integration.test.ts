@@ -423,6 +423,7 @@ describe('6. Auto-save integration with processEvent', () => {
     const autoSave = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getAgentMessages: () => [],
       getModel: () => 'test-model',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',
@@ -463,6 +464,7 @@ describe('6. Auto-save integration with processEvent', () => {
     const autoSave = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getAgentMessages: () => [],
       getModel: () => 'test-model',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',
@@ -488,6 +490,7 @@ describe('6. Auto-save integration with processEvent', () => {
     const autoSave = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getAgentMessages: () => [],
       getModel: () => 'test-model',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',
@@ -525,6 +528,7 @@ describe('6. Auto-save integration with processEvent', () => {
     const autoSave = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getAgentMessages: () => [],
       getModel: () => 'test-model',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',

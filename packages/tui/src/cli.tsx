@@ -37,10 +37,11 @@ async function main() {
 
   const session = new CortxSession(agent);
 
-  // Render Ink TUI (alternateScreen for proper layout, no incrementalRendering to avoid content loss)
+  // Render Ink TUI (non-fullscreen with patchConsole so console.log output
+  // appears above the Ink frame — gives native terminal scrollback)
   const { waitUntilExit } = render(
     <App session={session} model={config.model} cwd={cwd} />,
-    { exitOnCtrlC: false, alternateScreen: true },
+    { exitOnCtrlC: false, patchConsole: true },
   );
 
   await waitUntilExit();

@@ -15,6 +15,7 @@
 import type { AgentEvent } from '@cortx/sdk';
 import type { TuiStore } from './store.js';
 import type { TuiRegistry } from './tui-registry.js';
+import { writeTurn, writeSeparator } from './output-writer.js';
 
 /** Region identifiers for event routing. */
 export type RegionTarget = 'output' | 'tool' | 'status';
@@ -49,23 +50,51 @@ export function eventToRegion(eventType: AgentEvent['type']): RegionTarget {
   }
 }
 
+/** Track which turns have already been flushed to the terminal. */
+let flushedTurnCount = 0;
+
+/**
+ * Flush completed turns from the store to the terminal (via console.log).
+ * After flushing, clears the turns from the store so the Ink frame only shows
+ * current streaming content.
+ */
+function flushCompletedTurns(store: TuiStore): void {
+  const turns = store.getState().messages.turns;
+  if (turns.length <= flushedTurnCount) return;
+
+  const newTurns = turns.slice(flushedTurnCount);
+  for (const turn of newTurns) {
+    writeSeparator();
+    writeTurn(turn);
+  }
+
+  // Clear flushed turns from store and reset counter
+  store.clearFlushedTurns();
+  flushedTurnCount = 0;
+}
+
 /**
  * Process an AgentEvent through the renderer pipeline.
  *
- * 1. Dispatch the event to the store (updates state slices)
- * 2. Invoke any registered tui.renderer extensions for the event type
- *
- * Returns the list of renderer extension results (for testing / diagnostics).
+ * @param flushToTerminal When true, completed turns are written to the terminal
+ *   via console.log and cleared from the store (non-fullscreen mode). When false,
+ *   turns are kept in the store for in-component rendering (testing/fullscreen).
  */
 export function processEvent(
   event: AgentEvent,
   store: TuiStore,
   registry?: TuiRegistry,
+  flushToTerminal: boolean = false,
 ): unknown[] {
   // 1. Dispatch to store — this updates the relevant state slice
   store.dispatch(event);
 
-  // 2. Invoke registered renderer extensions
+  // 2. Flush completed turns to terminal on turn boundaries (non-fullscreen mode)
+  if (flushToTerminal && (event.type === 'turn_start' || event.type === 'done' || event.type === 'error')) {
+    flushCompletedTurns(store);
+  }
+
+  // 3. Invoke registered renderer extensions
   const results: unknown[] = [];
 
   if (registry) {

@@ -406,6 +406,7 @@ describe('createAutoSaveHandler', () => {
     const handler = createAutoSaveHandler({
       getSessionId: () => sessionId,
       getMessages: () => turns,
+      getAgentMessages: () => [],
       getModel: () => 'default',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',
@@ -420,6 +421,7 @@ describe('createAutoSaveHandler', () => {
     expect(data.status).toBe('completed');
     expect(data.model).toBe('default');
     expect(data.messages).toEqual(turns);
+    expect(data.agentMessages).toEqual([]);
   });
 
   test('writes session file on "error" event type', async () => {
@@ -431,6 +433,7 @@ describe('createAutoSaveHandler', () => {
     const handler = createAutoSaveHandler({
       getSessionId: () => sessionId,
       getMessages: () => turns,
+      getAgentMessages: () => [{ role: 'user', content: 'hello' }],
       getModel: () => 'gpt-4',
       sessionsDir: tempDir,
       startTime: '2026-04-19T11:00:00Z',
@@ -450,6 +453,7 @@ describe('createAutoSaveHandler', () => {
     const handler = createAutoSaveHandler({
       getSessionId: () => sessionId,
       getMessages: () => [],
+      getAgentMessages: () => [],
       getModel: () => 'default',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',
@@ -476,6 +480,7 @@ describe('createAutoSaveHandler', () => {
     const handler = createAutoSaveHandler({
       getSessionId: () => sessionId,
       getMessages: () => turns,
+      getAgentMessages: () => [{ role: 'user', content: 'test' }],
       getModel: () => 'default',
       sessionsDir: tempDir,
       startTime: '2026-04-19T12:00:00Z',
@@ -488,6 +493,7 @@ describe('createAutoSaveHandler', () => {
     expect(data.messages).toEqual(turns);
     expect(data.messages.length).toBe(3);
     expect(data.lastUserMessage).toBe('First turn');
+    expect(data.agentMessages).toEqual([{ role: 'user', content: 'test' }]);
   });
 });
 
