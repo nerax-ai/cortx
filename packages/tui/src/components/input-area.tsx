@@ -199,10 +199,13 @@ function ActivityIndicator({
     parts.push({ key: 'iter', node: <Text dimColor>{' │ '} iter: {iteration}</Text> });
   }
 
-  if (elapsed > 0) {
-    parts.push({ key: 'elapsed', node: <Text dimColor>{' │ '} {elapsed}s</Text> });
+  // Running: show per-turn elapsed + cumulative total
+  if (elapsed > 0 && activity !== 'idle') {
+    const total = totalElapsed + elapsed;
+    parts.push({ key: 'elapsed', node: <Text dimColor>{' │ '} {elapsed}s/{total}s</Text> });
   }
 
+  // Idle: show total time and token usage
   if (activity === 'idle') {
     if (tokenUsage.inputTokens > 0 || tokenUsage.outputTokens > 0) {
       const inK = tokenUsage.inputTokens >= 1000 ? `${(tokenUsage.inputTokens / 1000).toFixed(1)}k` : String(tokenUsage.inputTokens);

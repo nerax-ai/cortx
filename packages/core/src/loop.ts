@@ -17,22 +17,10 @@ export interface AgentLoopOptions extends Omit<CortxConfig, 'plugins'> {
   messages?: LanguageMessage[];
   controller?: AgentController;
   skipInitialLlm?: boolean;
-  skillContinueLimit?: number;
 }
 
 async function emit(plugins: CortxPlugin[], event: AgentEvent): Promise<void> {
   for (const p of plugins) await p['event']?.(event);
-}
-
-function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((p): p is { type: string; text: string } => typeof p === 'object' && p !== null && 'type' in p && p.type === 'text' && typeof p.text === 'string')
-      .map(p => p.text)
-      .join('');
-  }
-  return '';
 }
 
 function classifyError(e: unknown): ErrorCode {
@@ -94,9 +82,6 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
 
   const autoContinueLimit = opts.autoContinueLimit ?? 2;
   let autoContinueCount = 0;
-  const skillContinueLimit = opts.skillContinueLimit ?? 5;
-  let skillContinueCount = 0;
-  let skillActive = false;
   let retryCount = 0;
   const maxRetries = 1;
   let overflowRecoveryCount = 0;
@@ -141,16 +126,6 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       for (let i = 0; i < messages.length && offset + i < transformedMessages.length; i++) {
         if (messages[i] !== transformedMessages[offset + i]) {
           messages[i] = transformedMessages[offset + i];
-        }
-      }
-      // Detect skill activation from any message in the array
-      if (!skillActive) {
-        for (const m of messages) {
-          if (m.role === 'user' && extractText(m.content).includes('Skill execution active')) {
-            skillActive = true;
-            logger.info(`[loop] skillActive = true detected`);
-            break;
-          }
         }
       }
 
@@ -255,7 +230,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     }
 
     const isToolUse = finishReason === 'tool-calls';
-    logger.info(`[loop] iter=${iteration} finishReason=${finishReason} isToolUse=${isToolUse} toolCalls=${toolCalls.length} textLen=${textBuffer.length} skillActive=${skillActive} skillCont=${skillContinueCount}`);
+    logger.info(`[loop] iter=${iteration} finishReason=${finishReason} isToolUse=${isToolUse} toolCalls=${toolCalls.length} textLen=${textBuffer.length}`);
 
     if (!isToolUse || !toolCalls.length) {
       // Auto-continue on output truncation
@@ -278,25 +253,6 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       }
       // Non-truncated turn: reset auto-continue budget
       if (!isTruncated) autoContinueCount = 0;
-
-      // Skill continuation: keep the loop going when a skill is active
-      if (skillActive && skillContinueCount < skillContinueLimit) {
-        logger.info(`[loop] skill continuation firing (${skillContinueCount + 1}/${skillContinueLimit})`);
-        skillContinueCount++;
-        messages.push({
-          role: 'assistant',
-          content: [
-            ...(thinkingBuffer ? [{ type: 'reasoning' as const, reasoning: thinkingBuffer }] : []),
-            ...(textBuffer ? [{ type: 'text' as const, text: textBuffer }] : []),
-          ],
-        });
-        messages.push({ role: 'user', content: [{ type: 'text' as const, text: 'Continue executing the skill. Use your available tools (Agent, Bash, Read, Write, Edit) to make progress. Do not summarize or stop — take concrete action.' }] });
-        const e: AgentEvent = { type: 'follow_up', message: `skill continuation (${skillContinueCount}/${skillContinueLimit})` };
-        await emit(plugins, e); yield e;
-        const te: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };
-        await emit(plugins, te); yield te;
-        continue mainLoop;
-      }
 
       if (controller?.hasFollowUps) {
         for (const msg of controller.consumeFollowUps()) {
