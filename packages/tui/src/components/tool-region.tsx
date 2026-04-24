@@ -1,6 +1,7 @@
 import { useSyncExternalStore, useCallback } from 'react';
 import { Box, Text } from 'ink';
 import type { TuiStore } from '../store.js';
+import { DiffView } from './diff.js';
 
 export interface ToolRegionProps {
   store: TuiStore;
@@ -123,14 +124,31 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
                 return summary ? <Text dimColor>{': '}{summary}</Text> : null;
               })()}
             </Text>
-            {entry.result !== undefined && (
-              <Box marginLeft={2}>
-                <Text dimColor>
-                  {String(entry.result).slice(0, 200)}
-                  {String(entry.result).length > 200 ? '...' : ''}
-                </Text>
-              </Box>
-            )}
+            {entry.result !== undefined && (() => {
+              const resultStr = String(entry.result);
+              // For edit/write tools with multi-line results, show a compact summary
+              const isFileEdit = entry.toolName === 'write' || entry.toolName === 'edit';
+              if (isFileEdit && resultStr.length > 100) {
+                const lines = resultStr.split('\n').length;
+                const addCount = (resultStr.match(/^\+/gm) || []).length;
+                const rmCount = (resultStr.match(/^-/gm) || []).length;
+                return (
+                  <Box marginLeft={2}>
+                    <Text dimColor>{lines} lines changed</Text>
+                    <Text color="green">{` +${addCount}`}</Text>
+                    <Text color="red">{` -${rmCount}`}</Text>
+                  </Box>
+                );
+              }
+              return (
+                <Box marginLeft={2}>
+                  <Text dimColor>
+                    {resultStr.slice(0, 200)}
+                    {resultStr.length > 200 ? '...' : ''}
+                  </Text>
+                </Box>
+              );
+            })()}
           </Box>
         );
       })}
