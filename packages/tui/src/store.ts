@@ -242,8 +242,6 @@ export class TuiStore {
 
       case 'done': {
         this.stopElapsedTimer();
-        const totalMs = this.totalStartTime > 0 ? Date.now() - this.totalStartTime : 0;
-        const totalSec = Math.floor(totalMs / 1000);
         const usage: TokenUsage = event.usage
           ? {
               inputTokens: this.state.tokenUsage.inputTokens + event.usage.inputTokens,
@@ -254,7 +252,7 @@ export class TuiStore {
         const turnsDone =
           prevDone.currentText.length > 0
             ? [...prevDone.turns, { role: 'assistant', content: prevDone.currentText, timestamp: Date.now() } satisfies TurnEntry]
-            : prevDone.turns;
+            : [...prevDone.turns];
         this.state = {
           ...this.state,
           status: 'idle',
@@ -273,7 +271,7 @@ export class TuiStore {
         const turnsErr =
           prevErr.currentText.length > 0
             ? [...prevErr.turns, { role: 'assistant', content: prevErr.currentText, timestamp: Date.now() } satisfies TurnEntry]
-            : prevErr.turns;
+            : [...prevErr.turns];
         this.state = {
           ...this.state,
           status: 'error',

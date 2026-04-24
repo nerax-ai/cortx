@@ -37,10 +37,10 @@ async function main() {
 
   const session = new CortxSession(agent);
 
-  // Render Ink TUI
+  // Render Ink TUI (non-fullscreen: output scrolls naturally in terminal)
   const { waitUntilExit } = render(
     <App session={session} model={config.model} cwd={cwd} />,
-    { exitOnCtrlC: false, alternateScreen: true, incrementalRendering: true },
+    { exitOnCtrlC: false },
   );
 
   await waitUntilExit();

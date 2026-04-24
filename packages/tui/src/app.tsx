@@ -53,7 +53,7 @@ export default function App({ session, model, cwd }: AppProps) {
           store.loadTurns(meta.messages as TurnEntry[]);
           const agentMessages = (meta.messages as TurnEntry[]).map(
             (t: TurnEntry) => ({ role: t.role, content: t.content }),
-          );
+          ) as unknown as import('@cortx/sdk').LanguageMessage[];
           session.cortx.replaceMessages(agentMessages);
           if (meta.status === 'crashed') {
             session.resume().catch(() => {});

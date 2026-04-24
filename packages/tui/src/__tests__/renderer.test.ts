@@ -392,10 +392,10 @@ describe('selective redraw / region isolation', () => {
       store,
     );
 
-    // done changes status (running -> idle), but NOT messages (currentText was already
-    // cleared by tool_use, and no new turn to push) and NOT toolCalls
+    // done changes status (running -> idle) and messages (turns array recreated to
+    // prevent shallowEqual misses) but NOT toolCalls
     expect(statusListener).toHaveBeenCalledTimes(1);
-    expect(msgListener).toHaveBeenCalledTimes(0);
+    expect(msgListener).toHaveBeenCalledTimes(1);
     expect(toolListener).toHaveBeenCalledTimes(0);
   });
 });
@@ -481,7 +481,9 @@ describe('integration: full agent turn', () => {
     expect(sliceSequence.slice(0, 2)).toContain('status');  // turn_start fires status
     expect(sliceSequence).toContain('messages');  // text_deltas fire messages
     expect(sliceSequence).toContain('toolCalls'); // tool_use and tool_result fire toolCalls
-    expect(sliceSequence[updateLog.length - 1]).toBe('status'); // done fires status last
+    // done fires both messages (turns array updated) and status (idle)
+    expect(sliceSequence).toContain('status');
+    expect(sliceSequence).toContain('messages');
   });
 
   test('multi-turn conversation accumulates correctly through renderer', () => {

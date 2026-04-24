@@ -5,7 +5,15 @@ import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { TuiStore } from '../store.js';
+import type { TuiState } from '../types/tui-state.js';
 import { colors } from '../theme.js';
+
+// Stable module-level selectors to avoid Map key fragmentation in TuiStore
+const selectTokenUsage = (s: TuiState) => s.tokenUsage;
+const selectIteration = (s: TuiState) => s.iteration;
+const selectElapsed = (s: TuiState) => s.elapsed;
+const selectTotalElapsed = (s: TuiState) => s.totalElapsed;
+const selectToolCalls = (s: TuiState) => s.toolCalls;
 
 export interface InputAreaProps {
   onSubmit: (value: string) => void;
@@ -162,51 +170,51 @@ function ActivityIndicator({
   tokenUsage: { inputTokens: number; outputTokens: number };
   toolCalls: Map<string, { status: string; toolName: string }>;
 }) {
-  const parts: React.ReactNode[] = [];
+  const parts: { key: string; node: React.ReactNode }[] = [];
 
   switch (activity) {
     case 'thinking':
-      parts.push(<Text color={colors.activityThinking} bold>{'⏳'} Thinking...</Text>);
+      parts.push({ key: 'status', node: <Text color={colors.activityThinking} bold>{'⏳'} Thinking...</Text> });
       break;
     case 'executing': {
       const latestTool = [...toolCalls.values()].find((e) => e.status === 'pending');
       const name = latestTool?.toolName ?? 'tool';
-      parts.push(<Text color={colors.activityExecuting} bold>{'⚙'} {name}</Text>);
+      parts.push({ key: 'status', node: <Text color={colors.activityExecuting} bold>{'⚙'} {name}</Text> });
       break;
     }
     case 'interrupting':
-      parts.push(<Text color={colors.activityInterrupt} bold>{'⏹'} Interrupting...</Text>);
+      parts.push({ key: 'status', node: <Text color={colors.activityInterrupt} bold>{'⏹'} Interrupting...</Text> });
       break;
     case 'error':
-      parts.push(<Text color={colors.activityError} bold>{'✗'} Error</Text>);
+      parts.push({ key: 'status', node: <Text color={colors.activityError} bold>{'✗'} Error</Text> });
       break;
     default:
-      parts.push(<Text color={colors.activityIdle}>{'✓'} Ready</Text>);
+      parts.push({ key: 'status', node: <Text color={colors.activityIdle}>{'✓'} Ready</Text> });
       break;
   }
 
-  parts.push(<Text dimColor>{' │ '} {model}</Text>);
+  parts.push({ key: 'model', node: <Text dimColor>{' │ '} {model}</Text> });
 
   if (iteration > 0 && activity !== 'idle') {
-    parts.push(<Text dimColor>{' │ '} iter: {iteration}</Text>);
+    parts.push({ key: 'iter', node: <Text dimColor>{' │ '} iter: {iteration}</Text> });
   }
 
   if (elapsed > 0) {
-    parts.push(<Text dimColor>{' │ '} {elapsed}s</Text>);
+    parts.push({ key: 'elapsed', node: <Text dimColor>{' │ '} {elapsed}s</Text> });
   }
 
   if (activity === 'idle') {
     if (tokenUsage.inputTokens > 0 || tokenUsage.outputTokens > 0) {
       const inK = tokenUsage.inputTokens >= 1000 ? `${(tokenUsage.inputTokens / 1000).toFixed(1)}k` : String(tokenUsage.inputTokens);
       const outK = tokenUsage.outputTokens >= 1000 ? `${(tokenUsage.outputTokens / 1000).toFixed(1)}k` : String(tokenUsage.outputTokens);
-      parts.push(<Text dimColor>{' │ '} {inK}+{outK} tokens</Text>);
+      parts.push({ key: 'tokens', node: <Text dimColor>{' │ '} {inK}+{outK} tokens</Text> });
     }
     if (totalElapsed > 0) {
-      parts.push(<Text dimColor>{' │ '} {totalElapsed}s</Text>);
+      parts.push({ key: 'total', node: <Text dimColor>{' │ '} {totalElapsed}s</Text> });
     }
   }
 
-  return <Box>{parts}</Box>;
+  return <Box>{parts.map((p) => <Box key={p.key}>{p.node}</Box>)}</Box>;
 }
 
 export function InputArea({
@@ -243,28 +251,28 @@ export function InputArea({
 
   // Subscribe to store state for status bar display
   const tokenUsage = useSyncExternalStore(
-    useCallback((listener) => store.select((s) => s.tokenUsage).subscribe(listener), [store]),
-    useCallback(() => store.select((s) => s.tokenUsage).get(), [store]),
+    useCallback((listener) => store.select(selectTokenUsage).subscribe(listener), [store]),
+    useCallback(() => store.select(selectTokenUsage).get(), [store]),
   );
 
   const iteration = useSyncExternalStore(
-    useCallback((listener) => store.select((s) => s.iteration).subscribe(listener), [store]),
-    useCallback(() => store.select((s) => s.iteration).get(), [store]),
+    useCallback((listener) => store.select(selectIteration).subscribe(listener), [store]),
+    useCallback(() => store.select(selectIteration).get(), [store]),
   );
 
   const elapsed = useSyncExternalStore(
-    useCallback((listener) => store.select((s) => s.elapsed).subscribe(listener), [store]),
-    useCallback(() => store.select((s) => s.elapsed).get(), [store]),
+    useCallback((listener) => store.select(selectElapsed).subscribe(listener), [store]),
+    useCallback(() => store.select(selectElapsed).get(), [store]),
   );
 
   const totalElapsed = useSyncExternalStore(
-    useCallback((listener) => store.select((s) => s.totalElapsed).subscribe(listener), [store]),
-    useCallback(() => store.select((s) => s.totalElapsed).get(), [store]),
+    useCallback((listener) => store.select(selectTotalElapsed).subscribe(listener), [store]),
+    useCallback(() => store.select(selectTotalElapsed).get(), [store]),
   );
 
   const toolCalls = useSyncExternalStore(
-    useCallback((listener) => store.select((s) => s.toolCalls).subscribe(listener), [store]),
-    useCallback(() => store.select((s) => s.toolCalls).get(), [store]),
+    useCallback((listener) => store.select(selectToolCalls).subscribe(listener), [store]),
+    useCallback(() => store.select(selectToolCalls).get(), [store]),
   );
 
   // Sync status with isRunning prop
@@ -303,19 +311,19 @@ export function InputArea({
       }
       if (key.backspace || key.delete) {
         const next = value.slice(0, -1);
-        if (next === '') {
+        if (next === '' || next === '/') {
           setValue('');
           onPaletteClose?.();
         } else {
           setValue(next);
-          onPaletteFilterChange?.(next.slice(1));
+          onPaletteFilterChange?.(next.startsWith('/') ? next.slice(1) : next);
         }
         return;
       }
       if (input && !key.ctrl && !key.meta) {
         const next = value + input;
         setValue(next);
-        onPaletteFilterChange?.(next.slice(1));
+        onPaletteFilterChange?.(next.startsWith('/') ? next.slice(1) : next);
       }
       return;
     }
@@ -467,7 +475,7 @@ export function InputArea({
 
         {/* Help line */}
         <Text dimColor>
-          Ctrl+K palette \u2502 Ctrl+E editor \u2502 Ctrl+C cancel
+          Ctrl+K palette {' \u2502 '} Ctrl+E editor {' \u2502 '} Ctrl+C cancel
         </Text>
       </Box>
     </Box>

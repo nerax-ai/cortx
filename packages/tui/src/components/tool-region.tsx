@@ -1,7 +1,10 @@
 import { useSyncExternalStore, useCallback } from 'react';
 import { Box, Text } from 'ink';
 import type { TuiStore } from '../store.js';
+import type { TuiState } from '../types/tui-state.js';
 import { colors } from '../theme.js';
+
+const selectToolCalls = (s: TuiState) => s.toolCalls;
 
 export interface ToolRegionProps {
   store: TuiStore;
@@ -18,6 +21,12 @@ export interface ToolRegionProps {
  *   - expanded: shows all tool calls with input/result details
  *   - Toggle with 't' key when agent is idle
  */
+function toolStatusIcon(entry: { status: string; isError?: boolean }): { icon: string; color: string } {
+  if (entry.status === 'pending') return { icon: '◷', color: colors.toolPending };
+  if (entry.isError) return { icon: '✗', color: colors.toolError };
+  return { icon: '✓', color: colors.toolSuccess };
+}
+
 function formatToolSummary(toolName: string, input: unknown): string {
   try {
     const parsed = typeof input === 'string' ? JSON.parse(input) : input;
@@ -41,10 +50,10 @@ function formatToolSummary(toolName: string, input: unknown): string {
 export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
   const toolCalls = useSyncExternalStore(
     useCallback(
-      (listener) => store.select((s) => s.toolCalls).subscribe(listener),
+      (listener) => store.select(selectToolCalls).subscribe(listener),
       [store],
     ),
-    useCallback(() => store.select((s) => s.toolCalls).get(), [store]),
+    useCallback(() => store.select(selectToolCalls).get(), [store]),
   );
 
   if (toolCalls.size === 0) return null;
@@ -54,17 +63,7 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
   // Collapsed: show only the latest tool call summary
   if (collapsed) {
     const [, latestEntry] = entries[entries.length - 1];
-    const statusIcon = latestEntry.status === 'pending'
-      ? '\u25F7'  // ◷ running
-      : latestEntry.isError
-        ? '\u2717'  // ✗ error
-        : '\u2713';  // ✓ done
-
-    const statusColor = latestEntry.status === 'pending'
-      ? colors.toolPending
-      : latestEntry.isError
-        ? colors.toolError
-        : colors.toolSuccess;
+    const { icon: statusIcon, color: statusColor } = toolStatusIcon(latestEntry);
 
     const pendingCount = entries.filter(([, e]) => e.status === 'pending').length;
     const totalCount = entries.length;
@@ -101,17 +100,7 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
         <Text dimColor>{' [Shift+T] collapse'}</Text>
       </Box>
       {entries.map(([id, entry]) => {
-        const statusIcon = entry.status === 'pending'
-          ? '\u25F7'
-          : entry.isError
-            ? '\u2717'
-            : '\u2713';
-
-        const statusColor = entry.status === 'pending'
-          ? colors.toolPending
-          : entry.isError
-            ? colors.toolError
-            : colors.toolSuccess;
+        const { icon: statusIcon, color: statusColor } = toolStatusIcon(entry);
 
         return (
           <Box key={id} flexDirection="column" marginLeft={1}>
