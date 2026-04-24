@@ -28,7 +28,7 @@ const SKILL_EXECUTION_GUIDANCE = `
 Keep working until the skill's instructions are fully carried out. After each tool result, assess progress and continue.`;
 
 function replaceLastMessage(messages: LanguageMessage[], lastIdx: number, last: LanguageMessage, newContent: string): LanguageMessage[] {
-  return [...messages.slice(0, lastIdx), { ...last, content: newContent } as LanguageMessage];
+  return [...messages.slice(0, lastIdx), { ...last, content: [{ type: 'text' as const, text: newContent }] } as unknown as LanguageMessage];
 }
 
 export function createSkillPlugin(skills: SkillInfo[], cwd: string): CortxPlugin {

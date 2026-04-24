@@ -63,7 +63,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
   for (const p of plugins) {
     if (p['system.transform']) resolvedSystem = await p['system.transform'](resolvedSystem);
   }
-  const systemMessages: LanguageMessage[] = resolvedSystem ? [{ role: 'system', content: resolvedSystem }] : [];
+  const systemMessages: LanguageMessage[] = resolvedSystem ? [{ role: 'system' as const, content: [{ type: 'text' as const, text: resolvedSystem }] }] : [];
   let iteration = 0;
   let resumeFromToolCalls: LanguageToolCallContent[] | undefined;
   let isResuming = false;

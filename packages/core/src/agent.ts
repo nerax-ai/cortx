@@ -56,7 +56,7 @@ export class Cortx {
 
     const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
     const messages = [...this._messages];
-    messages.push(typeof userMessage === 'string' ? { role: 'user', content: userMessage } : userMessage);
+    messages.push(typeof userMessage === 'string' ? { role: 'user' as const, content: [{ type: 'text' as const, text: userMessage }] } : userMessage);
 
     for await (const event of agentLoop({
       ...this.config,
@@ -123,7 +123,7 @@ export class Cortx {
         }
 
         const desc = (input.description as string | undefined) ?? 'sub-agent';
-        ctx.reportProgress(`⏳ ${desc}: starting...`);
+        ctx.reportProgress?.(`⏳ ${desc}: starting...`);
         const subSystem = `You are a sub-agent. Complete the task using available tools.`;
 
         let output = '';
@@ -135,7 +135,7 @@ export class Cortx {
             model: config.model,
             system: subSystem,
             tools: getTools(),
-            messages: [{ role: 'user', content: prompt } as unknown as LanguageMessage],
+            messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: prompt }] } as unknown as LanguageMessage],
             workingDirectory: ctx.workingDirectory,
             logger: ctx.logger,
             maxIterations: 10,
@@ -143,7 +143,7 @@ export class Cortx {
           })) {
             if (event.type === 'turn_start') {
               iterations++;
-              if (iterations > 1) ctx.reportProgress(`⏳ ${desc}: iteration ${iterations}...`);
+              if (iterations > 1) ctx.reportProgress?.(`⏳ ${desc}: iteration ${iterations}...`);
             }
             if (event.type === 'tool_use') {
               toolCallCount++;
@@ -157,16 +157,16 @@ export class Cortx {
                   : event.toolCall.toolName === 'grep'
                     ? String(tcInput.pattern ?? '').slice(0, 40)
                     : '';
-              ctx.reportProgress(`  → ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`);
+              ctx.reportProgress?.(`  → ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`);
             }
             if (event.type === 'text') output += event.content;
             if (event.type === 'done' || event.type === 'error') break;
           }
-          ctx.reportProgress(`✓ ${desc}: done (${iterations} iterations, ${toolCallCount} tool calls)`);
+          ctx.reportProgress?.(`✓ ${desc}: done (${iterations} iterations, ${toolCallCount} tool calls)`);
           const preview = output.length > 800 ? output.slice(0, 800) + `\n... (${output.length} chars total)` : output;
           return { success: true, output: preview || '(sub-agent produced no text output)' };
         } catch (e) {
-          ctx.reportProgress(`✗ ${desc}: failed`);
+          ctx.reportProgress?.(`✗ ${desc}: failed`);
           return { success: false, error: `Sub-agent failed: ${e instanceof Error ? e.message : String(e)}` };
         }
       },

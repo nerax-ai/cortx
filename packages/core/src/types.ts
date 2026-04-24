@@ -28,7 +28,7 @@ export class AgentLoopController implements AgentController {
   followUpMode: DeliveryMode = 'one-at-a-time';
 
   private toMsg(m: string | LanguageMessage): LanguageMessage {
-    return typeof m === 'string' ? { role: 'user', content: m } : m;
+    return typeof m === 'string' ? { role: 'user', content: [{ type: 'text' as const, text: m }] } : m;
   }
 
   steer(message: string | LanguageMessage): void { this._steer.push(this.toMsg(message)); }
