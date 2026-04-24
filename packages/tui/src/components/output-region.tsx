@@ -2,6 +2,7 @@ import { useSyncExternalStore, useCallback, useMemo } from 'react';
 import { Box, Text } from 'ink';
 import type { TuiStore } from '../store.js';
 import { Markdown } from './markdown.js';
+import { colors } from '../theme.js';
 
 export interface OutputRegionProps {
   store: TuiStore;
@@ -136,12 +137,12 @@ export function OutputRegion({ store, height }: OutputRegionProps) {
 function BlockRenderer({ block }: { block: OutputBlock }) {
   switch (block.type) {
     case 'user':
-      return <Text color="cyan" bold>{'>'} {block.content}</Text>;
+      return <Text color={colors.userMessage} bold>{'>'} {block.content}</Text>;
 
     case 'thinking':
       return (
         <Box>
-          <Text dimColor color="yellow">{'▶'} Thinking...</Text>
+          <Text dimColor color={colors.thinking}>{'▶'} Thinking...</Text>
         </Box>
       );
 

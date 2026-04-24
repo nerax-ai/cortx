@@ -1,7 +1,7 @@
 import { useSyncExternalStore, useCallback } from 'react';
 import { Box, Text } from 'ink';
 import type { TuiStore } from '../store.js';
-import { DiffView } from './diff.js';
+import { colors } from '../theme.js';
 
 export interface ToolRegionProps {
   store: TuiStore;
@@ -61,10 +61,10 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
         : '\u2713';  // ✓ done
 
     const statusColor = latestEntry.status === 'pending'
-      ? 'yellow'
+      ? colors.toolPending
       : latestEntry.isError
-        ? 'red'
-        : 'green';
+        ? colors.toolError
+        : colors.toolSuccess;
 
     const pendingCount = entries.filter(([, e]) => e.status === 'pending').length;
     const totalCount = entries.length;
@@ -108,10 +108,10 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
             : '\u2713';
 
         const statusColor = entry.status === 'pending'
-          ? 'yellow'
+          ? colors.toolPending
           : entry.isError
-            ? 'red'
-            : 'green';
+            ? colors.toolError
+            : colors.toolSuccess;
 
         return (
           <Box key={id} flexDirection="column" marginLeft={1}>

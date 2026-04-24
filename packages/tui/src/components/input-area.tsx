@@ -5,6 +5,7 @@ import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { TuiStore } from '../store.js';
+import { colors } from '../theme.js';
 
 export interface InputAreaProps {
   onSubmit: (value: string) => void;
@@ -165,22 +166,22 @@ function ActivityIndicator({
 
   switch (activity) {
     case 'thinking':
-      parts.push(<Text color="yellow" bold>{'⏳'} Thinking...</Text>);
+      parts.push(<Text color={colors.activityThinking} bold>{'⏳'} Thinking...</Text>);
       break;
     case 'executing': {
       const latestTool = [...toolCalls.values()].find((e) => e.status === 'pending');
       const name = latestTool?.toolName ?? 'tool';
-      parts.push(<Text color="cyan" bold>{'⚙'} {name}</Text>);
+      parts.push(<Text color={colors.activityExecuting} bold>{'⚙'} {name}</Text>);
       break;
     }
     case 'interrupting':
-      parts.push(<Text color="red" bold>{'⏹'} Interrupting...</Text>);
+      parts.push(<Text color={colors.activityInterrupt} bold>{'⏹'} Interrupting...</Text>);
       break;
     case 'error':
-      parts.push(<Text color="red" bold>{'✗'} Error</Text>);
+      parts.push(<Text color={colors.activityError} bold>{'✗'} Error</Text>);
       break;
     default:
-      parts.push(<Text color="green">{'✓'} Ready</Text>);
+      parts.push(<Text color={colors.activityIdle}>{'✓'} Ready</Text>);
       break;
   }
 
@@ -434,7 +435,7 @@ export function InputArea({
 
       {/* Separator */}
       <Box>
-        <Text color="gray">{'\u2500'.repeat(80)}</Text>
+        <Text color={colors.border}>{'\u2500'.repeat(80)}</Text>
       </Box>
 
       {/* Input lines */}
@@ -442,7 +443,7 @@ export function InputArea({
         {lines.map((line, i) => (
           <Box key={i}>
             {i === 0 && (
-              <Text color="green" bold>
+              <Text color={colors.prompt} bold>
                 {prompt}
               </Text>
             )}
