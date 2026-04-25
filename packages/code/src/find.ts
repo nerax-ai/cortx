@@ -8,6 +8,7 @@ export function createFindTool(cwd: string): Tool {
   return {
     name: 'find',
     description: 'Find files by name pattern.',
+    sideEffects: 'read',
     inputSchema: {
       type: 'object',
       properties: {

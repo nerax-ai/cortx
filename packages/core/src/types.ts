@@ -76,5 +76,7 @@ export interface CortxConfig {
   workingDirectory?: string;
   autoContinueLimit?: number;
   toolResultBudget?: number;
+  maxConcurrentTools?: number;
+  maxConcurrentAgents?: number;
   skillPaths?: string[];
 }

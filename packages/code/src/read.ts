@@ -8,6 +8,7 @@ export function createReadTool(cwd: string): Tool {
   return {
     name: 'read',
     description: `Read file contents. Text files truncated to ${MAX_LINES} lines; use offset/limit for large files.`,
+    sideEffects: 'read',
     inputSchema: {
       type: 'object',
       properties: {

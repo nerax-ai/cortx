@@ -6,6 +6,7 @@ export function createEditTool(cwd: string): Tool {
   return {
     name: 'edit',
     description: 'Replace exact text in a file. oldText must match exactly.',
+    sideEffects: 'write',
     inputSchema: {
       type: 'object',
       properties: {

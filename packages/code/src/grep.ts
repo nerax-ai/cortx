@@ -8,6 +8,7 @@ export function createGrepTool(cwd: string): Tool {
   return {
     name: 'grep',
     description: 'Search file contents using regex pattern.',
+    sideEffects: 'read',
     inputSchema: {
       type: 'object',
       properties: {

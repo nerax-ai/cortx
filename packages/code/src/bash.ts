@@ -166,6 +166,7 @@ export function createBashTool(cwd: string): Tool {
   return {
     name: 'bash',
     description: `Execute a ${shellConfig.shell} command. Returns stdout and stderr combined. On Windows, uses ${shellConfig.shell} (${shellConfig.executable}).`,
+    sideEffects: 'destructive',
     inputSchema: {
       type: 'object',
       properties: {

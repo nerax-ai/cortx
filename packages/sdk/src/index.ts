@@ -24,10 +24,13 @@ export interface ToolContext {
   askUser?: (question: string) => Promise<string>;
 }
 
+export type SideEffects = 'none' | 'read' | 'write' | 'destructive';
+
 export interface Tool {
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
+  sideEffects?: SideEffects;
   execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 }
 

@@ -108,6 +108,7 @@ export class Cortx {
     return {
       name: 'agent',
       description: 'Launch a sub-agent to handle a specific sub-task in isolation. The sub-agent has access to file tools (Read, Write, Edit, Bash, Grep, Find) and can perform research, analysis, or implementation work.',
+      sideEffects: 'write',
       inputSchema: {
         type: 'object',
         properties: {

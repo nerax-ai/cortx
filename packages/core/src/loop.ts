@@ -19,6 +19,69 @@ export interface AgentLoopOptions extends Omit<CortxConfig, 'plugins'> {
   skipInitialLlm?: boolean;
 }
 
+interface ToolExecOutput {
+  progressMessages: string[];
+  finalOutput: string;
+  isError: boolean;
+}
+
+async function runToolCall(
+  tc: LanguageToolCallContent,
+  tool: Tool,
+  plugins: CortxPlugin[],
+  baseCtx: { sessionId: string; workingDirectory: string; logger: Logger; askUser?: CortxConfig['askUser'] },
+  budget: number,
+): Promise<ToolExecOutput> {
+  const progressMessages: string[] = [];
+  const ctx: ToolContext = {
+    sessionId: baseCtx.sessionId,
+    workingDirectory: baseCtx.workingDirectory,
+    logger: baseCtx.logger.scope(tc.toolName),
+    reportProgress: (t) => progressMessages.push(t),
+    askUser: baseCtx.askUser,
+  };
+
+  try {
+    const parsed = typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input;
+    const input: Record<string, unknown> = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed : {};
+    let result = await tool.execute(input, ctx);
+
+    let output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+    if (output.length > budget) {
+      const marker = `\n\n... (truncated, ${output.length} chars total) ...\n\n`;
+      const window = Math.max(0, Math.floor((budget - marker.length) / 2));
+      output = window === 0 ? output.slice(0, budget) : `${output.slice(0, window)}${marker}${output.slice(-window)}`;
+      result = { ...result, output };
+    }
+    for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result)) ?? result;
+
+    const finalOutput = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+    return { progressMessages, finalOutput, isError: !result.success };
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    return { progressMessages, finalOutput: err, isError: true };
+  }
+}
+
+function makeToolResult(tc: LanguageToolCallContent, output: ToolExecOutput): LanguageToolResultContent {
+  return {
+    type: 'tool-result',
+    toolCallId: tc.toolCallId,
+    toolName: tc.toolName,
+    output: output.isError ? { type: 'error-text', value: output.finalOutput } : { type: 'text', value: output.finalOutput },
+    isError: output.isError,
+  };
+}
+
+async function* emitToolOutput(tc: LanguageToolCallContent, output: ToolExecOutput, plugins: CortxPlugin[]): AsyncGenerator<AgentEvent> {
+  for (const text of output.progressMessages) {
+    const e: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
+    await emit(plugins, e); yield e;
+  }
+  const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: output.finalOutput, isError: output.isError };
+  await emit(plugins, e); yield e;
+}
+
 async function emit(plugins: CortxPlugin[], event: AgentEvent): Promise<void> {
   for (const p of plugins) await p['event']?.(event);
 }
@@ -286,6 +349,14 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     }
 
     const toolResults: LanguageToolResultContent[] = [];
+    const maxConcurrent = opts.maxConcurrentTools ?? 5;
+    const budget = opts.toolResultBudget ?? 10240;
+    const baseCtx = { sessionId, workingDirectory, logger, askUser };
+
+    // Phase 1: Emit tool_use events, run before hooks, group by side effect level
+    const parallelPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
+    const serialPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
+
     for (const tc of toolCalls) {
       const ctrl = controller;
       if (ctrl?.isSteered) {
@@ -314,13 +385,17 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       }
 
       // tool.execute.before
-      const progressMessages: string[] = [];
-      const ctx: ToolContext = { sessionId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => progressMessages.push(t), askUser };
+      const beforeProgress: string[] = [];
+      const ctx: ToolContext = { sessionId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser };
       let skipped = false;
       for (const p of plugins) {
         const r = await p['tool.execute.before']?.(tc, ctx);
         if (r?.skip) {
           const out = r.result ?? 'skipped';
+          for (const text of beforeProgress) {
+            const pe: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
+            await emit(plugins, pe); yield pe;
+          }
           const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: out, isError: false };
           await emit(plugins, e); yield e;
           toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'text', value: out }, isError: false });
@@ -330,44 +405,82 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       }
       if (skipped) continue;
 
-      try {
-        const parsed = typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input;
-        const input: Record<string, unknown> = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed : {};
-        let result = await tool.execute(input, ctx);
-        // Truncate large tool results before plugin hooks
-        const budget = opts.toolResultBudget ?? 10240;
-        let output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
-        if (output.length > budget) {
-          const marker = `\n\n... (truncated, ${output.length} chars total) ...\n\n`;
-          const window = Math.max(0, Math.floor((budget - marker.length) / 2));
-          if (window === 0) {
-            output = output.slice(0, budget);
-          } else {
-            const head = output.slice(0, window);
-            const tail = output.slice(-window);
-            output = `${head}${marker}${tail}`;
-          }
-          result = { ...result, output };
-        }
-        for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result)) ?? result;
-        for (const text of progressMessages) {
-          const e: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
-          await emit(plugins, e); yield e;
-        }
-        const finalOutput = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
-        const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: finalOutput, isError: !result.success };
-        await emit(plugins, e); yield e;
-        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'text', value: finalOutput }, isError: !result.success });
-      } catch (e) {
-        for (const text of progressMessages) {
-          const pe: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
-          await emit(plugins, pe); yield pe;
-        }
-        const err = e instanceof Error ? e.message : String(e);
-        const re: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: err, isError: true };
-        await emit(plugins, re); yield re;
-        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'error-text', value: err }, isError: true });
+      const se = tool.sideEffects ?? 'write';
+      if ((se === 'none' || se === 'read') && parallelPending.length < maxConcurrent) {
+        parallelPending.push({ tc, tool });
+      } else if (se === 'none' || se === 'read') {
+        // Over the concurrency limit — downgrade to serial
+        serialPending.push({ tc, tool });
+      } else {
+        serialPending.push({ tc, tool });
       }
+    }
+
+    // Phase 2: Execute parallel group (read-only tools)
+    if (parallelPending.length > 0) {
+      const outputs = await Promise.all(
+        parallelPending.map(({ tc, tool }) => runToolCall(tc, tool, plugins, baseCtx, budget)),
+      );
+      for (let i = 0; i < parallelPending.length; i++) {
+        const { tc } = parallelPending[i];
+        const output = outputs[i];
+        yield* emitToolOutput(tc, output, plugins);
+        toolResults.push(makeToolResult(tc, output));
+      }
+    }
+
+    // Phase 3: Execute serial group (write/destructive tools)
+    // Detect parallelizable agent batches within the serial queue
+    const maxConcurrentAgents = opts.maxConcurrentAgents ?? 3;
+    let serialIdx = 0;
+    while (serialIdx < serialPending.length) {
+      const ctrl = controller;
+      if (ctrl?.isSteered) {
+        const steerMsgs = ctrl.consumeSteering();
+        const label = typeof steerMsgs[0]?.content === 'string' ? steerMsgs[0].content : 'steered';
+        const e: AgentEvent = { type: 'steered', message: label };
+        await emit(plugins, e); yield e;
+        messages.push(...steerMsgs);
+        continue mainLoop;
+      }
+      if (ctrl?.isAborted) {
+        const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted'), code: 'user_abort' };
+        await emit(plugins, e); yield e; return;
+      }
+
+      const { tc, tool } = serialPending[serialIdx];
+
+      // Check for consecutive agent calls to batch
+      if (tc.toolName === 'agent') {
+        const agentBatch: { tc: LanguageToolCallContent; tool: Tool }[] = [];
+        while (serialIdx < serialPending.length && serialPending[serialIdx].tc.toolName === 'agent' && agentBatch.length < maxConcurrentAgents) {
+          agentBatch.push(serialPending[serialIdx]);
+          serialIdx++;
+        }
+
+        if (agentBatch.length > 1) {
+          // Execute multiple agents concurrently
+          const agentOutputs = await Promise.allSettled(
+            agentBatch.map(({ tc: agentTc, tool: agentTool }) => runToolCall(agentTc, agentTool, plugins, baseCtx, budget)),
+          );
+          for (let i = 0; i < agentBatch.length; i++) {
+            const { tc: agentTc } = agentBatch[i];
+            const settled = agentOutputs[i];
+            const output: ToolExecOutput = settled.status === 'fulfilled'
+              ? settled.value
+              : { progressMessages: [], finalOutput: settled.reason instanceof Error ? settled.reason.message : String(settled.reason), isError: true };
+            yield* emitToolOutput(agentTc, output, plugins);
+            toolResults.push(makeToolResult(agentTc, output));
+          }
+          continue;
+        }
+      } else {
+        serialIdx++;
+      }
+
+      const output = await runToolCall(tc, tool, plugins, baseCtx, budget);
+      yield* emitToolOutput(tc, output, plugins);
+      toolResults.push(makeToolResult(tc, output));
     }
 
     if (toolResults.length) messages.push({ role: 'tool', content: toolResults });

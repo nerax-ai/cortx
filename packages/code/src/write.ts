@@ -6,6 +6,7 @@ export function createWriteTool(cwd: string): Tool {
   return {
     name: 'write',
     description: 'Write content to a file. Creates parent directories if needed.',
+    sideEffects: 'write',
     inputSchema: {
       type: 'object',
       properties: {

@@ -6,6 +6,7 @@ export function createLsTool(cwd: string): Tool {
   return {
     name: 'ls',
     description: 'List directory contents.',
+    sideEffects: 'read',
     inputSchema: {
       type: 'object',
       properties: {
