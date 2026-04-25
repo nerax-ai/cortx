@@ -35,6 +35,7 @@ async function runToolCall(
   const progressMessages: string[] = [];
   const ctx: ToolContext = {
     sessionId: baseCtx.sessionId,
+    toolCallId: tc.toolCallId,
     workingDirectory: baseCtx.workingDirectory,
     logger: baseCtx.logger.scope(tc.toolName),
     reportProgress: (t) => progressMessages.push(t),
@@ -356,6 +357,8 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     // Phase 1: Emit tool_use events, run before hooks, group by side effect level
     const parallelPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
     const serialPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
+    const agentCallCount = toolCalls.filter(tc => tc.toolName === 'agent').length;
+    if (agentCallCount > 0) logger.info(`[loop] agent tool_calls in this turn: ${agentCallCount} (concurrent batching requires >1)`);
 
     for (const tc of toolCalls) {
       const ctrl = controller;
@@ -386,7 +389,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
 
       // tool.execute.before
       const beforeProgress: string[] = [];
-      const ctx: ToolContext = { sessionId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser };
+      const ctx: ToolContext = { sessionId, toolCallId: tc.toolCallId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser };
       let skipped = false;
       for (const p of plugins) {
         const r = await p['tool.execute.before']?.(tc, ctx);

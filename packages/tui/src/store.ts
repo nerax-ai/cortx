@@ -291,7 +291,7 @@ export class TuiStore {
           toolCallId: event.toolCallId,
           description: event.description,
           status: 'running',
-          isBackground: false,
+          isBackground: event.isBackground ?? false,
           iterations: 0,
           toolCallCount: 0,
         } satisfies AgentSessionSummary);

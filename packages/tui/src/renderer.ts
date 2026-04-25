@@ -43,6 +43,9 @@ export function eventToRegion(eventType: AgentEvent['type']): RegionTarget {
     case 'steered':
     case 'follow_up':
     case 'context_overflow':
+    case 'agent_started':
+    case 'agent_progress':
+    case 'agent_completed':
       return 'status';
 
     default:

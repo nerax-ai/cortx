@@ -18,6 +18,7 @@ export interface ToolResult {
 
 export interface ToolContext {
   sessionId: string;
+  toolCallId: string;
   workingDirectory: string;
   logger: Logger;
   reportProgress?: (text: string) => void;
@@ -73,7 +74,7 @@ export type AgentEvent =
   | { type: 'context_overflow'; messages: LanguageMessage[] }
   | { type: 'error'; error: Error; code?: ErrorCode }
   | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } }
-  | { type: 'agent_started'; toolCallId: string; description: string }
+  | { type: 'agent_started'; toolCallId: string; description: string; isBackground?: boolean }
   | { type: 'agent_progress'; toolCallId: string; text: string }
   | { type: 'agent_completed'; toolCallId: string; output: string; iterations: number; toolCallCount: number; isError?: boolean };
 

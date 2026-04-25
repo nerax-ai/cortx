@@ -16,6 +16,16 @@ export interface SubAgentSession {
 export class SubAgentSessionStore {
   private sessions = new Map<string, SubAgentSession>();
   private changeListeners = new Set<() => void>();
+  private readonly maxCompleted: number;
+
+  constructor(maxCompleted = 20) {
+    this.maxCompleted = maxCompleted;
+  }
+
+  remove(toolCallId: string): void {
+    this.sessions.delete(toolCallId);
+    this.notify();
+  }
 
   create(toolCallId: string, description: string, isBackground: boolean): SubAgentSession {
     const session: SubAgentSession = {
@@ -34,20 +44,12 @@ export class SubAgentSessionStore {
     return session;
   }
 
-  pushEvent(toolCallId: string, event: AgentEvent): void {
-    const session = this.sessions.get(toolCallId);
-    if (!session) return;
-    session.events.push(event);
-    if (event.type === 'turn_start') session.iterations = event.iteration;
-    if (event.type === 'tool_use') session.toolCallCount++;
-    if (event.type === 'text') session.output += event.content;
-  }
-
   complete(toolCallId: string, isError: boolean): void {
     const session = this.sessions.get(toolCallId);
     if (!session) return;
     session.status = isError ? 'error' : 'completed';
     session.completedAt = Date.now();
+    this.evictCompleted();
     this.notify();
   }
 
@@ -65,6 +67,20 @@ export class SubAgentSessionStore {
   }
 
   private notify(): void {
-    for (const fn of this.changeListeners) fn();
+    for (const fn of this.changeListeners) {
+      try { fn(); } catch { /* swallow listener errors */ }
+    }
+  }
+
+  private evictCompleted(): void {
+    const completed: string[] = [];
+    for (const [id, s] of this.sessions) {
+      if (s.status === 'completed' || s.status === 'error') completed.push(id);
+    }
+    const excess = completed.length - this.maxCompleted;
+    if (excess <= 0) return;
+    for (let i = 0; i < excess; i++) {
+      this.sessions.delete(completed[i]);
+    }
   }
 }

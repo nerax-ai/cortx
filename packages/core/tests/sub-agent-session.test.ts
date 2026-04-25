@@ -12,24 +12,6 @@ describe('SubAgentSessionStore', () => {
     expect(store.get('tc1')).toBe(session);
   });
 
-  test('pushEvent stores events and updates counters', () => {
-    const store = new SubAgentSessionStore();
-    store.create('tc1', 'test', false);
-
-    store.pushEvent('tc1', { type: 'turn_start', iteration: 1 });
-    store.pushEvent('tc1', { type: 'tool_use', toolCall: { type: 'tool-call', toolCallId: 't1', toolName: 'bash', input: '{}' } });
-    store.pushEvent('tc1', { type: 'tool_result', toolCallId: 't1', result: 'ok' });
-    store.pushEvent('tc1', { type: 'text', content: 'hello' });
-    store.pushEvent('tc1', { type: 'turn_start', iteration: 2 });
-    store.pushEvent('tc1', { type: 'done' });
-
-    const session = store.get('tc1')!;
-    expect(session.events).toHaveLength(6);
-    expect(session.iterations).toBe(2);
-    expect(session.toolCallCount).toBe(1);
-    expect(session.output).toBe('hello');
-  });
-
   test('complete marks session as completed', () => {
     const store = new SubAgentSessionStore();
     store.create('tc1', 'test', false);
@@ -45,9 +27,9 @@ describe('SubAgentSessionStore', () => {
     expect(store.get('tc1')!.status).toBe('error');
   });
 
-  test('pushEvent on unknown toolCallId is a no-op', () => {
+  test('complete on unknown toolCallId is a no-op', () => {
     const store = new SubAgentSessionStore();
-    store.pushEvent('unknown', { type: 'text', content: 'x' });
+    store.complete('unknown', false);
     expect(store.get('unknown')).toBeUndefined();
   });
 
@@ -67,7 +49,6 @@ describe('SubAgentSessionStore', () => {
     store.subscribe(() => notifications.push('changed'));
 
     store.create('tc1', 'test', false);
-    store.pushEvent('tc1', { type: 'text', content: 'hello' });
     store.complete('tc1', false);
 
     expect(notifications).toEqual(['changed', 'changed']);
@@ -83,5 +64,22 @@ describe('SubAgentSessionStore', () => {
     store.complete('tc1', false);
 
     expect(notifications).toHaveLength(1);
+  });
+
+  test('remove deletes a session', () => {
+    const store = new SubAgentSessionStore();
+    store.create('tc1', 'test', false);
+    store.remove('tc1');
+    expect(store.get('tc1')).toBeUndefined();
+  });
+
+  test('listener error isolation does not break other listeners', () => {
+    const store = new SubAgentSessionStore();
+    const notifications: string[] = [];
+    store.subscribe(() => { throw new Error('boom'); });
+    store.subscribe(() => notifications.push('ok'));
+
+    store.create('tc1', 'test', false);
+    expect(notifications).toEqual(['ok']);
   });
 });

@@ -26,6 +26,7 @@ function mockCtx(overrides?: Partial<Record<string, unknown>>) {
   const progressMessages: string[] = [];
   return {
     sessionId: 'test-session',
+    toolCallId: 'tc_test_' + Date.now(),
     workingDirectory: '/tmp',
     logger: {
       debug: () => {},
@@ -59,17 +60,14 @@ describe('agent tool: run_in_background', () => {
   test('background mode creates a SubAgentSession marked as background', async () => {
     const cortx = new Cortx(mockLanguageClient(), { model: 'test' });
     const agentTool = cortx.tools.get('agent')!;
+    const ctx = mockCtx();
 
     const result = await agentTool.execute(
       { prompt: 'Do something', run_in_background: true },
-      mockCtx() as any,
+      ctx as any,
     );
 
-    // Extract the toolCallId from the output message
-    const match = (result.output as string).match(/\[ID: ([^\]]+)\]/);
-    expect(match).toBeTruthy();
-    const toolCallId = match![1];
-
+    const toolCallId = ctx.toolCallId;
     const session = cortx.agentSessions.get(toolCallId);
     expect(session).toBeDefined();
     expect(session!.isBackground).toBe(true);
@@ -80,14 +78,14 @@ describe('agent tool: run_in_background', () => {
   test('background session eventually completes and populates output', async () => {
     const cortx = new Cortx(mockLanguageClient(), { model: 'test' });
     const agentTool = cortx.tools.get('agent')!;
+    const ctx = mockCtx();
 
-    const result = await agentTool.execute(
+    await agentTool.execute(
       { prompt: 'Do something', run_in_background: true },
-      mockCtx() as any,
+      ctx as any,
     );
 
-    const match = (result.output as string).match(/\[ID: ([^\]]+)\]/);
-    const toolCallId = match![1];
+    const toolCallId = ctx.toolCallId;
 
     // Wait for the background agent to finish
     await new Promise(resolve => setTimeout(resolve, 200));

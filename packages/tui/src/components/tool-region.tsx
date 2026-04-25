@@ -6,6 +6,7 @@ import { colors } from '../theme.js';
 
 const selectToolCalls = (s: TuiState) => s.toolCalls;
 const selectAgentSessions = (s: TuiState) => s.agentSessions;
+const selectStatus = (s: TuiState) => s.status;
 
 export interface ToolRegionProps {
   store: TuiStore;
@@ -62,6 +63,16 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
     useCallback((listener) => store.select(selectAgentSessions).subscribe(listener), [store]),
     useCallback(() => store.select(selectAgentSessions).get(), [store]),
   );
+
+  useInput((input, key) => {
+    if (!key.return || !onViewAgent || collapsed) return;
+    for (const [id, entry] of toolCalls) {
+      if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.has(id)) {
+        onViewAgent(id);
+        return;
+      }
+    }
+  });
 
   if (toolCalls.size === 0) return null;
 

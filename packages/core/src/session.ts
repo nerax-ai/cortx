@@ -20,7 +20,9 @@ export class CortxSession {
   constructor(readonly cortx: Cortx) {
     // Wire sub-agent lifecycle events into the parent event stream
     this.cortx.onAgentEvent = (event: AgentEvent) => {
-      for (const fn of this.listeners) fn(event);
+      for (const fn of this.listeners) {
+        try { fn(event); } catch { /* swallow listener errors */ }
+      }
     };
   }
 
@@ -47,7 +49,9 @@ export class CortxSession {
         if (event.type === 'tool_use') this.state.pendingToolCalls.add(event.toolCall.toolCallId);
         if (event.type === 'tool_result') this.state.pendingToolCalls.delete(event.toolCallId as string);
         if (event.type === 'error') this.state.error = event.error.message;
-        for (const fn of this.listeners) fn(event);
+        for (const fn of this.listeners) {
+          try { fn(event); } catch { /* swallow listener errors */ }
+        }
       }
     } finally {
       this.state.isRunning = false;

@@ -68,28 +68,20 @@ export function AgentViewer({ store, agentSessionsStore, onExit }: AgentViewerPr
 
   // Extract text and tool events from the session
   const textParts: string[] = [];
-  const toolEntries: { toolName: string; summary: string; status: string; isError?: boolean }[] = [];
-  const toolStatusMap = new Map<string, { status: string; isError?: boolean }>();
+  const toolEntries: { toolCallId: string; toolName: string; summary: string; status: string; isError?: boolean }[] = [];
 
   for (const event of session.events) {
     if (event.type === 'text' && event.content) textParts.push(event.content);
     if (event.type === 'text_delta') textParts.push(event.delta);
     if (event.type === 'tool_use') {
       const summary = formatSubAgentToolSummary(event.toolCall.toolName, event.toolCall.input);
-      toolStatusMap.set(event.toolCall.toolCallId, { status: 'pending' });
-      toolEntries.push({ toolName: event.toolCall.toolName, summary, status: 'pending' });
+      toolEntries.push({ toolCallId: event.toolCall.toolCallId, toolName: event.toolCall.toolName, summary, status: 'pending' });
     }
     if (event.type === 'tool_result') {
-      const idx = toolEntries.findIndex(t =>
-        toolStatusMap.has(event.toolCallId) && toolEntries.indexOf(t) >= 0
-      );
-      for (const entry of toolEntries) {
-        // Match by position — tool_result after tool_use completes the last pending
-        if (entry.status === 'pending') {
-          entry.status = 'complete';
-          entry.isError = event.isError;
-          break;
-        }
+      const entry = toolEntries.find(t => t.toolCallId === event.toolCallId);
+      if (entry) {
+        entry.status = 'complete';
+        entry.isError = event.isError;
       }
     }
   }

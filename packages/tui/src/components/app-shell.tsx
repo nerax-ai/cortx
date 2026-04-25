@@ -118,12 +118,9 @@ export function AppShell({
       const toolCalls = store.getState().toolCalls;
       const agentSessions = store.getState().agentSessions;
       for (const [id, entry] of toolCalls) {
-        if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.size > 0) {
-          // Find the matching agent session
-          for (const sessionId of agentSessions.keys()) {
-            store.setActiveAgentView(sessionId);
-            return;
-          }
+        if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.has(id)) {
+          store.setActiveAgentView(id);
+          return;
         }
       }
     }
