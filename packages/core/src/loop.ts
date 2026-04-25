@@ -405,12 +405,15 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       }
       if (skipped) continue;
 
+      // Emit any progress from before hooks
+      for (const text of beforeProgress) {
+        const pe: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
+        await emit(plugins, pe); yield pe;
+      }
+
       const se = tool.sideEffects ?? 'write';
       if ((se === 'none' || se === 'read') && parallelPending.length < maxConcurrent) {
         parallelPending.push({ tc, tool });
-      } else if (se === 'none' || se === 'read') {
-        // Over the concurrency limit — downgrade to serial
-        serialPending.push({ tc, tool });
       } else {
         serialPending.push({ tc, tool });
       }
@@ -418,12 +421,15 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
 
     // Phase 2: Execute parallel group (read-only tools)
     if (parallelPending.length > 0) {
-      const outputs = await Promise.all(
+      const settled = await Promise.allSettled(
         parallelPending.map(({ tc, tool }) => runToolCall(tc, tool, plugins, baseCtx, budget)),
       );
       for (let i = 0; i < parallelPending.length; i++) {
         const { tc } = parallelPending[i];
-        const output = outputs[i];
+        const s = settled[i];
+        const output: ToolExecOutput = s.status === 'fulfilled'
+          ? s.value
+          : { progressMessages: [], finalOutput: s.reason instanceof Error ? s.reason.message : String(s.reason), isError: true };
         yield* emitToolOutput(tc, output, plugins);
         toolResults.push(makeToolResult(tc, output));
       }
@@ -431,7 +437,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
 
     // Phase 3: Execute serial group (write/destructive tools)
     // Detect parallelizable agent batches within the serial queue
-    const maxConcurrentAgents = opts.maxConcurrentAgents ?? 3;
+    const maxConcurrentAgents = Math.max(1, opts.maxConcurrentAgents ?? 3);
     let serialIdx = 0;
     while (serialIdx < serialPending.length) {
       const ctrl = controller;
