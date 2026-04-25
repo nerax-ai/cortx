@@ -1,9 +1,8 @@
 /**
- * Output writer — writes completed turns to the terminal via console.log.
+ * Output writer — formats completed turns for terminal output.
  *
- * When Ink's `patchConsole` is enabled, console.log output appears ABOVE the
- * Ink frame and is preserved in the terminal scrollback. This gives native
- * terminal scrolling, copy support, and natural output flow.
+ * All functions return strings. The caller batches them into a single
+ * console.log call to avoid corrupting Ink's patchConsole frame tracking.
  */
 
 import type { TurnEntry } from './types/tui-state.js';
@@ -19,56 +18,51 @@ const ANSI = {
   gray: '\x1B[90m',
 } as const;
 
-/** Write a user message to the terminal. */
-export function writeUserMessage(text: string): void {
+/** Format a user message. */
+export function formatUserMessage(text: string): string {
   const tag = `${ANSI.bold}${ANSI.cyan}>${ANSI.reset}`;
-  console.log(`${tag} ${text}`);
+  return `${tag} ${text}`;
 }
 
-/** Write an assistant message to the terminal. */
-export function writeAssistantMessage(text: string, duration?: number): void {
+/** Format an assistant message. */
+export function formatAssistantMessage(text: string, duration?: number): string {
   const durationTag = duration != null && duration > 0.1
     ? ` ${ANSI.dim}(${duration.toFixed(1)}s)${ANSI.reset}`
     : '';
-  console.log(`${text}${durationTag}`);
+  return `${text}${durationTag}`;
 }
 
-/** Write a tool turn to the terminal. */
-export function writeToolMessage(content: string): void {
+/** Format a tool turn. */
+export function formatToolMessage(content: string): string {
   const lines = content.split('\n');
-  for (const line of lines) {
+  return lines.map(line => {
     if (line.startsWith('✓') || line.startsWith('✅')) {
-      console.log(`  ${ANSI.green}${line}${ANSI.reset}`);
+      return `  ${ANSI.green}${line}${ANSI.reset}`;
     } else if (line.startsWith('✗')) {
-      console.log(`  ${ANSI.red}${line}${ANSI.reset}`);
+      return `  ${ANSI.red}${line}${ANSI.reset}`;
     } else if (line.startsWith('⏳')) {
-      console.log(`  ${ANSI.yellow}${line}${ANSI.reset}`);
+      return `  ${ANSI.yellow}${line}${ANSI.reset}`;
     } else {
-      console.log(`  ${ANSI.dim}${line}${ANSI.reset}`);
+      return `  ${ANSI.dim}${line}${ANSI.reset}`;
     }
-  }
+  }).join('\n');
 }
 
-/** Write a separator between turns. */
-export function writeSeparator(): void {
-  console.log(`${ANSI.dim}${'─'.repeat(60)}${ANSI.reset}`);
+/** Format a separator between turns. */
+export function formatSeparator(): string {
+  return `${ANSI.dim}${'─'.repeat(60)}${ANSI.reset}`;
 }
 
-/**
- * Write a completed turn to the terminal.
- * Called when a turn is finalized (e.g., on turn_start to flush the previous turn,
- * or on done/error to flush the last turn).
- */
-export function writeTurn(turn: TurnEntry): void {
+/** Format a completed turn. */
+export function formatTurn(turn: TurnEntry): string {
   switch (turn.role) {
     case 'user':
-      writeUserMessage(turn.content);
-      break;
+      return formatUserMessage(turn.content);
     case 'assistant':
-      writeAssistantMessage(turn.content, turn.duration);
-      break;
+      return formatAssistantMessage(turn.content, turn.duration);
     case 'tool':
-      writeToolMessage(turn.content);
-      break;
+      return formatToolMessage(turn.content);
+    default:
+      return turn.content;
   }
 }
