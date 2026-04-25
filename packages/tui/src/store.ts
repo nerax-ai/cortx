@@ -6,6 +6,7 @@ import type {
   TurnEntry,
   ToolCallEntry,
   TokenUsage,
+  AgentSessionSummary,
 } from './types/tui-state.js';
 
 /**
@@ -41,6 +42,8 @@ export class TuiStore {
       error: undefined,
       scrollOffset: 0,
       autoFollow: true,
+      agentSessions: new Map(),
+      activeAgentView: null,
     };
   }
 
@@ -282,6 +285,48 @@ export class TuiStore {
         break;
       }
 
+      case 'agent_started': {
+        const newSessions = new Map(this.state.agentSessions);
+        newSessions.set(event.toolCallId, {
+          toolCallId: event.toolCallId,
+          description: event.description,
+          status: 'running',
+          isBackground: false,
+          iterations: 0,
+          toolCallCount: 0,
+        } satisfies AgentSessionSummary);
+        this.state = { ...this.state, agentSessions: newSessions };
+        break;
+      }
+
+      case 'agent_progress': {
+        const newSessions = new Map(this.state.agentSessions);
+        const entry = newSessions.get(event.toolCallId);
+        if (entry) {
+          newSessions.set(event.toolCallId, {
+            ...entry,
+            progress: event.text,
+          });
+          this.state = { ...this.state, agentSessions: newSessions };
+        }
+        break;
+      }
+
+      case 'agent_completed': {
+        const newSessions = new Map(this.state.agentSessions);
+        const entry = newSessions.get(event.toolCallId);
+        if (entry) {
+          newSessions.set(event.toolCallId, {
+            ...entry,
+            status: event.isError ? 'error' : 'completed',
+            iterations: event.iterations,
+            toolCallCount: event.toolCallCount,
+          });
+          this.state = { ...this.state, agentSessions: newSessions };
+        }
+        break;
+      }
+
       case 'steered':
       case 'follow_up':
       case 'context_overflow':
@@ -354,6 +399,18 @@ export class TuiStore {
   }
 
   /**
+   * Set the currently viewed agent session by toolCallId.
+   * Pass null to return to the main view.
+   */
+  setActiveAgentView(toolCallId: string | null): void {
+    this.state = {
+      ...this.state,
+      activeAgentView: toolCallId,
+    };
+    this.notifySelectors();
+  }
+
+  /**
    * Reset the store to initial state.
    * Generates a new session ID unless one is provided (for session restore).
    */
@@ -373,6 +430,8 @@ export class TuiStore {
       error: undefined,
       scrollOffset: 0,
       autoFollow: true,
+      agentSessions: new Map(),
+      activeAgentView: null,
     };
     this.notifySelectors();
   }
@@ -515,3 +574,13 @@ function shallowEqual(a: unknown, b: unknown): boolean {
   }
   return true;
 }
+
+// --- Exported selector functions ---
+
+/** Select the agent sessions map from state. */
+export const selectAgentSessions = (state: TuiState): Map<string, AgentSessionSummary> =>
+  state.agentSessions;
+
+/** Select the currently active agent view toolCallId from state. */
+export const selectActiveAgentView = (state: TuiState): string | null =>
+  state.activeAgentView;

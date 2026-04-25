@@ -72,7 +72,10 @@ export type AgentEvent =
   | { type: 'follow_up'; message: string }
   | { type: 'context_overflow'; messages: LanguageMessage[] }
   | { type: 'error'; error: Error; code?: ErrorCode }
-  | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } };
+  | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } }
+  | { type: 'agent_started'; toolCallId: string; description: string }
+  | { type: 'agent_progress'; toolCallId: string; text: string }
+  | { type: 'agent_completed'; toolCallId: string; output: string; iterations: number; toolCallCount: number; isError?: boolean };
 
 export type { PluginModule, PluginContext, PluginManifest, InlinePlugin } from '@nerax-ai/plugin';
 export type { SkillInfo } from './skill.js';

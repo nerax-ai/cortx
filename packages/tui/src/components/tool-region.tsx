@@ -1,14 +1,16 @@
 import { useSyncExternalStore, useCallback } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import type { TuiStore } from '../store.js';
 import type { TuiState } from '../types/tui-state.js';
 import { colors } from '../theme.js';
 
 const selectToolCalls = (s: TuiState) => s.toolCalls;
+const selectAgentSessions = (s: TuiState) => s.agentSessions;
 
 export interface ToolRegionProps {
   store: TuiStore;
   collapsed?: boolean;
+  onViewAgent?: (toolCallId: string) => void;
 }
 
 /**
@@ -47,13 +49,18 @@ function formatToolSummary(toolName: string, input: unknown): string {
   }
 }
 
-export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
+export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionProps) {
   const toolCalls = useSyncExternalStore(
     useCallback(
       (listener) => store.select(selectToolCalls).subscribe(listener),
       [store],
     ),
     useCallback(() => store.select(selectToolCalls).get(), [store]),
+  );
+
+  const agentSessions = useSyncExternalStore(
+    useCallback((listener) => store.select(selectAgentSessions).subscribe(listener), [store]),
+    useCallback(() => store.select(selectAgentSessions).get(), [store]),
   );
 
   if (toolCalls.size === 0) return null;
@@ -101,6 +108,7 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
       </Box>
       {entries.map(([id, entry]) => {
         const { icon: statusIcon, color: statusColor } = toolStatusIcon(entry);
+        const hasAgentSession = entry.toolName === 'agent' && agentSessions.size > 0;
 
         return (
           <Box key={id} flexDirection="column" marginLeft={1}>
@@ -112,6 +120,9 @@ export function ToolRegion({ store, collapsed = true }: ToolRegionProps) {
                 const summary = formatToolSummary(entry.toolName, entry.input);
                 return summary ? <Text dimColor>{': '}{summary}</Text> : null;
               })()}
+              {hasAgentSession && entry.status === 'complete' && (
+                <Text color="cyan">{' [Enter] view'}</Text>
+              )}
             </Text>
             {entry.result !== undefined && (() => {
               const resultStr = String(entry.result);

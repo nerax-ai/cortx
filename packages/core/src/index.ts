@@ -11,3 +11,5 @@ export { parseInvocation, substituteArgs } from './skill/substitute.js';
 export { parseSkillFile, parseFrontmatter, SkillParseError } from './skill/parse.js';
 export { renderSkillSummary } from './skill/render.js';
 export type { SkillInfo } from '@cortx/sdk';
+export { SubAgentSessionStore } from './sub-agent-session.js';
+export type { SubAgentSession } from './sub-agent-session.js';

@@ -17,7 +17,12 @@ export class CortxSession {
     error: undefined,
   };
 
-  constructor(readonly cortx: Cortx) {}
+  constructor(readonly cortx: Cortx) {
+    // Wire sub-agent lifecycle events into the parent event stream
+    this.cortx.onAgentEvent = (event: AgentEvent) => {
+      for (const fn of this.listeners) fn(event);
+    };
+  }
 
   get controller(): AgentController { return this.cortx.controller; }
 

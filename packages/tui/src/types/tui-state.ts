@@ -33,6 +33,17 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
+/** Summary of a sub-agent session tracked by the TUI. */
+export interface AgentSessionSummary {
+  toolCallId: string;
+  description: string;
+  status: 'running' | 'completed' | 'error';
+  isBackground: boolean;
+  progress?: string;
+  iterations: number;
+  toolCallCount: number;
+}
+
 /** The full state object held by TuiStore. */
 export interface TuiState {
   /** Unique session identifier (e.g. "sess_1234_abc"). */
@@ -61,6 +72,10 @@ export interface TuiState {
   scrollOffset: number;
   /** Whether to auto-scroll to bottom on new content. */
   autoFollow: boolean;
+  /** Active and completed sub-agent sessions. */
+  agentSessions: Map<string, AgentSessionSummary>;
+  /** Currently viewed agent toolCallId, or null for main view. */
+  activeAgentView: string | null;
 }
 
 /** Selector function: maps full state to a derived slice. */

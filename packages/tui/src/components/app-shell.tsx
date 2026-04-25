@@ -3,6 +3,7 @@ import { Box, useInput } from 'ink';
 import { OutputRegion } from './output-region.js';
 import { InputArea } from './input-area.js';
 import { ToolRegion } from './tool-region.js';
+import { AgentViewer } from './agent-viewer.js';
 import { CommandPalette, buildItems, filterItems, moveSelection } from './command-palette.js';
 import { SessionPicker } from './session-picker.js';
 import type { TuiStore } from '../store.js';
@@ -10,8 +11,10 @@ import type { TuiState } from '../types/tui-state.js';
 import type { TuiRegistry } from '../tui-registry.js';
 import type { SessionSummary } from '../plugins/session-plugin.js';
 import type { SkillItem } from '../plugins/skill-plugin.js';
+import type { SubAgentSessionStore } from '@cortx/core';
 
 const selectStatus = (s: TuiState) => s.status;
+const selectActiveAgentView = (s: TuiState) => s.activeAgentView;
 
 export interface AppShellProps {
   store: TuiStore;
@@ -19,6 +22,7 @@ export interface AppShellProps {
   model: string;
   cwd: string;
   skills: SkillItem[];
+  agentSessionsStore: SubAgentSessionStore;
   onSubmit: (value: string) => void;
   onAbort?: () => void;
   onForceExit?: () => void;
@@ -33,6 +37,7 @@ export function AppShell({
   registry,
   model,
   skills,
+  agentSessionsStore,
   onSubmit,
   onAbort,
   onForceExit,
@@ -44,6 +49,11 @@ export function AppShell({
   const status = useSyncExternalStore(
     useCallback((listener) => store.select(selectStatus).subscribe(listener), [store]),
     useCallback(() => store.select(selectStatus).get(), [store]),
+  );
+
+  const activeAgentView = useSyncExternalStore(
+    useCallback((listener) => store.select(selectActiveAgentView).subscribe(listener), [store]),
+    useCallback(() => store.select(selectActiveAgentView).get(), [store]),
   );
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -103,6 +113,20 @@ export function AppShell({
     if (input === 'T' && key.shift && !key.ctrl) {
       setToolExpanded((prev) => !prev);
     }
+    // 'a' key opens agent viewer for the first completed agent in expanded tool region
+    if (input === 'a' && !key.ctrl && toolExpanded && status === 'idle') {
+      const toolCalls = store.getState().toolCalls;
+      const agentSessions = store.getState().agentSessions;
+      for (const [id, entry] of toolCalls) {
+        if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.size > 0) {
+          // Find the matching agent session
+          for (const sessionId of agentSessions.keys()) {
+            store.setActiveAgentView(sessionId);
+            return;
+          }
+        }
+      }
+    }
   });
 
   // Session picker overlay
@@ -116,11 +140,40 @@ export function AppShell({
     );
   }
 
+  // Agent viewer mode
+  if (activeAgentView) {
+    return (
+      <Box flexDirection="column">
+        <AgentViewer
+          store={store}
+          agentSessionsStore={agentSessionsStore}
+          onExit={() => store.setActiveAgentView(null)}
+        />
+        <InputArea
+          onSubmit={onSubmit}
+          isRunning={status === 'running'}
+          onAbort={onAbort}
+          onForceExit={onForceExit}
+          onOpenPalette={() => { setPaletteOpen(true); setPaletteSelectedIndex(0); setPaletteFilter(''); }}
+          onPaletteNavigate={handlePaletteNavigate}
+          onPaletteSelect={handlePaletteSelect}
+          onPaletteClose={handlePaletteClose}
+          onPaletteFilterChange={handlePaletteFilterChange}
+          overlayActive={sessionPickerOpen}
+          paletteOpen={paletteOpen}
+          store={store}
+          model={model}
+          injectedValue={injectedValue}
+        />
+      </Box>
+    );
+  }
+
   // Normal mode: streaming content + input area
   return (
     <Box flexDirection="column">
       <OutputRegion store={store} />
-      <ToolRegion store={store} collapsed={!toolExpanded} />
+      <ToolRegion store={store} collapsed={!toolExpanded} onViewAgent={(id) => store.setActiveAgentView(id)} />
       <InputArea
         onSubmit={onSubmit}
         isRunning={status === 'running'}

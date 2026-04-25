@@ -183,6 +183,7 @@ export default function App({ session, model, cwd }: AppProps) {
       model={model}
       cwd={cwd}
       skills={skills}
+      agentSessionsStore={session.cortx.agentSessions}
       onSubmit={handleSubmit}
       onAbort={handleAbort}
       onForceExit={handleForceExit}
