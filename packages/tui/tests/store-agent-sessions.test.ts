@@ -310,4 +310,19 @@ describe('TuiStore agent session tracking', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(sel.get().size).toBe(1);
   });
+
+  test('agent_started with isBackground tracks background flag', () => {
+    const store = new TuiStore();
+
+    store.dispatch({
+      type: 'agent_started',
+      toolCallId: 'bg_1',
+      description: 'Background task',
+      isBackground: true,
+    });
+
+    const entry = store.getState().agentSessions.get('bg_1');
+    expect(entry).toBeDefined();
+    expect(entry!.isBackground).toBe(true);
+  });
 });

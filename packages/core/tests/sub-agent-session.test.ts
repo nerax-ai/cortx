@@ -82,4 +82,30 @@ describe('SubAgentSessionStore', () => {
     store.create('tc1', 'test', false);
     expect(notifications).toEqual(['ok']);
   });
+
+  test('evicts oldest completed sessions when exceeding maxCompleted', () => {
+    const store = new SubAgentSessionStore(3);
+    for (let i = 1; i <= 4; i++) {
+      store.create(`tc${i}`, `agent ${i}`, false);
+      store.complete(`tc${i}`, false);
+    }
+    // tc1 should be evicted (oldest completed)
+    expect(store.get('tc1')).toBeUndefined();
+    expect(store.get('tc2')).toBeDefined();
+    expect(store.get('tc3')).toBeDefined();
+    expect(store.get('tc4')).toBeDefined();
+  });
+
+  test('does not evict running sessions', () => {
+    const store = new SubAgentSessionStore(2);
+    store.create('tc1', 'running', false);
+    // tc1 is still running, completing tc2 and tc3 should not evict tc1
+    store.create('tc2', 'done', false);
+    store.complete('tc2', false);
+    store.create('tc3', 'done too', false);
+    store.complete('tc3', false);
+    // tc1 is still there because it's running
+    expect(store.get('tc1')).toBeDefined();
+    expect(store.get('tc1')!.status).toBe('running');
+  });
 });

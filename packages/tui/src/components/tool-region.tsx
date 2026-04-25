@@ -6,7 +6,6 @@ import { colors } from '../theme.js';
 
 const selectToolCalls = (s: TuiState) => s.toolCalls;
 const selectAgentSessions = (s: TuiState) => s.agentSessions;
-const selectStatus = (s: TuiState) => s.status;
 
 export interface ToolRegionProps {
   store: TuiStore;
@@ -64,8 +63,13 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
     useCallback(() => store.select(selectAgentSessions).get(), [store]),
   );
 
+  const status = useSyncExternalStore(
+    useCallback((listener) => store.select((s: TuiState) => s.status).subscribe(listener), [store]),
+    useCallback(() => store.select((s: TuiState) => s.status).get(), [store]),
+  );
+
   useInput((input, key) => {
-    if (!key.return || !onViewAgent || collapsed) return;
+    if (!key.return || !onViewAgent || collapsed || status !== 'idle') return;
     for (const [id, entry] of toolCalls) {
       if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.has(id)) {
         onViewAgent(id);
@@ -119,7 +123,7 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
       </Box>
       {entries.map(([id, entry]) => {
         const { icon: statusIcon, color: statusColor } = toolStatusIcon(entry);
-        const hasAgentSession = entry.toolName === 'agent' && agentSessions.size > 0;
+        const hasAgentSession = entry.toolName === 'agent' && agentSessions.has(id);
 
         return (
           <Box key={id} flexDirection="column" marginLeft={1}>
