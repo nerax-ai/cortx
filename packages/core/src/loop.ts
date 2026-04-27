@@ -2,6 +2,7 @@ import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
 import type { Logger, CortxPlugin, LanguageMessage, LanguageToolCallContent, LanguageToolResultContent, Tool, ToolContext, ErrorCode } from '@cortx/sdk';
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
+import { isToolCallContent } from './message-helpers.js';
 
 const noopLogger: Logger = {
   debug: () => {},
@@ -136,7 +137,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
   if (skipInitialLlm) {
     const last = messages[messages.length - 1];
     if (last?.role === 'assistant' && Array.isArray(last.content)) {
-      resumeFromToolCalls = (last.content as unknown[]).filter((c): c is LanguageToolCallContent => typeof c === 'object' && c !== null && 'type' in c && c.type === 'tool-call');
+      resumeFromToolCalls = Array.from(last.content as Iterable<unknown>).filter(isToolCallContent);
     }
     if (!resumeFromToolCalls?.length) {
       const e: AgentEvent = { type: 'error', error: new Error('continue() requires last message to be an assistant message with tool calls'), code: 'stream_error' };

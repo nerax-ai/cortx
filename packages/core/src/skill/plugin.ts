@@ -2,6 +2,7 @@ import type { CortxPlugin, LanguageMessage, SkillInfo } from '@cortx/sdk';
 import { parseInvocation, substituteArgs } from './substitute.js';
 import { renderSkillSummary } from './render.js';
 import { createSkillTool } from './tool.js';
+import { replaceMessageContent } from '../message-helpers.js';
 
 function extractTextContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -28,7 +29,7 @@ const SKILL_EXECUTION_GUIDANCE = `
 Keep working until the skill's instructions are fully carried out. After each tool result, assess progress and continue.`;
 
 function replaceLastMessage(messages: LanguageMessage[], lastIdx: number, last: LanguageMessage, newContent: string): LanguageMessage[] {
-  return [...messages.slice(0, lastIdx), { ...last, content: [{ type: 'text' as const, text: newContent }] } as unknown as LanguageMessage];
+  return [...messages.slice(0, lastIdx), replaceMessageContent(last, [{ type: 'text' as const, text: newContent }])];
 }
 
 export function createSkillPlugin(skills: SkillInfo[], cwd: string): CortxPlugin {

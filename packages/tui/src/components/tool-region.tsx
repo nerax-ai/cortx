@@ -1,5 +1,6 @@
 import { useSyncExternalStore, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { formatToolSummary } from '@cortx/sdk';
 import type { TuiStore } from '../store.js';
 import type { TuiState } from '../types/tui-state.js';
 import { colors } from '../theme.js';
@@ -27,26 +28,6 @@ function toolStatusIcon(entry: { status: string; isError?: boolean }): { icon: s
   if (entry.status === 'pending') return { icon: '◷', color: colors.toolPending };
   if (entry.isError) return { icon: '✗', color: colors.toolError };
   return { icon: '✓', color: colors.toolSuccess };
-}
-
-function formatToolSummary(toolName: string, input: unknown): string {
-  try {
-    const parsed = typeof input === 'string' ? JSON.parse(input) : input;
-    if (toolName === 'agent') {
-      const prompt = String(parsed?.prompt ?? '').slice(0, 60);
-      const desc = String(parsed?.description ?? '');
-      return desc ? `${desc}: ${prompt}` : prompt;
-    }
-    if (toolName === 'bash') {
-      return String(parsed?.command ?? '').slice(0, 80);
-    }
-    if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
-      return String(parsed?.file_path ?? parsed?.path ?? '').slice(0, 80);
-    }
-    return '';
-  } catch {
-    return '';
-  }
 }
 
 export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionProps) {

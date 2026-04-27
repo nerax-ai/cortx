@@ -1,12 +1,14 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentController, CortxConfig, CortxPlugin } from './types.js';
 import type { LanguageMessage, Tool } from '@cortx/sdk';
+import { formatToolSummary } from '@cortx/sdk';
 import { AgentLoopController, isPluginConfig } from './types.js';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { agentLoop } from './loop.js';
 import { discoverSkills } from './skill/discover.js';
 import { createSkillPlugin } from './skill/plugin.js';
 import { SubAgentSessionStore } from './sub-agent-session.js';
+import { createUserMessage } from './message-helpers.js';
 
 type CortxFactoryMap = { cortx: () => CortxPlugin | Promise<CortxPlugin> };
 
@@ -23,27 +25,13 @@ async function resolvePlugins(entries: CortxConfig['plugins']): Promise<CortxPlu
   ));
 }
 
-function formatToolProgress(toolName: string, input: unknown): string {
-  const parsed = typeof input === 'string' ? (() => { try { return JSON.parse(input); } catch { return {}; } })() : input ?? {};
-  if (toolName === 'bash') return String(parsed.command ?? '').slice(0, 60);
-  if (toolName === 'read' || toolName === 'write' || toolName === 'edit') return String(parsed.file_path ?? parsed.path ?? '');
-  if (toolName === 'grep') return String(parsed.pattern ?? '').slice(0, 40);
-  return '';
-}
-
-interface SubAgentRunResult {
-  output: string;
-  iterations: number;
-  toolCallCount: number;
-}
-
 async function runSubAgentLoop(
   loopOpts: Parameters<typeof agentLoop>[0],
   session: import('./sub-agent-session.js').SubAgentSession,
   toolCallId: string,
   reportProgress: ((text: string) => void) | undefined,
   onAgentEvent: ((event: AgentEvent) => void) | undefined,
-): Promise<SubAgentRunResult> {
+): Promise<void> {
   for await (const event of agentLoop(loopOpts)) {
     session.events.push(event);
     if (event.type === 'turn_start') {
@@ -51,7 +39,7 @@ async function runSubAgentLoop(
     }
     if (event.type === 'tool_use') {
       session.toolCallCount++;
-      const summary = formatToolProgress(event.toolCall.toolName, event.toolCall.input);
+      const summary = formatToolSummary(event.toolCall.toolName, event.toolCall.input, { maxLength: 60 });
       const progressText = `  → ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`;
       reportProgress?.(progressText);
       onAgentEvent?.({ type: 'agent_progress', toolCallId, text: progressText });
@@ -59,7 +47,6 @@ async function runSubAgentLoop(
     if (event.type === 'text') session.output += event.content;
     if (event.type === 'done' || event.type === 'error') break;
   }
-  return { output: session.output, iterations: session.iterations, toolCallCount: session.toolCallCount };
 }
 
 export class Cortx {
@@ -180,7 +167,7 @@ export class Cortx {
           model: config.model,
           system: subSystem,
           tools: getTools(),
-          messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: prompt }] } as unknown as LanguageMessage],
+          messages: [createUserMessage(prompt)],
           workingDirectory: ctx.workingDirectory,
           logger: ctx.logger,
           maxIterations: 10,
@@ -190,10 +177,11 @@ export class Cortx {
         if (isBackground) {
           (async () => {
             try {
-              const result = await runSubAgentLoop(loopOpts, session, toolCallId, undefined, cortx.onAgentEvent?.bind(cortx));
+              await runSubAgentLoop(loopOpts, session, toolCallId, undefined, cortx.onAgentEvent?.bind(cortx));
               cortx.agentSessions.complete(toolCallId, false);
-              cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: result.output, iterations: result.iterations, toolCallCount: result.toolCallCount });
-            } catch {
+              cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: session.output, iterations: session.iterations, toolCallCount: session.toolCallCount });
+            } catch (e) {
+              ctx.logger.error(`Background agent "${desc}" failed: ${e instanceof Error ? e.message : String(e)}`);
               cortx.agentSessions.complete(toolCallId, true);
               cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: '', iterations: session.iterations, toolCallCount: session.toolCallCount, isError: true });
             }
@@ -204,13 +192,13 @@ export class Cortx {
 
         try {
           const turnProgress = (text: string) => ctx.reportProgress?.(text);
-          const result = await runSubAgentLoop(loopOpts, session, toolCallId, turnProgress, cortx.onAgentEvent?.bind(cortx));
+          await runSubAgentLoop(loopOpts, session, toolCallId, turnProgress, cortx.onAgentEvent?.bind(cortx));
 
-          ctx.reportProgress?.(`✓ ${desc}: done (${result.iterations} iterations, ${result.toolCallCount} tool calls)`);
+          ctx.reportProgress?.(`✓ ${desc}: done (${session.iterations} iterations, ${session.toolCallCount} tool calls)`);
           cortx.agentSessions.complete(toolCallId, false);
-          cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: result.output, iterations: result.iterations, toolCallCount: result.toolCallCount });
+          cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: session.output, iterations: session.iterations, toolCallCount: session.toolCallCount });
 
-          const preview = result.output.length > 800 ? result.output.slice(0, 800) + `\n... (${result.output.length} chars total)` : result.output;
+          const preview = session.output.length > 800 ? session.output.slice(0, 800) + `\n... (${session.output.length} chars total)` : session.output;
           return { success: true, output: preview || '(sub-agent produced no text output)' };
         } catch (e) {
           cortx.agentSessions.complete(toolCallId, true);

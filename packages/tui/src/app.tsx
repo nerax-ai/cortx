@@ -10,6 +10,7 @@ import { sessionPlugin, createAutoSaveHandler, getSessionsDir, type SessionSumma
 import { discoverSkillItems, type SkillItem } from './plugins/skill-plugin.js';
 import type { TurnEntry } from './types/tui-state.js';
 import { processEvent } from './renderer.js';
+import { parseAgentMessages, turnsToMessages } from './message-io.js';
 
 export interface AppProps {
   session: CortxSession;
@@ -51,14 +52,9 @@ export default function App({ session, model, cwd }: AppProps) {
         if (meta && meta.messages) {
           store.reset(meta.sessionId);
           store.loadTurns(meta.messages as TurnEntry[]);
-          // Use saved agent messages (with expanded skill content) if available,
-          // otherwise fall back to mapping store turns (which have raw skill invocations)
-          const agentMessages = (meta.agentMessages
-            ? meta.agentMessages
-            : (meta.messages as TurnEntry[]).map(
-                (t: TurnEntry) => ({ role: t.role, content: t.content }),
-              )
-          ) as unknown as import('@cortx/sdk').LanguageMessage[];
+          const agentMessages = meta.agentMessages
+            ? parseAgentMessages(meta.agentMessages)
+            : turnsToMessages(meta.messages as TurnEntry[]);
           session.cortx.replaceMessages(agentMessages);
           if (meta.status === 'crashed') {
             session.resume().catch(() => {});

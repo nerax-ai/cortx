@@ -1,4 +1,5 @@
 import type { AgentEvent } from '@cortx/sdk';
+import { formatToolSummary } from '@cortx/sdk';
 import type {
   TuiState,
   TuiSelector,
@@ -8,6 +9,11 @@ import type {
   TokenUsage,
   AgentSessionSummary,
 } from './types/tui-state.js';
+
+interface SelectorEntry {
+  listeners: Set<() => void>;
+  lastValue: unknown;
+}
 
 /**
  * Reactive state store for the TUI.
@@ -20,13 +26,7 @@ export class TuiStore {
   private state: TuiState;
   private turnStartTime = 0;
   private totalStartTime = 0;
-  private selectorSubs: Map<
-    TuiSelector<unknown>,
-    {
-      listeners: Set<() => void>;
-      lastValue: unknown;
-    }
-  > = new Map();
+  private selectorSubs: Map<TuiSelector<unknown>, SelectorEntry> = new Map();
   private elapsedTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor() {
@@ -78,7 +78,7 @@ export class TuiStore {
 
     const entry = {
       listeners: new Set<() => void>(),
-      lastValue: selector(this.state) as unknown,
+      lastValue: selector(this.state),
     };
     this.selectorSubs.set(selector as TuiSelector<unknown>, entry);
 
@@ -119,7 +119,7 @@ export class TuiStore {
         for (const entry of this.state.toolCalls.values()) {
           if (entry.status === 'complete' || entry.status === 'pending') {
             const header = entry.status === 'pending' ? `⏳ ${entry.toolName}` : entry.isError ? `✗ ${entry.toolName}` : `✓ ${entry.toolName}`;
-            const inputSummary = formatToolInput(entry);
+            const inputSummary = formatToolSummary(entry.toolName, entry.input, { maxLength: 120 });
             const resultSummary = entry.result != null ? String(entry.result).slice(0, 200) : '';
             const content = [header, inputSummary, resultSummary].filter(Boolean).join('\n');
             turns = [...turns, { role: 'tool', content, timestamp: Date.now() } satisfies TurnEntry];
@@ -508,27 +508,6 @@ export class TuiStore {
         }
       }
     }
-  }
-}
-
-function formatToolInput(entry: { toolName: string; input: unknown }): string {
-  try {
-    const parsed = typeof entry.input === 'string' ? JSON.parse(entry.input) : entry.input;
-    if (entry.toolName === 'agent') {
-      const desc = String(parsed?.description ?? '').slice(0, 40);
-      const prompt = String(parsed?.prompt ?? '').slice(0, 60);
-      return desc ? `${desc}: ${prompt}` : prompt;
-    }
-    if (entry.toolName === 'bash') {
-      return String(parsed?.command ?? '').slice(0, 100);
-    }
-    if (entry.toolName === 'read' || entry.toolName === 'write' || entry.toolName === 'edit') {
-      return String(parsed?.file_path ?? parsed?.path ?? '').slice(0, 100);
-    }
-    const preview = JSON.stringify(parsed);
-    return preview.length > 120 ? preview.slice(0, 120) + '...' : preview;
-  } catch {
-    return String(entry.input ?? '').slice(0, 120);
   }
 }
 

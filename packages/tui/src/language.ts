@@ -14,7 +14,7 @@ export async function createLanguageClient(config: CortxConfig, logger?: Logger)
 
   const synax = new Synax({ providers: [], groups: config.groups ?? [], logger });
   for (const p of config.providers ?? []) {
-    await synax.addProvider(p as any);
+    await synax.addProvider(p);
   }
 
   return synax.language;
