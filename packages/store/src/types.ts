@@ -6,7 +6,7 @@
  */
 
 /** Status of the agent session. */
-export type AgentStatus = 'idle' | 'running' | 'error';
+export type AgentStatus = 'idle' | 'running' | 'error' | 'awaiting_user';
 
 /** A single tool call tracked by the store. */
 export interface ToolCallEntry {

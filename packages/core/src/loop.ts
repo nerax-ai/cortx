@@ -2,6 +2,7 @@ import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
 import type { Logger, CortxPlugin, LanguageMessage, LanguageToolCallContent, LanguageToolResultContent, Tool, ToolContext, ErrorCode } from '@cortx/sdk';
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
+import { AgentLoopController } from './types.js';
 import { isToolCallContent } from './message-helpers.js';
 
 const noopLogger: Logger = {
@@ -30,7 +31,7 @@ async function runToolCall(
   tc: LanguageToolCallContent,
   tool: Tool,
   plugins: CortxPlugin[],
-  baseCtx: { sessionId: string; workingDirectory: string; logger: Logger; askUser?: CortxConfig['askUser'] },
+  baseCtx: { sessionId: string; workingDirectory: string; logger: Logger; askUser?: (question: string, toolCallId: string) => Promise<string> },
   budget: number,
 ): Promise<ToolExecOutput> {
   const progressMessages: string[] = [];
@@ -40,7 +41,7 @@ async function runToolCall(
     workingDirectory: baseCtx.workingDirectory,
     logger: baseCtx.logger.scope(tc.toolName),
     reportProgress: (t) => progressMessages.push(t),
-    askUser: baseCtx.askUser,
+    askUser: baseCtx.askUser ? (q: string) => baseCtx.askUser!(q, tc.toolCallId) : undefined,
   };
 
   try {
@@ -353,7 +354,16 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     const toolResults: LanguageToolResultContent[] = [];
     const maxConcurrent = opts.maxConcurrentTools ?? 5;
     const budget = opts.toolResultBudget ?? 10240;
-    const baseCtx = { sessionId, workingDirectory, logger, askUser };
+    const resolvedAskUser = askUser
+      ? (q: string, tcId: string) => askUser(q)
+      : controller instanceof AgentLoopController
+        ? (q: string, tcId: string) => {
+            const e: AgentEvent = { type: 'user_question', question: q, toolCallId: tcId };
+            for (const pl of plugins) pl['event']?.(e);
+            return controller.registerQuestion(tcId);
+          }
+        : undefined;
+    const baseCtx = { sessionId, workingDirectory, logger, askUser: resolvedAskUser };
 
     // Phase 1: Emit tool_use events, run before hooks, group by side effect level
     const parallelPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
@@ -390,7 +400,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
 
       // tool.execute.before
       const beforeProgress: string[] = [];
-      const ctx: ToolContext = { sessionId, toolCallId: tc.toolCallId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser };
+      const ctx: ToolContext = { sessionId, toolCallId: tc.toolCallId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser: resolvedAskUser ? (q: string) => resolvedAskUser(q, tc.toolCallId) : undefined };
       let skipped = false;
       for (const p of plugins) {
         const r = await p['tool.execute.before']?.(tc, ctx);

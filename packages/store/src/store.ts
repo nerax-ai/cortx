@@ -299,6 +299,22 @@ export class AgentStore {
         break;
       }
 
+      case 'user_question': {
+        this.state = {
+          ...this.state,
+          status: 'awaiting_user',
+        };
+        break;
+      }
+
+      case 'user_answer': {
+        this.state = {
+          ...this.state,
+          status: 'running',
+        };
+        break;
+      }
+
       case 'steered':
       case 'follow_up':
       case 'context_overflow':

@@ -76,7 +76,9 @@ export type AgentEvent =
   | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } }
   | { type: 'agent_started'; toolCallId: string; description: string; isBackground?: boolean }
   | { type: 'agent_progress'; toolCallId: string; text: string }
-  | { type: 'agent_completed'; toolCallId: string; output: string; iterations: number; toolCallCount: number; isError?: boolean };
+  | { type: 'agent_completed'; toolCallId: string; output: string; iterations: number; toolCallCount: number; isError?: boolean }
+  | { type: 'user_question'; question: string; toolCallId: string }
+  | { type: 'user_answer'; toolCallId: string; response: string };
 
 export type { PluginModule, PluginContext, PluginManifest, InlinePlugin } from '@nerax-ai/plugin';
 export type { SkillInfo } from './skill.js';

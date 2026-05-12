@@ -9,6 +9,7 @@ export interface AgentController {
   steer(message: string | LanguageMessage): void;
   followUp(message: string | LanguageMessage): void;
   abort(reason?: string): void;
+  answerUser(toolCallId: string, response: string): void;
   readonly isSteered: boolean;
   readonly isAborted: boolean;
   readonly hasFollowUps: boolean;
@@ -24,6 +25,7 @@ export class AgentLoopController implements AgentController {
   private _followUps: LanguageMessage[] = [];
   private _aborted = false;
   private _abortReason?: string;
+  private _pendingQuestions = new Map<string, { resolve: (response: string) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
   steeringMode: DeliveryMode = 'one-at-a-time';
   followUpMode: DeliveryMode = 'one-at-a-time';
 
@@ -39,6 +41,43 @@ export class AgentLoopController implements AgentController {
   get isAborted(): boolean { return this._aborted; }
   get abortReason(): string | undefined { return this._abortReason; }
   get hasFollowUps(): boolean { return this._followUps.length > 0; }
+
+  /**
+   * Register a pending askUser question. Returns a Promise that resolves
+   * when answerUser() is called or rejects on timeout.
+   */
+  registerQuestion(toolCallId: string, timeoutMs = 120_000): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this._pendingQuestions.delete(toolCallId);
+        reject(new Error(`askUser timed out after ${timeoutMs / 1000}s`));
+      }, timeoutMs);
+      this._pendingQuestions.set(toolCallId, { resolve, reject, timeout });
+    });
+  }
+
+  /**
+   * Resolve a pending askUser question with the user's response.
+   */
+  answerUser(toolCallId: string, response: string): void {
+    const pending = this._pendingQuestions.get(toolCallId);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      this._pendingQuestions.delete(toolCallId);
+      pending.resolve(response);
+    }
+  }
+
+  /**
+   * Reject all pending askUser questions (e.g., on abort).
+   */
+  rejectPendingQuestions(reason: string): void {
+    for (const [, pending] of this._pendingQuestions) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+    }
+    this._pendingQuestions.clear();
+  }
 
   consumeSteering(): LanguageMessage[] {
     return this.steeringMode === 'one-at-a-time'
