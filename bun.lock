@@ -62,6 +62,7 @@
         "@cortx/code": "workspace:*",
         "@cortx/core": "workspace:*",
         "@cortx/sdk": "workspace:*",
+        "@cortx/store": "workspace:*",
         "@nerax-ai/logger": "link:@nerax-ai/logger",
         "@nerax-ai/plugin": "link:@nerax-ai/plugin",
         "@nerax-ai/storage": "link:@nerax-ai/storage",
