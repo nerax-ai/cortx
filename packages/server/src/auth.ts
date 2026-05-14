@@ -30,7 +30,7 @@ export function extractApiKey(c: Context): string | null {
   if (authHeader?.startsWith('Bearer ')) {
     return authHeader.slice(7).trim();
   }
-  return c.req.query('key') ?? null;
+  return c.req.query('key') ?? c.req.query('token') ?? null;
 }
 
 /**

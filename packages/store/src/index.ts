@@ -9,6 +9,7 @@ export type {
   ToolCallEntry,
   TurnEntry,
   TokenUsage,
+  PendingQuestion,
   SerializedAgentState,
   SerializedToolCallEntry,
   SerializedAgentSessionSummary,

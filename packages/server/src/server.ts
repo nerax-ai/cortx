@@ -7,6 +7,13 @@ import type { ServerConfig } from './types.js';
 import { createAuthMiddleware, handleTokenExchange } from './auth.js';
 import { SessionManager } from './session-manager.js';
 
+function serializeEvent(event: AgentEvent): string {
+  if (event.type === 'error' && event.error instanceof Error) {
+    return JSON.stringify({ ...event, error: { message: event.error.message, name: event.error.name } });
+  }
+  return JSON.stringify(event);
+}
+
 const noopLogger = {
   debug: () => {},
   info: () => {},
@@ -18,10 +25,8 @@ const noopLogger = {
 export function createServer(config: ServerConfig): Hono {
   const app = new Hono();
   const logger = config.logger ?? noopLogger;
-  const host = config.host ?? 'localhost';
-  const port = config.port ?? 3000;
 
-  if (host === '0.0.0.0') {
+  if (config.host === '0.0.0.0') {
     logger.warn('[server] Binding to 0.0.0.0 — server accessible from network. Ensure TLS is configured.');
   }
 
@@ -120,22 +125,22 @@ export function createServer(config: ServerConfig): Hono {
     if (!session) return c.json({ error: 'Session not found' }, 404);
 
     return streamSSE(c, async (stream) => {
-      // Replay prior events
-      for (const event of session.events) {
+      // Replay prior events (snapshot to avoid concurrent mutation)
+      const snapshot = [...session.events];
+      for (const event of snapshot) {
         await stream.writeSSE({
-          event: event.type,
-          data: JSON.stringify(event),
+          data: serializeEvent(event),
+          id: String(event.type === 'error' ? 0 : 0),
         });
       }
 
       // Subscribe to new events
-      let sequence = session.events.length;
+      let sequence = snapshot.length;
       const unsub = manager.subscribe(id, async (event: AgentEvent) => {
         try {
           await stream.writeSSE({
-            event: event.type,
+            data: serializeEvent(event),
             id: String(++sequence),
-            data: JSON.stringify(event),
           });
         } catch {
           // Stream closed

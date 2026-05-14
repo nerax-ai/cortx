@@ -44,6 +44,12 @@ export interface AgentSessionSummary {
   toolCallCount: number;
 }
 
+/** A pending askUser question from the agent. */
+export interface PendingQuestion {
+  toolCallId: string;
+  question: string;
+}
+
 /** The UI-agnostic state object held by AgentStore. */
 export interface AgentState {
   /** Unique session identifier. */
@@ -70,6 +76,8 @@ export interface AgentState {
   error: string | undefined;
   /** Active and completed sub-agent sessions. */
   agentSessions: Map<string, AgentSessionSummary>;
+  /** Pending askUser question, set when status is 'awaiting_user'. */
+  pendingQuestion: PendingQuestion | null;
 }
 
 /** Selector function: maps full state to a derived slice. */
@@ -122,4 +130,5 @@ export interface SerializedAgentState {
   status: AgentStatus;
   error: string | undefined;
   agentSessions: Record<string, SerializedAgentSessionSummary>;
+  pendingQuestion: PendingQuestion | null;
 }

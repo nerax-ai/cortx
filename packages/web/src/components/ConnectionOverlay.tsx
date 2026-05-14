@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 interface ConnectionOverlayProps {
-  onConnect: () => void;
+  onConnect: (apiKey: string) => void;
 }
 
 export function ConnectionOverlay({ onConnect }: ConnectionOverlayProps) {
@@ -20,7 +20,7 @@ export function ConnectionOverlay({ onConnect }: ConnectionOverlayProps) {
           className="w-full bg-gray-800 text-white rounded px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-blue-500"
         />
         <button
-          onClick={onConnect}
+          onClick={() => onConnect(apiKey)}
           disabled={!apiKey}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded px-4 py-2 font-medium"
         >

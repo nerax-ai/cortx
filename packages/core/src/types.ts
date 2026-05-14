@@ -10,6 +10,7 @@ export interface AgentController {
   followUp(message: string | LanguageMessage): void;
   abort(reason?: string): void;
   answerUser(toolCallId: string, response: string): void;
+  rejectPendingQuestions(reason: string): void;
   readonly isSteered: boolean;
   readonly isAborted: boolean;
   readonly hasFollowUps: boolean;

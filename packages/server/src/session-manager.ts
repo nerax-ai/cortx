@@ -13,6 +13,7 @@ interface ManagedSession {
   events: AgentEvent[];
   subscribers: Set<(event: AgentEvent) => void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
+  isRunning: boolean;
 }
 
 export class SessionManager {
@@ -60,9 +61,9 @@ export class SessionManager {
       events: [],
       subscribers: new Set(),
       idleTimer: undefined,
+      isRunning: false,
     };
 
-    // Wire onAgentEvent to capture sub-agent events
     cortx.onAgentEvent = (event: AgentEvent) => {
       this.broadcast(session, event);
     };
@@ -89,23 +90,28 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return { error: 'Session not found', status: 404 };
     if (!message?.trim()) return { error: 'Message is required', status: 400 };
+    if (session.isRunning) return { error: 'Agent is already running', status: 409 };
 
     session.lastActivityAt = Date.now();
     this.resetIdleTimer(session);
+    session.isRunning = true;
 
-    // Run agent loop in background, streaming events
     (async () => {
       try {
         for await (const event of session.cortx.run(message)) {
+          if (!this.sessions.has(session.id)) break;
           this.broadcast(session, event);
         }
       } catch (e) {
+        if (!this.sessions.has(session.id)) return;
         const errEvent: AgentEvent = {
           type: 'error',
-          error: e instanceof Error ? e : new Error(String(e)),
+          error: { message: e instanceof Error ? e.message : String(e), name: e instanceof Error ? e.name : 'Error' },
           code: 'stream_error',
-        };
+        } as AgentEvent;
         this.broadcast(session, errEvent);
+      } finally {
+        session.isRunning = false;
       }
     })();
 
@@ -116,6 +122,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return { error: 'Session not found', status: 404 };
     session.cortx.abort('User aborted via API');
+    session.cortx.controller.rejectPendingQuestions('Session aborted');
     return null;
   }
 
@@ -123,7 +130,6 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return { error: 'Session not found', status: 404 };
     session.cortx.controller.answerUser(toolCallId, response);
-    // Emit user_answer event for store consumers
     const answerEvent: AgentEvent = { type: 'user_answer', toolCallId, response };
     this.broadcast(session, answerEvent);
     return null;
@@ -145,6 +151,7 @@ export class SessionManager {
   }
 
   private broadcast(session: ManagedSession, event: AgentEvent): void {
+    if (!this.sessions.has(session.id)) return;
     session.events.push(event);
     for (const sub of session.subscribers) {
       try { sub(event); } catch { /* subscriber error, ignore */ }
@@ -154,15 +161,19 @@ export class SessionManager {
   private resetIdleTimer(session: ManagedSession): void {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.idleTimer = setTimeout(() => {
-      this.logger.info(`[server] Session idle timeout: ${session.id}`);
-      this.destroy(session);
+      if (this.sessions.has(session.id)) {
+        this.logger.info(`[server] Session idle timeout: ${session.id}`);
+        this.destroy(session);
+      }
     }, this.idleTimeoutMs);
   }
 
   private destroy(session: ManagedSession): void {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.cortx.abort('Session cleaned up');
+    session.cortx.controller.rejectPendingQuestions('Session destroyed');
     session.subscribers.clear();
+    session.isRunning = false;
     this.sessions.delete(session.id);
   }
 

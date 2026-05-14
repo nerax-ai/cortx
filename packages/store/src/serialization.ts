@@ -76,6 +76,7 @@ export function serializeAgentState(state: AgentState): SerializedAgentState {
     status: state.status,
     error: state.error,
     agentSessions,
+    pendingQuestion: state.pendingQuestion,
   };
 }
 
@@ -100,5 +101,6 @@ export function deserializeAgentState(serialized: SerializedAgentState): AgentSt
     status: serialized.status,
     error: serialized.error,
     agentSessions,
+    pendingQuestion: serialized.pendingQuestion,
   };
 }

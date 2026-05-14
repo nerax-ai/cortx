@@ -1,13 +1,14 @@
 import type { AgentEvent } from '@cortx/sdk';
-import { AgentStore } from '@cortx/store';
+import type { AgentStore } from '@cortx/store';
 import { createAuthClient, exchangeToken, apiFetch, type AuthClient } from './auth';
 
 export class EventBridge {
-  readonly store = new AgentStore();
+  readonly store: AgentStore;
   private client: AuthClient;
   private eventSource: EventSource | null = null;
 
-  constructor(apiKey = '', baseUrl = '') {
+  constructor(store: AgentStore, apiKey = '', baseUrl = '') {
+    this.store = store;
     this.client = createAuthClient(apiKey, baseUrl);
   }
 
@@ -23,6 +24,7 @@ export class EventBridge {
 
   async connect(sessionId: string): Promise<void> {
     this.disconnect();
+    this.store.reset();
     if (!this.client.token) {
       await exchangeToken(this.client);
     }
@@ -31,15 +33,11 @@ export class EventBridge {
     this.eventSource.onmessage = (e) => {
       try {
         const event: AgentEvent = JSON.parse(e.data);
-        this.store.dispatch(event);
+        if (event.type) {
+          this.store.dispatch(event);
+        }
       } catch { /* ignore parse errors */ }
     };
-    this.eventSource.addEventListener('user_question', (e) => {
-      try {
-        const event: AgentEvent = JSON.parse((e as MessageEvent).data);
-        this.store.dispatch(event);
-      } catch { /* ignore */ }
-    });
     this.eventSource.onerror = () => {
       // Auto-reconnect is handled by EventSource
     };

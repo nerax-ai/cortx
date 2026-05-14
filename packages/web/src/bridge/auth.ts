@@ -28,7 +28,7 @@ export async function apiFetch(
 ): Promise<Response> {
   const headers: Record<string, string> = {
     ...(opts.headers as Record<string, string> ?? {}),
-    Authorization: `Bearer ${client.apiKey}`,
+    Authorization: `Bearer ${client.token ?? client.apiKey}`,
     'Content-Type': 'application/json',
   };
   return fetch(`${client.baseUrl}${path}`, { ...opts, headers });

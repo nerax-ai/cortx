@@ -26,9 +26,14 @@ export class AgentStore {
   protected turnStartTime = 0;
   protected totalStartTime = 0;
   private selectorSubs: Map<AgentSelector<unknown>, SelectorEntry> = new Map();
+  private changeListeners = new Set<() => void>();
 
   constructor() {
-    this.state = {
+    this.state = this.createInitialState();
+  }
+
+  protected createInitialState(): AgentState {
+    return {
       sessionId: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       messages: { turns: [], currentText: '', currentThinking: '' },
       iteration: 0,
@@ -39,6 +44,7 @@ export class AgentStore {
       status: 'idle',
       error: undefined,
       agentSessions: new Map(),
+      pendingQuestion: null,
     };
   }
 
@@ -303,15 +309,19 @@ export class AgentStore {
         this.state = {
           ...this.state,
           status: 'awaiting_user',
+          pendingQuestion: { toolCallId: event.toolCallId, question: event.question },
         };
         break;
       }
 
       case 'user_answer': {
-        this.state = {
-          ...this.state,
-          status: 'running',
-        };
+        if (this.state.status === 'awaiting_user') {
+          this.state = {
+            ...this.state,
+            status: 'running',
+            pendingQuestion: null,
+          };
+        }
         break;
       }
 
@@ -367,6 +377,7 @@ export class AgentStore {
       status: 'idle',
       error: undefined,
       agentSessions: new Map(),
+      pendingQuestion: null,
     };
     this.notifySelectors();
   }
@@ -376,6 +387,16 @@ export class AgentStore {
    */
   dispose(): void {
     this.selectorSubs.clear();
+    this.changeListeners.clear();
+  }
+
+  /**
+   * Subscribe to any state change. Fires on every dispatch that modifies state.
+   * Returns an unsubscribe function.
+   */
+  onChange(callback: () => void): () => void {
+    this.changeListeners.add(callback);
+    return () => { this.changeListeners.delete(callback); };
   }
 
   /**
@@ -391,6 +412,10 @@ export class AgentStore {
           listener();
         }
       }
+    }
+    const changeListeners = [...this.changeListeners];
+    for (const cb of changeListeners) {
+      cb();
     }
   }
 }
