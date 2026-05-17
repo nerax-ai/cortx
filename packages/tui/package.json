@@ -27,7 +27,7 @@
     "@cortx/store": "workspace:*",
     "@nerax-ai/logger": "link:@nerax-ai/logger",
     "@nerax-ai/plugin": "link:@nerax-ai/plugin",
-    "@nerax-ai/storage": "file:../../../nerax/packages/storage",
+    "@nerax-ai/storage": "link:@nerax-ai/storage",
     "@synax-ai/core": "link:@synax-ai/core",
     "@synax-ai/sdk": "link:@synax-ai/sdk",
     "cli-highlight": "^2.1.11",

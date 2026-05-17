@@ -22,7 +22,7 @@
     "@cortx/sdk": "workspace:*",
     "@cortx/store": "workspace:*",
     "@nerax-ai/plugin": "link:@nerax-ai/plugin",
-    "@nerax-ai/storage": "file:../../../nerax/packages/storage",
+    "@nerax-ai/storage": "link:@nerax-ai/storage",
     "@synax-ai/core": "link:@synax-ai/core",
     "@synax-ai/sdk": "link:@synax-ai/sdk",
     "hono": "^4.7.0"
