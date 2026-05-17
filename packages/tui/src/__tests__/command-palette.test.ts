@@ -46,46 +46,46 @@ const sampleCommands: CommandDef[] = [
 // ---------------------------------------------------------------------------
 
 describe('filterCommands', () => {
-  test('empty filter returns all commands', () => {
+  test('empty filter returns all commands', async () => {
     const result = filterCommands(sampleCommands, '');
     expect(result).toEqual(sampleCommands);
   });
 
-  test('filters by name substring (case-insensitive)', () => {
+  test('filters by name substring (case-insensitive)', async () => {
     const result = filterCommands(sampleCommands, 'ex');
     expect(result.length).toBe(1);
     expect(result[0].name).toBe('/exit');
   });
 
-  test('filters by description substring (case-insensitive)', () => {
+  test('filters by description substring (case-insensitive)', async () => {
     const result = filterCommands(sampleCommands, 'configuration');
     expect(result.length).toBe(1);
     expect(result[0].name).toBe('/config');
   });
 
-  test('filters by partial name match', () => {
+  test('filters by partial name match', async () => {
     const result = filterCommands(sampleCommands, '/c');
     expect(result.length).toBe(2);
     const names = result.map((c) => c.name).sort();
     expect(names).toEqual(['/clear', '/config']);
   });
 
-  test('returns empty array when no commands match', () => {
+  test('returns empty array when no commands match', async () => {
     const result = filterCommands(sampleCommands, 'xyznonexistent');
     expect(result).toEqual([]);
   });
 
-  test('returns empty array when filtering empty commands', () => {
+  test('returns empty array when filtering empty commands', async () => {
     const result = filterCommands([], 'test');
     expect(result).toEqual([]);
   });
 
-  test('returns all commands when filtering empty commands with empty filter', () => {
+  test('returns all commands when filtering empty commands with empty filter', async () => {
     const result = filterCommands([], '');
     expect(result).toEqual([]);
   });
 
-  test('case-insensitive matching', () => {
+  test('case-insensitive matching', async () => {
     const result1 = filterCommands(sampleCommands, 'EXIT');
     expect(result1.length).toBe(1);
     expect(result1[0].name).toBe('/exit');
@@ -95,13 +95,13 @@ describe('filterCommands', () => {
     expect(result2[0].name).toBe('/clear');
   });
 
-  test('matches against description', () => {
+  test('matches against description', async () => {
     const result = filterCommands(sampleCommands, 'session');
     expect(result.length).toBe(1);
     expect(result[0].name).toBe('/resume');
   });
 
-  test('slash prefix matches all commands', () => {
+  test('slash prefix matches all commands', async () => {
     const result = filterCommands(sampleCommands, '/');
     expect(result.length).toBe(sampleCommands.length);
   });
@@ -112,33 +112,33 @@ describe('filterCommands', () => {
 // ---------------------------------------------------------------------------
 
 describe('moveSelection', () => {
-  test('moves down from first to second item', () => {
+  test('moves down from first to second item', async () => {
     expect(moveSelection(0, 'down', 5)).toBe(1);
   });
 
-  test('moves up from second to first item', () => {
+  test('moves up from second to first item', async () => {
     expect(moveSelection(1, 'up', 5)).toBe(0);
   });
 
-  test('wraps down from last to first', () => {
+  test('wraps down from last to first', async () => {
     expect(moveSelection(4, 'down', 5)).toBe(0);
   });
 
-  test('wraps up from first to last', () => {
+  test('wraps up from first to last', async () => {
     expect(moveSelection(0, 'up', 5)).toBe(4);
   });
 
-  test('returns -1 for empty list', () => {
+  test('returns -1 for empty list', async () => {
     expect(moveSelection(0, 'down', 0)).toBe(-1);
     expect(moveSelection(0, 'up', 0)).toBe(-1);
   });
 
-  test('single item: wraps in both directions', () => {
+  test('single item: wraps in both directions', async () => {
     expect(moveSelection(0, 'down', 1)).toBe(0);
     expect(moveSelection(0, 'up', 1)).toBe(0);
   });
 
-  test('handles any valid index within range', () => {
+  test('handles any valid index within range', async () => {
     expect(moveSelection(2, 'down', 5)).toBe(3);
     expect(moveSelection(2, 'up', 5)).toBe(1);
   });
@@ -149,7 +149,7 @@ describe('moveSelection', () => {
 // ---------------------------------------------------------------------------
 
 describe('formatHelpText', () => {
-  test('formats all commands sorted by name', () => {
+  test('formats all commands sorted by name', async () => {
     const result = formatHelpText(sampleCommands);
     expect(result).toContain('Available commands:');
     expect(result).toContain('/clear');
@@ -159,14 +159,14 @@ describe('formatHelpText', () => {
     expect(result).toContain('/resume');
   });
 
-  test('includes descriptions', () => {
+  test('includes descriptions', async () => {
     const result = formatHelpText(sampleCommands);
     expect(result).toContain('Exit the TUI application');
     expect(result).toContain('Clear the output and reset conversation state');
     expect(result).toContain('Show current configuration');
   });
 
-  test('pads names to same width', () => {
+  test('pads names to same width', async () => {
     const result = formatHelpText(sampleCommands);
     // All command lines should have the same indentation
     const lines = result.split('\n').slice(1); // skip header
@@ -176,12 +176,12 @@ describe('formatHelpText', () => {
     expect(positions.every((p) => p === first)).toBe(true);
   });
 
-  test('handles empty commands', () => {
+  test('handles empty commands', async () => {
     const result = formatHelpText([]);
     expect(result).toBe('No commands available.');
   });
 
-  test('single command', () => {
+  test('single command', async () => {
     const commands: CommandDef[] = [
       { name: '/test', description: 'Test command', handler: async () => {} },
     ];
@@ -196,10 +196,10 @@ describe('formatHelpText', () => {
 // ---------------------------------------------------------------------------
 
 describe('Integration: plugin commands in palette', () => {
-  test('dynamically registered command appears in filtered results', () => {
+  test('dynamically registered command appears in filtered results', async () => {
     const registry = new TuiRegistry();
     // Don't call init() — manually register command plugin
-    registry.registerPlugin(commandPlugin({
+    await registry.registerPlugin(commandPlugin({
       exit: () => {},
       clear: () => {},
       getConfig: () => ({}),
@@ -207,7 +207,7 @@ describe('Integration: plugin commands in palette', () => {
     }));
 
     // Register an additional plugin command
-    registry.registerPlugin({
+    await registry.registerPlugin({
       manifest: { id: 'custom-plugin', name: 'custom-plugin', version: '0.0.0' },
       setup(ctx: any) {
         ctx.register(TUI_COMMAND, 'custom', () => ({
@@ -228,9 +228,9 @@ describe('Integration: plugin commands in palette', () => {
     expect(filtered[0].name).toBe('/custom');
   });
 
-  test('built-in commands appear in palette filtering', () => {
+  test('built-in commands appear in palette filtering', async () => {
     const registry = new TuiRegistry();
-    registry.registerPlugin(commandPlugin({
+    await registry.registerPlugin(commandPlugin({
       exit: () => {},
       clear: () => {},
       getConfig: () => ({}),
@@ -244,7 +244,7 @@ describe('Integration: plugin commands in palette', () => {
 
   test('/help command with getCommands callback formats output', async () => {
     const registry = new TuiRegistry();
-    registry.registerPlugin(commandPlugin({
+    await registry.registerPlugin(commandPlugin({
       exit: () => {},
       clear: () => {},
       getConfig: () => ({}),
@@ -265,7 +265,7 @@ describe('Integration: plugin commands in palette', () => {
 // ---------------------------------------------------------------------------
 
 describe('Integration: navigation scenario', () => {
-  test('typical palette usage: filter, navigate, select', () => {
+  test('typical palette usage: filter, navigate, select', async () => {
     const commands = sampleCommands;
 
     // User types '/c' to filter by name prefix
@@ -289,7 +289,7 @@ describe('Integration: navigation scenario', () => {
     expect(filtered[index].name).toBe('/config');
   });
 
-  test('filter to no results, backspace to widen', () => {
+  test('filter to no results, backspace to widen', async () => {
     // User types something that matches nothing
     let filtered = filterCommands(sampleCommands, 'zzz');
     expect(filtered.length).toBe(0);
@@ -303,7 +303,7 @@ describe('Integration: navigation scenario', () => {
     expect(filtered.length).toBe(sampleCommands.length);
   });
 
-  test('filter then narrow further', () => {
+  test('filter then narrow further', async () => {
     // Type '/c'
     const filtered1 = filterCommands(sampleCommands, '/c');
     expect(filtered1.length).toBe(2);

@@ -9,6 +9,7 @@ import {
   openInEditor,
   type CtrlCAction,
 } from '../components/input-area.js';
+import { submitInput } from '../app.js';
 
 // ---------------------------------------------------------------------------
 // navigateHistory
@@ -418,5 +419,132 @@ describe('Integration: multi-line composition', () => {
     // Cursor position
     const pos = getCursorPosition(value);
     expect(pos).toEqual({ row: 1, col: 4 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// submitInput command readiness
+// ---------------------------------------------------------------------------
+
+describe('submitInput', () => {
+  test('does not send slash commands to the agent while registry is loading', async () => {
+    const promptCalls: string[] = [];
+    const dispatched: unknown[] = [];
+
+    await submitInput('/resume', {
+      registryStatus: 'loading',
+      registryError: null,
+      registry: {
+        executeCommand: async () => {
+          throw new Error('should not execute');
+        },
+      },
+      session: {
+        controller: { abort: () => {} } as any,
+        prompt: async (value: string) => {
+          promptCalls.push(value);
+        },
+      },
+      store: {
+        addUserMessage: () => {
+          throw new Error('should not add user message');
+        },
+        dispatch: (event: unknown) => {
+          dispatched.push(event);
+        },
+      },
+    });
+
+    expect(promptCalls).toEqual([]);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({
+      type: 'error',
+      error: expect.any(Error),
+    });
+  });
+
+  test('does not send slash commands to the agent after registry failure', async () => {
+    const promptCalls: string[] = [];
+    const dispatched: any[] = [];
+
+    await submitInput('/clear', {
+      registryStatus: 'failed',
+      registryError: 'setup exploded',
+      registry: {
+        executeCommand: async () => false,
+      },
+      session: {
+        controller: { abort: () => {} } as any,
+        prompt: async (value: string) => {
+          promptCalls.push(value);
+        },
+      },
+      store: {
+        addUserMessage: () => {},
+        dispatch: (event: any) => {
+          dispatched.push(event);
+        },
+      },
+    });
+
+    expect(promptCalls).toEqual([]);
+    expect(dispatched[0].error.message).toContain('setup exploded');
+  });
+
+  test('executes known slash commands once the registry is ready', async () => {
+    const executed: string[] = [];
+    const promptCalls: string[] = [];
+
+    await submitInput('/clear now', {
+      registryStatus: 'ready',
+      registryError: null,
+      registry: {
+        executeCommand: async (name: string, args: string) => {
+          executed.push(`${name}:${args}`);
+          return true;
+        },
+      },
+      session: {
+        controller: { abort: () => {} } as any,
+        prompt: async (value: string) => {
+          promptCalls.push(value);
+        },
+      },
+      store: {
+        addUserMessage: () => {},
+        dispatch: () => {},
+      },
+    });
+
+    expect(executed).toEqual(['/clear:now']);
+    expect(promptCalls).toEqual([]);
+  });
+
+  test('sends ordinary text to the agent while registry is loading', async () => {
+    const promptCalls: string[] = [];
+    const userMessages: string[] = [];
+
+    await submitInput('hello', {
+      registryStatus: 'loading',
+      registryError: null,
+      registry: {
+        executeCommand: async () => false,
+      },
+      session: {
+        controller: { abort: () => {} } as any,
+        prompt: async (value: string) => {
+          promptCalls.push(value);
+        },
+      },
+      store: {
+        addUserMessage: (value: string) => {
+          userMessages.push(value);
+        },
+        dispatch: () => {},
+      },
+    });
+
+    expect(userMessages).toEqual(['hello']);
+    expect(promptCalls).toEqual(['hello']);
   });
 });

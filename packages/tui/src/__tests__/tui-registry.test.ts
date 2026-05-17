@@ -81,10 +81,10 @@ function makeKeyBindPlugin(
 describe('TuiRegistry', () => {
   // --- Happy path: register tui.command -> getCommands() returns it ---
 
-  test('getCommands returns registered command', () => {
+  test('getCommands returns registered command', async () => {
     const registry = createCleanRegistry();
     const handler = mock(() => {});
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeCommandPlugin('test-cmd', {
         name: '/test',
         description: 'A test command',
@@ -98,11 +98,32 @@ describe('TuiRegistry', () => {
     expect(commands[0].description).toBe('A test command');
   });
 
+  test('registerPlugin propagates async setup failures', async () => {
+    const registry = createCleanRegistry();
+
+    await expect(
+      registry.registerPlugin({
+        manifest: { id: 'broken-async', name: 'broken-async', version: '0.0.0' },
+        async setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
+          ctx.register(TUI_COMMAND, 'broken-async', () => ({
+            name: '/broken',
+            description: 'Broken command',
+            handler: async () => {},
+          }));
+          await Promise.resolve();
+          throw new Error('setup exploded');
+        },
+      }),
+    ).rejects.toThrow('setup exploded');
+
+    expect(registry.getCommands()).toHaveLength(0);
+  });
+
   // --- Happy path: register tui.region -> getRegions(position) returns it ---
 
-  test('getRegions filters by position', () => {
+  test('getRegions filters by position', async () => {
     const registry = createCleanRegistry();
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeRegionPlugin('main-region', {
         id: 'output',
         position: 'main',
@@ -110,7 +131,7 @@ describe('TuiRegistry', () => {
         eventTypes: ['text_delta', 'text'],
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeRegionPlugin('overlay-region', {
         id: 'palette',
         position: 'overlay',
@@ -133,15 +154,15 @@ describe('TuiRegistry', () => {
 
   // --- Happy path: register tui.renderer -> getRenderers(eventType) ---
 
-  test('getRenderers filters by eventType', () => {
+  test('getRenderers filters by eventType', async () => {
     const registry = createCleanRegistry();
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeRendererPlugin('text-renderer', {
         eventType: 'text_delta',
         render: () => undefined,
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeRendererPlugin('tool-renderer', {
         eventType: 'tool_use',
         render: () => undefined,
@@ -160,9 +181,9 @@ describe('TuiRegistry', () => {
 
   // --- Happy path: register tui.keybind -> getKeyBindings() ---
 
-  test('getKeyBindings returns registered key bindings', () => {
+  test('getKeyBindings returns registered key bindings', async () => {
     const registry = createCleanRegistry();
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeKeyBindPlugin('ctrl-k', {
         key: 'ctrl+k',
         action: 'open-palette',
@@ -179,7 +200,7 @@ describe('TuiRegistry', () => {
 
   test('executeCommand with throwing handler logs error and continues', async () => {
     const registry = createCleanRegistry();
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeCommandPlugin('bad-cmd', {
         name: '/boom',
         description: 'Explodes',
@@ -206,19 +227,19 @@ describe('TuiRegistry', () => {
 
   // --- Edge case: register duplicate command id -> latest wins ---
 
-  test('duplicate command id: latest registration wins', () => {
+  test('duplicate command id: latest registration wins', async () => {
     const registry = createCleanRegistry();
     const handler1 = mock(() => {});
     const handler2 = mock(() => {});
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeCommandPlugin('dup-cmd', {
         name: '/dup',
         description: 'First',
         handler: handler1,
       }),
     );
-    registry.registerPlugin({
+    await registry.registerPlugin({
       manifest: { id: 'dup-cmd-v2', name: 'dup-cmd-v2', version: '0.0.0' },
       setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
         ctx.register(TUI_COMMAND, 'dup-cmd', () => ({
@@ -244,7 +265,7 @@ describe('TuiRegistry', () => {
     const registry = createCleanRegistry();
     const handler = mock(async (_args: string) => {});
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeCommandPlugin('my-cmd', {
         name: '/hello',
         description: 'Says hello',
@@ -274,9 +295,9 @@ describe('TuiRegistry', () => {
 
   // --- Integration: load built-in command plugin -> /help lists commands ---
 
-  test('built-in command plugin registers /exit, /quit, /clear, /config, /help', () => {
+  test('built-in command plugin registers /exit, /quit, /clear, /config, /help', async () => {
     const registry = new TuiRegistry();
-    registry.init();
+    await registry.init();
 
     const commands = registry.getCommands();
     const names = commands.map((c) => c.name).sort();
@@ -297,7 +318,7 @@ describe('TuiRegistry', () => {
     // with our injected exit function
     const registry = createCleanRegistry();
     const { commandPlugin } = await import('../plugins/command-plugin.js');
-    registry.registerPlugin(commandPlugin({ exit: exitFn }));
+    await registry.registerPlugin(commandPlugin({ exit: exitFn }));
 
     await registry.executeCommand('/exit', '', {
       args: '',
@@ -313,7 +334,7 @@ describe('TuiRegistry', () => {
     const clearFn = mock(() => {});
     const registry = createCleanRegistry();
     const { commandPlugin } = await import('../plugins/command-plugin.js');
-    registry.registerPlugin(commandPlugin({ clear: clearFn }));
+    await registry.registerPlugin(commandPlugin({ clear: clearFn }));
 
     await registry.executeCommand('/clear', '', {
       args: '',
@@ -325,9 +346,9 @@ describe('TuiRegistry', () => {
 
   // --- Edge case: getCommands when factory throws ---
 
-  test('getCommands gracefully handles factory that throws', () => {
+  test('getCommands gracefully handles factory that throws', async () => {
     const registry = createCleanRegistry();
-    registry.registerPlugin({
+    await registry.registerPlugin({
       manifest: { id: 'bad-factory', name: 'bad-factory', version: '0.0.0' },
       setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
         ctx.register(TUI_COMMAND, 'broken', () => {
@@ -347,9 +368,9 @@ describe('TuiRegistry', () => {
 
   // --- Edge case: getRegions when factory throws ---
 
-  test('getRegions gracefully handles factory that throws', () => {
+  test('getRegions gracefully handles factory that throws', async () => {
     const registry = createCleanRegistry();
-    registry.registerPlugin({
+    await registry.registerPlugin({
       manifest: { id: 'bad-region-factory', name: 'bad-region-factory', version: '0.0.0' },
       setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
         ctx.register(TUI_REGION, 'broken', () => {
@@ -367,7 +388,7 @@ describe('TuiRegistry', () => {
 
   // --- getPluginRegistry provides access to underlying registry ---
 
-  test('getPluginRegistry returns the underlying PluginRegistry', () => {
+  test('getPluginRegistry returns the underlying PluginRegistry', async () => {
     const registry = createCleanRegistry();
     const pluginReg = registry.getPluginRegistry();
     expect(pluginReg).toBeDefined();
@@ -376,17 +397,17 @@ describe('TuiRegistry', () => {
 
   // --- Multiple plugins can register different extension types ---
 
-  test('multiple extension types coexist', () => {
+  test('multiple extension types coexist', async () => {
     const registry = createCleanRegistry();
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeCommandPlugin('cmd-1', {
         name: '/foo',
         description: 'Foo command',
         handler: async () => {},
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeRegionPlugin('region-1', {
         id: 'test-region',
         position: 'main',
@@ -394,13 +415,13 @@ describe('TuiRegistry', () => {
         eventTypes: ['text_delta'],
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeRendererPlugin('renderer-1', {
         eventType: 'text_delta',
         render: () => undefined,
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       makeKeyBindPlugin('key-1', {
         key: 'ctrl+p',
         action: 'test-action',
@@ -415,7 +436,7 @@ describe('TuiRegistry', () => {
 
   // --- No errors initially ---
 
-  test('no errors initially', () => {
+  test('no errors initially', async () => {
     const registry = createCleanRegistry();
     expect(registry.getErrors().length).toBe(0);
   });

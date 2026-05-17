@@ -4,7 +4,7 @@
  *
  * Usage:
  *   const registry = new TuiRegistry();
- *   registry.init(); // loads built-in plugins
+ *   await registry.init(); // loads built-in plugins
  *   const commands = registry.getCommands();
  */
 
@@ -29,17 +29,17 @@ export class TuiRegistry {
    * Initialize the registry and load built-in TUI plugins.
    * Must be called before any query methods.
    */
-  init(): void {
+  async init(): Promise<void> {
     // Register built-in plugins
-    this.registerPlugin(commandPlugin());
-    this.registerPlugin(markdownPlugin());
+    await this.registerPlugin(commandPlugin());
+    await this.registerPlugin(markdownPlugin());
   }
 
   /**
    * Register an inline plugin (e.g. a built-in plugin).
    */
-  registerPlugin(plugin: InlinePlugin<TuiExtensionType, TuiFactoryMap>): void {
-    this.registry.register(plugin);
+  async registerPlugin(plugin: InlinePlugin<TuiExtensionType, TuiFactoryMap>): Promise<void> {
+    await this.registry.register(plugin);
   }
 
   /**

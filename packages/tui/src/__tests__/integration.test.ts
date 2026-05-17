@@ -86,7 +86,7 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe('1. Full agent turn lifecycle', () => {
-  test('turn_start -> text_delta*3 -> text -> done produces correct final state', () => {
+  test('turn_start -> text_delta*3 -> text -> done produces correct final state', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
 
@@ -136,7 +136,7 @@ describe('1. Full agent turn lifecycle', () => {
 // ---------------------------------------------------------------------------
 
 describe('2. Multi-turn conversation accumulation', () => {
-  test('two full turn cycles accumulate turns and reset currentText', () => {
+  test('two full turn cycles accumulate turns and reset currentText', async () => {
     const store = new TuiStore();
 
     // --- Turn 1 ---
@@ -176,7 +176,7 @@ describe('2. Multi-turn conversation accumulation', () => {
 // ---------------------------------------------------------------------------
 
 describe('3. Ctrl+C state machine transitions', () => {
-  test('idle -> running -> interrupting -> idle via setInterrupting + done', () => {
+  test('idle -> running -> interrupting -> idle via setInterrupting + done', async () => {
     const store = new TuiStore();
 
     // Start from idle
@@ -197,7 +197,7 @@ describe('3. Ctrl+C state machine transitions', () => {
     store.dispose();
   });
 
-  test('interrupting preserves current text until done flushes it', () => {
+  test('interrupting preserves current text until done flushes it', async () => {
     const store = new TuiStore();
 
     processEvent({ type: 'turn_start', iteration: 1 }, store);
@@ -225,12 +225,12 @@ describe('3. Ctrl+C state machine transitions', () => {
 // ---------------------------------------------------------------------------
 
 describe('4. Renderer extension invocation', () => {
-  test('renderer receives events matching its eventType', () => {
+  test('renderer receives events matching its eventType', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const calls: AgentEvent[] = [];
 
-    registry.registerPlugin(createRecorderPlugin('test-renderer', 'text_delta', calls));
+    await registry.registerPlugin(createRecorderPlugin('test-renderer', 'text_delta', calls));
 
     const event: AgentEvent = { type: 'text_delta', delta: 'Hello' };
     processEvent(event, store, registry);
@@ -243,12 +243,12 @@ describe('4. Renderer extension invocation', () => {
     store.dispose();
   });
 
-  test('renderer that throws does not prevent store update (error isolation)', () => {
+  test('renderer that throws does not prevent store update (error isolation)', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
 
     // Register a renderer that throws
-    registry.registerPlugin(createThrowingPlugin('bad-renderer', 'text_delta'));
+    await registry.registerPlugin(createThrowingPlugin('bad-renderer', 'text_delta'));
 
     // processEvent should not throw
     expect(() =>
@@ -261,14 +261,14 @@ describe('4. Renderer extension invocation', () => {
     store.dispose();
   });
 
-  test('multiple renderers for same eventType all get invoked', () => {
+  test('multiple renderers for same eventType all get invoked', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const calls1: AgentEvent[] = [];
     const calls2: AgentEvent[] = [];
 
-    registry.registerPlugin(createRecorderPlugin('r1', 'text_delta', calls1));
-    registry.registerPlugin(createRecorderPlugin('r2', 'text_delta', calls2));
+    await registry.registerPlugin(createRecorderPlugin('r1', 'text_delta', calls1));
+    await registry.registerPlugin(createRecorderPlugin('r2', 'text_delta', calls2));
 
     const event: AgentEvent = { type: 'text_delta', delta: 'test' };
     processEvent(event, store, registry);
@@ -281,12 +281,12 @@ describe('4. Renderer extension invocation', () => {
     store.dispose();
   });
 
-  test('renderer for different eventType is not invoked', () => {
+  test('renderer for different eventType is not invoked', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const calls: AgentEvent[] = [];
 
-    registry.registerPlugin(createRecorderPlugin('tool-renderer', 'tool_use', calls));
+    await registry.registerPlugin(createRecorderPlugin('tool-renderer', 'tool_use', calls));
 
     processEvent({ type: 'text_delta', delta: 'Hello' }, store, registry);
 
@@ -303,7 +303,7 @@ describe('4. Renderer extension invocation', () => {
 // ---------------------------------------------------------------------------
 
 describe('5. Tool call lifecycle', () => {
-  test('turn_start -> tool_use -> tool_result -> turn_end -> done completes tool flow', () => {
+  test('turn_start -> tool_use -> tool_result -> turn_end -> done completes tool flow', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
 
@@ -375,7 +375,7 @@ describe('5. Tool call lifecycle', () => {
     store.dispose();
   });
 
-  test('tool with error result is tracked correctly', () => {
+  test('tool with error result is tracked correctly', async () => {
     const store = new TuiStore();
 
     processEvent({ type: 'turn_start', iteration: 1 }, store);

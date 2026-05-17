@@ -28,59 +28,59 @@ function createRendererPlugin(
 // ---------------------------------------------------------------------------
 
 describe('eventToRegion', () => {
-  test('text_delta routes to output region', () => {
+  test('text_delta routes to output region', async () => {
     expect(eventToRegion('text_delta')).toBe('output');
   });
 
-  test('thinking_delta routes to output region', () => {
+  test('thinking_delta routes to output region', async () => {
     expect(eventToRegion('thinking_delta')).toBe('output');
   });
 
-  test('text routes to output region', () => {
+  test('text routes to output region', async () => {
     expect(eventToRegion('text')).toBe('output');
   });
 
-  test('thinking routes to output region', () => {
+  test('thinking routes to output region', async () => {
     expect(eventToRegion('thinking')).toBe('output');
   });
 
-  test('tool_use routes to tool region', () => {
+  test('tool_use routes to tool region', async () => {
     expect(eventToRegion('tool_use')).toBe('tool');
   });
 
-  test('tool_progress routes to tool region', () => {
+  test('tool_progress routes to tool region', async () => {
     expect(eventToRegion('tool_progress')).toBe('tool');
   });
 
-  test('tool_result routes to tool region', () => {
+  test('tool_result routes to tool region', async () => {
     expect(eventToRegion('tool_result')).toBe('tool');
   });
 
-  test('turn_start routes to status region', () => {
+  test('turn_start routes to status region', async () => {
     expect(eventToRegion('turn_start')).toBe('status');
   });
 
-  test('turn_end routes to status region', () => {
+  test('turn_end routes to status region', async () => {
     expect(eventToRegion('turn_end')).toBe('status');
   });
 
-  test('done routes to status region', () => {
+  test('done routes to status region', async () => {
     expect(eventToRegion('done')).toBe('status');
   });
 
-  test('error routes to status region', () => {
+  test('error routes to status region', async () => {
     expect(eventToRegion('error')).toBe('status');
   });
 
-  test('steered routes to status region', () => {
+  test('steered routes to status region', async () => {
     expect(eventToRegion('steered')).toBe('status');
   });
 
-  test('follow_up routes to status region', () => {
+  test('follow_up routes to status region', async () => {
     expect(eventToRegion('follow_up')).toBe('status');
   });
 
-  test('context_overflow routes to status region', () => {
+  test('context_overflow routes to status region', async () => {
     expect(eventToRegion('context_overflow')).toBe('status');
   });
 });
@@ -90,7 +90,7 @@ describe('eventToRegion', () => {
 // ---------------------------------------------------------------------------
 
 describe('processEvent', () => {
-  test('dispatches event to store and updates state', () => {
+  test('dispatches event to store and updates state', async () => {
     const store = new TuiStore();
     const event: AgentEvent = { type: 'text_delta', delta: 'Hello' };
 
@@ -99,7 +99,7 @@ describe('processEvent', () => {
     expect(store.getState().messages.currentText).toBe('Hello');
   });
 
-  test('returns empty results without registry', () => {
+  test('returns empty results without registry', async () => {
     const store = new TuiStore();
     const event: AgentEvent = { type: 'text_delta', delta: 'Hello' };
 
@@ -108,12 +108,12 @@ describe('processEvent', () => {
     expect(results).toEqual([]);
   });
 
-  test('invokes registered renderer extension for matching event type', () => {
+  test('invokes registered renderer extension for matching event type', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const renderFn = mock(() => undefined);
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('text-renderer', {
         eventType: 'text_delta',
         render: renderFn,
@@ -127,12 +127,12 @@ describe('processEvent', () => {
     expect(renderFn).toHaveBeenCalledWith(event);
   });
 
-  test('does not invoke renderer for non-matching event type', () => {
+  test('does not invoke renderer for non-matching event type', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const renderFn = mock(() => undefined);
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('tool-renderer', {
         eventType: 'tool_use',
         render: renderFn,
@@ -145,11 +145,11 @@ describe('processEvent', () => {
     expect(renderFn).toHaveBeenCalledTimes(0);
   });
 
-  test('collects renderer results when render returns a value', () => {
+  test('collects renderer results when render returns a value', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('text-renderer', {
         eventType: 'text_delta',
         render: () => 'rendered-output' as unknown as undefined,
@@ -162,11 +162,11 @@ describe('processEvent', () => {
     expect(results).toEqual(['rendered-output']);
   });
 
-  test('does not collect undefined renderer results', () => {
+  test('does not collect undefined renderer results', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('text-renderer', {
         eventType: 'text_delta',
         render: () => undefined,
@@ -179,11 +179,11 @@ describe('processEvent', () => {
     expect(results).toEqual([]);
   });
 
-  test('renderer extension that throws does not interrupt pipeline', () => {
+  test('renderer extension that throws does not interrupt pipeline', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('bad-renderer', {
         eventType: 'text_delta',
         render: () => {
@@ -201,19 +201,19 @@ describe('processEvent', () => {
     expect(store.getState().messages.currentText).toBe('Hello');
   });
 
-  test('multiple renderer extensions all get invoked', () => {
+  test('multiple renderer extensions all get invoked', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const renderFn1 = mock(() => undefined);
     const renderFn2 = mock(() => undefined);
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('renderer-1', {
         eventType: 'text_delta',
         render: renderFn1,
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('renderer-2', {
         eventType: 'text_delta',
         render: renderFn2,
@@ -233,7 +233,7 @@ describe('processEvent', () => {
 // ---------------------------------------------------------------------------
 
 describe('processEvents', () => {
-  test('processes multiple events in sequence', () => {
+  test('processes multiple events in sequence', async () => {
     const store = new TuiStore();
 
     const events: AgentEvent[] = [
@@ -253,7 +253,7 @@ describe('processEvents', () => {
     expect(store.getState().tokenUsage).toEqual({ inputTokens: 10, outputTokens: 5 });
   });
 
-  test('full agent turn cycle via batch', () => {
+  test('full agent turn cycle via batch', async () => {
     const store = new TuiStore();
 
     const events: AgentEvent[] = [
@@ -301,7 +301,7 @@ describe('processEvents', () => {
 // ---------------------------------------------------------------------------
 
 describe('selective redraw / region isolation', () => {
-  test('text_delta updates output region selector only, not status selector', () => {
+  test('text_delta updates output region selector only, not status selector', async () => {
     const store = new TuiStore();
     const msgListener = mock(() => {});
     const statusListener = mock(() => {});
@@ -323,7 +323,7 @@ describe('selective redraw / region isolation', () => {
     expect(statusSel.get()).toBe('idle');
   });
 
-  test('tool_use updates tool region selector only, not messages or status', () => {
+  test('tool_use updates tool region selector only, not messages or status', async () => {
     const store = new TuiStore();
     const toolListener = mock(() => {});
     const msgListener = mock(() => {});
@@ -361,7 +361,7 @@ describe('selective redraw / region isolation', () => {
     expect(statusSel.get()).toBe('idle');
   });
 
-  test('done updates status and messages selectors but not toolCalls', () => {
+  test('done updates status and messages selectors but not toolCalls', async () => {
     const store = new TuiStore();
 
     // Set up initial state with some data
@@ -405,7 +405,7 @@ describe('selective redraw / region isolation', () => {
 // ---------------------------------------------------------------------------
 
 describe('integration: full agent turn', () => {
-  test('all regions update in correct sequence during a turn', () => {
+  test('all regions update in correct sequence during a turn', async () => {
     const store = new TuiStore();
 
     // Track which selectors fire and in what order
@@ -486,7 +486,7 @@ describe('integration: full agent turn', () => {
     expect(sliceSequence).toContain('messages');
   });
 
-  test('multi-turn conversation accumulates correctly through renderer', () => {
+  test('multi-turn conversation accumulates correctly through renderer', async () => {
     const store = new TuiStore();
 
     // Turn 1
@@ -521,7 +521,7 @@ describe('integration: full agent turn', () => {
     expect(store.getState().tokenUsage).toEqual({ inputTokens: 130, outputTokens: 25 });
   });
 
-  test('error during turn updates status correctly', () => {
+  test('error during turn updates status correctly', async () => {
     const store = new TuiStore();
 
     processEvents(
@@ -546,12 +546,12 @@ describe('integration: full agent turn', () => {
 // ---------------------------------------------------------------------------
 
 describe('renderer extension integration', () => {
-  test('renderer can augment rendering for text_delta events', () => {
+  test('renderer can augment rendering for text_delta events', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const renderedEvents: AgentEvent[] = [];
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('custom-text-renderer', {
         eventType: 'text_delta',
         render: (event) => {
@@ -567,13 +567,13 @@ describe('renderer extension integration', () => {
     expect(renderedEvents[0].type).toBe('text_delta');
   });
 
-  test('renderer extensions for different event types coexist', () => {
+  test('renderer extensions for different event types coexist', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const textEvents: AgentEvent[] = [];
     const toolEvents: AgentEvent[] = [];
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('text-renderer', {
         eventType: 'text_delta',
         render: (event) => {
@@ -582,7 +582,7 @@ describe('renderer extension integration', () => {
         },
       }),
     );
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('tool-renderer', {
         eventType: 'tool_use',
         render: (event) => {
@@ -615,12 +615,12 @@ describe('renderer extension integration', () => {
     expect(toolEvents.length).toBe(1);
   });
 
-  test('processEvents invokes renderers for each event', () => {
+  test('processEvents invokes renderers for each event', async () => {
     const store = new TuiStore();
     const registry = new TuiRegistry();
     const allRendered: string[] = [];
 
-    registry.registerPlugin(
+    await registry.registerPlugin(
       createRendererPlugin('delta-renderer', {
         eventType: 'text_delta',
         render: (event) => {
@@ -651,13 +651,13 @@ describe('renderer extension integration', () => {
 // ---------------------------------------------------------------------------
 
 describe('edge cases', () => {
-  test('empty events array is handled by processEvents', () => {
+  test('empty events array is handled by processEvents', async () => {
     const store = new TuiStore();
     expect(() => processEvents([], store)).not.toThrow();
     expect(store.getState().status).toBe('idle');
   });
 
-  test('tool_progress event is routed to tool region', () => {
+  test('tool_progress event is routed to tool region', async () => {
     const store = new TuiStore();
 
     // Set up a tool call first
@@ -681,7 +681,7 @@ describe('edge cases', () => {
     ).not.toThrow();
   });
 
-  test('steered event routes to status region', () => {
+  test('steered event routes to status region', async () => {
     expect(eventToRegion('steered')).toBe('status');
     const store = new TuiStore();
     processEvent({ type: 'steered', message: 'new direction' }, store);
@@ -689,14 +689,14 @@ describe('edge cases', () => {
     expect(store.getState().status).toBe('idle');
   });
 
-  test('follow_up event routes to status region', () => {
+  test('follow_up event routes to status region', async () => {
     expect(eventToRegion('follow_up')).toBe('status');
     const store = new TuiStore();
     processEvent({ type: 'follow_up', message: 'continue' }, store);
     expect(store.getState().status).toBe('idle');
   });
 
-  test('context_overflow event routes to status region', () => {
+  test('context_overflow event routes to status region', async () => {
     expect(eventToRegion('context_overflow')).toBe('status');
     const store = new TuiStore();
     processEvent({ type: 'context_overflow', messages: [] }, store);

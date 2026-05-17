@@ -18,6 +18,50 @@ export interface AppProps {
   cwd: string;
 }
 
+export type RegistryStatus = 'loading' | 'ready' | 'failed';
+
+interface SubmitInputDeps {
+  registryStatus: RegistryStatus;
+  registryError: string | null;
+  registry: Pick<TuiRegistry, 'executeCommand'>;
+  session: Pick<CortxSession, 'controller' | 'prompt'>;
+  store: Pick<TuiStore, 'addUserMessage' | 'dispatch'>;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function registryUnavailableMessage(status: RegistryStatus, error: string | null): string {
+  return status === 'failed'
+    ? `TUI commands are unavailable: ${error ?? 'plugin registration failed'}`
+    : 'TUI commands are still loading.';
+}
+
+export async function submitInput(value: string, deps: SubmitInputDeps): Promise<void> {
+  if (value.startsWith('/')) {
+    if (deps.registryStatus !== 'ready') {
+      deps.store.dispatch({
+        type: 'error',
+        error: new Error(registryUnavailableMessage(deps.registryStatus, deps.registryError)),
+      });
+      return;
+    }
+
+    const parts = value.split(/\s+/);
+    const cmdName = parts[0];
+    const cmdArgs = parts.slice(1).join(' ');
+    const found = await deps.registry.executeCommand(cmdName, cmdArgs, {
+      args: cmdArgs,
+      abort: () => deps.session.controller?.abort('user interrupt'),
+    });
+    if (found) return;
+  }
+
+  deps.store.addUserMessage(value);
+  Promise.resolve(deps.session.prompt(value)).catch(() => {});
+}
+
 export default function App({ session, model, cwd }: AppProps) {
   const { exit } = useApp();
 
@@ -72,31 +116,55 @@ export default function App({ session, model, cwd }: AppProps) {
   }, [sessionStore]);
 
   const registry = useMemo(() => {
-    const reg = new TuiRegistry();
-    reg.registerPlugin(commandPlugin({
-      exit: () => exit(),
-      clear: () => store.reset(),
-      getConfig: () => ({} as Record<string, unknown>),
-      getCommands: () => reg.getCommands(),
-    }));
-
-    const sessPlugin = sessionPlugin({
-      getSessionId: () => store.getState().sessionId,
-      getMessages: () => store.getState().messages.turns,
-      getModel: () => model,
-      openSessionPicker: handleOpenSessionPicker,
-      sessionStore,
-      onRestoreSession: async (sessionId: string) => {
-        const summary = sessionListRef.current.find((s) => s.sessionId === sessionId);
-        if (summary) {
-          await handleRestoreSession(summary);
-        }
-      },
-    });
-    reg.registerPlugin(sessPlugin);
-
-    return reg;
+    return new TuiRegistry();
   }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore]);
+  const [registryStatus, setRegistryStatus] = useState<RegistryStatus>('loading');
+  const [registryError, setRegistryError] = useState<string | null>(null);
+  const registryReady = registryStatus === 'ready';
+
+  useEffect(() => {
+    let cancelled = false;
+    setRegistryStatus('loading');
+    setRegistryError(null);
+
+    const registerPlugins = async () => {
+      const command = commandPlugin({
+        exit: () => exit(),
+        clear: () => store.reset(),
+        getConfig: () => ({} as Record<string, unknown>),
+        getCommands: () => registry.getCommands(),
+      });
+
+      const sessPlugin = sessionPlugin({
+        getSessionId: () => store.getState().sessionId,
+        getMessages: () => store.getState().messages.turns,
+        getModel: () => model,
+        openSessionPicker: handleOpenSessionPicker,
+        sessionStore,
+        onRestoreSession: async (sessionId: string) => {
+          const summary = sessionListRef.current.find((s) => s.sessionId === sessionId);
+          if (summary) {
+            await handleRestoreSession(summary);
+          }
+        },
+      });
+
+      await registry.registerPlugin(command);
+      if (!cancelled) await registry.registerPlugin(sessPlugin);
+      if (!cancelled) setRegistryStatus('ready');
+    };
+
+    registerPlugins().catch((error) => {
+      if (cancelled) return;
+      const message = errorMessage(error);
+      setRegistryError(message);
+      setRegistryStatus('failed');
+      store.dispatch({ type: 'error', error: new Error(`Failed to initialize TUI plugins: ${message}`) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore, registry]);
 
   useEffect(() => {
     const autoSaveHandler = createAutoSaveHandler({
@@ -118,28 +186,16 @@ export default function App({ session, model, cwd }: AppProps) {
     });
     return () => {
       unsubscribe();
-      store.dispose();
     };
-  }, [session, store, model, sessionStore]);
+  }, [session, store, model, sessionStore, registry]);
 
-  const handleSubmit = useCallback(
-    async (value: string) => {
-      if (value.startsWith('/')) {
-        const parts = value.split(/\s+/);
-        const cmdName = parts[0];
-        const cmdArgs = parts.slice(1).join(' ');
-        const found = await registry.executeCommand(cmdName, cmdArgs, {
-          args: cmdArgs,
-          abort: () => session.controller?.abort('user interrupt'),
-        });
-        if (found) return;
-      }
+  useEffect(() => () => {
+    store.dispose();
+  }, [store]);
 
-      store.addUserMessage(value);
-      session.prompt(value).catch(() => {});
-    },
-    [session, registry, store],
-  );
+  const handleSubmit = useCallback((value: string) => {
+    submitInput(value, { registryStatus, registryError, registry, session, store }).catch(() => {});
+  }, [registryStatus, registryError, registry, session, store]);
 
   const handleAbort = useCallback(() => {
     session.controller?.abort('user interrupt');
@@ -154,6 +210,7 @@ export default function App({ session, model, cwd }: AppProps) {
     <AppShell
       store={store}
       registry={registry}
+      registryReady={registryReady}
       model={model}
       cwd={cwd}
       skills={skills}

@@ -19,6 +19,7 @@ const selectActiveAgentView = (s: TuiState) => s.activeAgentView;
 export interface AppShellProps {
   store: TuiStore;
   registry: TuiRegistry;
+  registryReady?: boolean;
   model: string;
   cwd: string;
   skills: SkillItem[];
@@ -35,6 +36,7 @@ export interface AppShellProps {
 export function AppShell({
   store,
   registry,
+  registryReady = true,
   model,
   skills,
   agentSessionsStore,
@@ -65,7 +67,7 @@ export function AppShell({
 
   const paletteItems = useMemo(
     () => buildItems(registry.getCommands(), skills),
-    [registry, skills],
+    [registry, registryReady, skills],
   );
 
   const filteredPaletteItems = useMemo(

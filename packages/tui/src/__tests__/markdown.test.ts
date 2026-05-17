@@ -15,7 +15,7 @@ function blockTypes(blocks: MarkdownBlock[]): string[] {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — plain text', () => {
-  test('plain text renders without formatting as paragraph', () => {
+  test('plain text renders without formatting as paragraph', async () => {
     const blocks = parseMarkdown('Hello world');
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('paragraph');
@@ -24,7 +24,7 @@ describe('parseMarkdown — plain text', () => {
     }
   });
 
-  test('multiple plain lines become a single paragraph', () => {
+  test('multiple plain lines become a single paragraph', async () => {
     const blocks = parseMarkdown('Line one\nLine two');
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('paragraph');
@@ -33,17 +33,17 @@ describe('parseMarkdown — plain text', () => {
     }
   });
 
-  test('empty string produces no blocks', () => {
+  test('empty string produces no blocks', async () => {
     const blocks = parseMarkdown('');
     expect(blocks).toHaveLength(0);
   });
 
-  test('only blank lines produce no blocks', () => {
+  test('only blank lines produce no blocks', async () => {
     const blocks = parseMarkdown('\n\n\n');
     expect(blocks).toHaveLength(0);
   });
 
-  test('very long line wraps into a single paragraph', () => {
+  test('very long line wraps into a single paragraph', async () => {
     const longLine = 'A'.repeat(500);
     const blocks = parseMarkdown(longLine);
     expect(blocks).toHaveLength(1);
@@ -56,7 +56,7 @@ describe('parseMarkdown — plain text', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — headings', () => {
-  test('h1 heading', () => {
+  test('h1 heading', async () => {
     const blocks = parseMarkdown('# Title');
     expect(blocks).toHaveLength(1);
     if (blocks[0].type === 'heading') {
@@ -65,7 +65,7 @@ describe('parseMarkdown — headings', () => {
     }
   });
 
-  test('h2 heading', () => {
+  test('h2 heading', async () => {
     const blocks = parseMarkdown('## Section');
     expect(blocks).toHaveLength(1);
     if (blocks[0].type === 'heading') {
@@ -74,7 +74,7 @@ describe('parseMarkdown — headings', () => {
     }
   });
 
-  test('h3 to h6 headings', () => {
+  test('h3 to h6 headings', async () => {
     for (let level = 3; level <= 6; level++) {
       const prefix = '#'.repeat(level);
       const blocks = parseMarkdown(`${prefix} Heading ${level}`);
@@ -85,7 +85,7 @@ describe('parseMarkdown — headings', () => {
     }
   });
 
-  test('heading followed by paragraph', () => {
+  test('heading followed by paragraph', async () => {
     const blocks = parseMarkdown('# Title\n\nSome text here');
     expect(blockTypes(blocks)).toEqual(['heading', 'paragraph']);
   });
@@ -96,7 +96,7 @@ describe('parseMarkdown — headings', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — code blocks', () => {
-  test('code block with language tag', () => {
+  test('code block with language tag', async () => {
     const input = '```typescript\nconst x = 1;\n```';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -106,7 +106,7 @@ describe('parseMarkdown — code blocks', () => {
     }
   });
 
-  test('code block without language tag', () => {
+  test('code block without language tag', async () => {
     const input = '```\nplain code\n```';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -116,7 +116,7 @@ describe('parseMarkdown — code blocks', () => {
     }
   });
 
-  test('empty code block', () => {
+  test('empty code block', async () => {
     const input = '```\n```';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -125,7 +125,7 @@ describe('parseMarkdown — code blocks', () => {
     }
   });
 
-  test('multi-line code block', () => {
+  test('multi-line code block', async () => {
     const input = '```js\nline1\nline2\nline3\n```';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -134,7 +134,7 @@ describe('parseMarkdown — code blocks', () => {
     }
   });
 
-  test('code block with tilde fence', () => {
+  test('code block with tilde fence', async () => {
     const input = '~~~python\nprint("hello")\n~~~';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -150,7 +150,7 @@ describe('parseMarkdown — code blocks', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — unclosed code fence', () => {
-  test('unclosed code fence renders as visible text', () => {
+  test('unclosed code fence renders as visible text', async () => {
     const input = '```typescript\nconst x = 1;';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -161,7 +161,7 @@ describe('parseMarkdown — unclosed code fence', () => {
     }
   });
 
-  test('unclosed fence with no content', () => {
+  test('unclosed fence with no content', async () => {
     const input = '```python';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -170,7 +170,7 @@ describe('parseMarkdown — unclosed code fence', () => {
     }
   });
 
-  test('closing fence arrives and becomes proper code block', () => {
+  test('closing fence arrives and becomes proper code block', async () => {
     // First, simulate partial
     const partial = '```js\nconst x =';
     const partialBlocks = parseMarkdown(partial);
@@ -191,7 +191,7 @@ describe('parseMarkdown — unclosed code fence', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — lists', () => {
-  test('unordered list with dash', () => {
+  test('unordered list with dash', async () => {
     const input = '- Item one\n- Item two\n- Item three';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -200,7 +200,7 @@ describe('parseMarkdown — lists', () => {
     }
   });
 
-  test('unordered list with asterisk', () => {
+  test('unordered list with asterisk', async () => {
     const input = '* First\n* Second';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -209,7 +209,7 @@ describe('parseMarkdown — lists', () => {
     }
   });
 
-  test('ordered list', () => {
+  test('ordered list', async () => {
     const input = '1. First\n2. Second\n3. Third';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -219,7 +219,7 @@ describe('parseMarkdown — lists', () => {
     }
   });
 
-  test('ordered list with custom start number', () => {
+  test('ordered list with custom start number', async () => {
     const input = '3. Third\n4. Fourth';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -234,7 +234,7 @@ describe('parseMarkdown — lists', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — blockquotes', () => {
-  test('single line blockquote', () => {
+  test('single line blockquote', async () => {
     const input = '> This is a quote';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -243,7 +243,7 @@ describe('parseMarkdown — blockquotes', () => {
     }
   });
 
-  test('multi-line blockquote', () => {
+  test('multi-line blockquote', async () => {
     const input = '> Line one\n> Line two';
     const blocks = parseMarkdown(input);
     expect(blocks).toHaveLength(1);
@@ -258,13 +258,13 @@ describe('parseMarkdown — blockquotes', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — thematic breaks', () => {
-  test('dashes become thematic break', () => {
+  test('dashes become thematic break', async () => {
     const blocks = parseMarkdown('---');
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('thematic_break');
   });
 
-  test('asterisks become thematic break', () => {
+  test('asterisks become thematic break', async () => {
     const blocks = parseMarkdown('***');
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('thematic_break');
@@ -276,13 +276,13 @@ describe('parseMarkdown — thematic breaks', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMarkdown — mixed content', () => {
-  test('heading + paragraph + code block', () => {
+  test('heading + paragraph + code block', async () => {
     const input = '# Title\n\nSome text\n\n```js\ncode\n```';
     const blocks = parseMarkdown(input);
     expect(blockTypes(blocks)).toEqual(['heading', 'paragraph', 'code_block']);
   });
 
-  test('list + blockquote + heading', () => {
+  test('list + blockquote + heading', async () => {
     const input = '# My Doc\n\n- item 1\n- item 2\n\n> quoted text';
     const blocks = parseMarkdown(input);
     expect(blockTypes(blocks)).toEqual(['heading', 'unordered_list', 'blockquote']);
@@ -322,7 +322,7 @@ describe('syntax highlighting', () => {
 // ---------------------------------------------------------------------------
 
 describe('integration — streaming text_delta', () => {
-  test('progressive parsing simulates streaming input', () => {
+  test('progressive parsing simulates streaming input', async () => {
     // Simulate chunks arriving one at a time
     const chunks = ['#', ' Hello', '\n\n', 'World'];
     let buffer = '';
@@ -341,7 +341,7 @@ describe('integration — streaming text_delta', () => {
     }
   });
 
-  test('streaming code block: unclosed -> closed', () => {
+  test('streaming code block: unclosed -> closed', async () => {
     // Phase 1: opening fence arrives
     const phase1 = '```js';
     const blocks1 = parseMarkdown(phase1);
@@ -362,7 +362,7 @@ describe('integration — streaming text_delta', () => {
     }
   });
 
-  test('streaming heading: partial then complete', () => {
+  test('streaming heading: partial then complete', async () => {
     // Hash arrives first — lone # without space is a paragraph
     const phase1 = parseMarkdown('#');
     expect(phase1).toHaveLength(1);
@@ -385,7 +385,7 @@ describe('markdown plugin registration', () => {
     const { markdownPlugin } = await import('../plugins/markdown-plugin.js');
 
     const registry = new TuiRegistry();
-    registry.registerPlugin(markdownPlugin());
+    await registry.registerPlugin(markdownPlugin());
 
     const regions = registry.getRegions();
     const outputRegions = regions.filter((r) => r.id === 'output');
@@ -404,8 +404,8 @@ describe('markdown plugin registration', () => {
     const { markdownPlugin } = await import('../plugins/markdown-plugin.js');
 
     const registry = new TuiRegistry();
-    registry.registerPlugin(commandPlugin());
-    registry.registerPlugin(markdownPlugin());
+    await registry.registerPlugin(commandPlugin());
+    await registry.registerPlugin(markdownPlugin());
 
     // Commands still work
     const commands = registry.getCommands();
@@ -419,7 +419,7 @@ describe('markdown plugin registration', () => {
   test('init() includes markdown plugin', async () => {
     const { TuiRegistry } = await import('../tui-registry.js');
     const registry = new TuiRegistry();
-    registry.init();
+    await registry.init();
 
     const renderers = registry.getRenderers('text_delta');
     expect(renderers).toHaveLength(1);
