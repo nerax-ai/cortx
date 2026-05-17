@@ -1,12 +1,12 @@
 import { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 import { useApp } from 'ink';
 import type { CortxSession } from '@cortx/core';
-import { getStorage } from '@nerax-ai/storage';
 import { AppShell } from './components/app-shell.js';
 import { TuiStore } from './store.js';
 import { TuiRegistry } from './tui-registry.js';
 import { commandPlugin } from './plugins/command-plugin.js';
-import { sessionPlugin, createAutoSaveHandler, getSessionsDir, type SessionSummary } from './plugins/session-plugin.js';
+import { sessionPlugin, createAutoSaveHandler, type SessionSummary } from './plugins/session-plugin.js';
+import { createDefaultSessionStore } from './session-store.js';
 import { discoverSkillItems, type SkillItem } from './plugins/skill-plugin.js';
 import type { TurnEntry } from './types/tui-state.js';
 import { processEvent } from './renderer.js';
@@ -22,6 +22,7 @@ export default function App({ session, model, cwd }: AppProps) {
   const { exit } = useApp();
 
   const store = useMemo(() => new TuiStore(), []);
+  const sessionStore = useMemo(() => createDefaultSessionStore(), []);
 
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const sessionListRef = useRef<SessionSummary[]>([]);
@@ -41,14 +42,7 @@ export default function App({ session, model, cwd }: AppProps) {
     async (summary: SessionSummary) => {
       setSessionPickerOpen(false);
       try {
-        const { getStorage } = await import('@nerax-ai/storage');
-        const { join } = await import('path');
-        const { readFile } = await import('fs/promises');
-        const storage = getStorage('cortx');
-        const sessionsDir = join(storage.state.path, 'sessions');
-        const filePath = join(sessionsDir, `${summary.sessionId}.json`);
-        const data = await readFile(filePath, 'utf8');
-        const meta = JSON.parse(data);
+        const meta = await sessionStore.read(summary.sessionId);
         if (meta && meta.messages) {
           store.reset(meta.sessionId);
           store.loadTurns(meta.messages as TurnEntry[]);
@@ -64,32 +58,18 @@ export default function App({ session, model, cwd }: AppProps) {
         // Graceful error
       }
     },
-    [store, session],
+    [store, session, sessionStore],
   );
 
   const handleOpenSessionPicker = useCallback(async () => {
     try {
-      const { getStorage } = await import('@nerax-ai/storage');
-      const { join } = await import('path');
-      const { readdir, readFile } = await import('fs/promises');
-      const storage = getStorage('cortx');
-      const sessionsDir = join(storage.state.path, 'sessions');
-      const { listSessions } = await import('./plugins/session-plugin.js');
-      const summaries = await listSessions(sessionsDir, async (path) => {
-        try {
-          const data = await readFile(path, 'utf8');
-          return JSON.parse(data);
-        } catch {
-          return undefined;
-        }
-      });
-      sessionListRef.current = summaries;
+      sessionListRef.current = await sessionStore.list();
       setSessionPickerOpen(true);
     } catch {
       sessionListRef.current = [];
       setSessionPickerOpen(true);
     }
-  }, []);
+  }, [sessionStore]);
 
   const registry = useMemo(() => {
     const reg = new TuiRegistry();
@@ -105,6 +85,7 @@ export default function App({ session, model, cwd }: AppProps) {
       getMessages: () => store.getState().messages.turns,
       getModel: () => model,
       openSessionPicker: handleOpenSessionPicker,
+      sessionStore,
       onRestoreSession: async (sessionId: string) => {
         const summary = sessionListRef.current.find((s) => s.sessionId === sessionId);
         if (summary) {
@@ -115,18 +96,15 @@ export default function App({ session, model, cwd }: AppProps) {
     reg.registerPlugin(sessPlugin);
 
     return reg;
-  }, [exit, store, model]);
+  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore]);
 
   useEffect(() => {
-    const storage = getStorage('cortx');
-    const sessionsDir = getSessionsDir(storage.state.path);
-
     const autoSaveHandler = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
       getAgentMessages: () => session.cortx.messages,
       getModel: () => model,
-      sessionsDir,
+      sessionStore,
       startTime: new Date().toISOString(),
     });
 
@@ -142,7 +120,7 @@ export default function App({ session, model, cwd }: AppProps) {
       unsubscribe();
       store.dispose();
     };
-  }, [session, store, model]);
+  }, [session, store, model, sessionStore]);
 
   const handleSubmit = useCallback(
     async (value: string) => {

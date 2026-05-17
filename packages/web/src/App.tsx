@@ -48,12 +48,15 @@ export function App() {
         sessionId={sessionId}
         tokenUsage={state.tokenUsage}
         elapsed={state.totalElapsed}
+        iteration={state.iteration}
       />
       <ChatView
         messages={state.messages}
         toolCalls={state.toolCalls}
         agentSessions={state.agentSessions}
         status={state.status}
+        iteration={state.iteration}
+        error={state.error}
         onSend={sendPrompt}
       />
       {state.status === 'awaiting_user' && state.pendingQuestion && (

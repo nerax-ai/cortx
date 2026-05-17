@@ -136,7 +136,7 @@ export class Cortx {
 
     return {
       name: 'agent',
-      description: 'Launch a sub-agent to handle a specific sub-task in isolation. The sub-agent has access to file tools (Read, Write, Edit, Bash, Grep, Find) and can perform research, analysis, or implementation work. IMPORTANT: When launching multiple independent sub-agents, issue ALL agent tool_calls in a single response so they execute concurrently. Do not wait for one agent to finish before calling the next if the tasks are independent. Each agent runs in its own isolated context.',
+      description: 'Launch a sub-agent to handle a complex sub-task that requires multiple tool calls in isolation. ONLY use this when the task is too complex for a single tool call and you need an autonomous loop. For simple questions, code explanations, and straightforward tasks, respond directly without using this tool.',
       sideEffects: 'write',
       inputSchema: {
         type: 'object',

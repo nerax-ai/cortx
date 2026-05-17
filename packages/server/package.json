@@ -15,12 +15,14 @@
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "start": "bun src/index.ts"
+    "start": "bun src/bin.ts"
   },
   "dependencies": {
     "@cortx/core": "workspace:*",
     "@cortx/sdk": "workspace:*",
     "@cortx/store": "workspace:*",
+    "@nerax-ai/plugin": "link:@nerax-ai/plugin",
+    "@nerax-ai/storage": "file:../../../nerax/packages/storage",
     "@synax-ai/core": "link:@synax-ai/core",
     "@synax-ai/sdk": "link:@synax-ai/sdk",
     "hono": "^4.7.0"

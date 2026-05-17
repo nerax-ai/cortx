@@ -5,29 +5,43 @@ interface StatusBarProps {
   sessionId: string | null;
   tokenUsage: TokenUsage;
   elapsed: number;
+  iteration: number;
 }
 
-export function StatusBar({ status, sessionId, tokenUsage, elapsed }: StatusBarProps) {
-  const statusColors: Record<string, string> = {
-    idle: 'bg-gray-600',
-    running: 'bg-green-500',
-    error: 'bg-red-500',
-    awaiting_user: 'bg-yellow-500',
+export function StatusBar({ status, sessionId, tokenUsage, elapsed, iteration }: StatusBarProps) {
+  const statusConfig: Record<AgentStatus, { color: string; label: string; pulse: boolean }> = {
+    idle: { color: 'bg-gray-500', label: 'Ready', pulse: false },
+    running: { color: 'bg-green-500', label: 'Running', pulse: true },
+    error: { color: 'bg-red-500', label: 'Error', pulse: false },
+    awaiting_user: { color: 'bg-yellow-500', label: 'Awaiting Input', pulse: true },
   };
 
+  const cfg = statusConfig[status];
+
   return (
-    <div className="flex items-center gap-4 px-4 py-2 bg-gray-900 border-b border-gray-800 text-sm">
+    <div className="flex items-center gap-3 px-4 py-2 bg-gray-900 border-b border-gray-800 text-sm select-none">
       <div className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full ${statusColors[status] ?? 'bg-gray-600'}`} />
-        <span className="text-gray-300 capitalize">{status.replace('_', ' ')}</span>
+        <span className={`w-2 h-2 rounded-full ${cfg.color} ${cfg.pulse ? 'animate-pulse' : ''}`} />
+        <span className="text-gray-300 font-medium">{cfg.label}</span>
       </div>
-      {sessionId && (
-        <span className="text-gray-500 font-mono text-xs">{sessionId.slice(0, 16)}...</span>
+      {iteration > 0 && (
+        <span className="text-gray-500 text-xs">
+          Iteration {iteration}
+        </span>
       )}
-      <div className="ml-auto flex gap-4 text-gray-500">
-        <span>In: {tokenUsage.inputTokens}</span>
-        <span>Out: {tokenUsage.outputTokens}</span>
-        <span>{elapsed}s</span>
+      {sessionId && (
+        <span className="text-gray-600 font-mono text-xs truncate max-w-32">{sessionId.slice(0, 20)}</span>
+      )}
+      <div className="ml-auto flex gap-3 text-gray-500 text-xs font-mono">
+        <span title="Input tokens">
+          <span className="text-gray-600">In</span> {tokenUsage.inputTokens.toLocaleString()}
+        </span>
+        <span title="Output tokens">
+          <span className="text-gray-600">Out</span> {tokenUsage.outputTokens.toLocaleString()}
+        </span>
+        <span title="Elapsed time">
+          <span className="text-gray-600">Time</span> {elapsed.toFixed(1)}s
+        </span>
       </div>
     </div>
   );

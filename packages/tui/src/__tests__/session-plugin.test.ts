@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createStorageDir } from '@nerax-ai/storage';
 import {
   getSessionsDir,
   sessionFilename,
@@ -19,6 +20,7 @@ import {
   sessionPlugin,
   createAutoSaveHandler,
 } from '../plugins/session-plugin.js';
+import { createStorageSessionStore } from '../session-store.js';
 import {
   filterSessions,
   moveSessionSelection,
@@ -291,6 +293,32 @@ describe('loadSession', () => {
     await writeFile(join(tempDir, 'sess_bad.json'), 'not valid json{{{', 'utf8');
     const loaded = await loadSession(tempDir, 'sess_bad', makeReadJSON(tempDir));
     expect(loaded).toBeNull();
+  });
+});
+
+describe('StorageSessionStore', () => {
+  test('writes, lists, loads, and cleans up through storage namespace', async () => {
+    const sessionDir = createStorageDir(tempDir);
+    const store = createStorageSessionStore(sessionDir);
+    const first = makeMeta({ sessionId: 'sess_100_a', lastUserMessage: 'first' });
+    const second = makeMeta({ sessionId: 'sess_200_b', lastUserMessage: 'second' });
+
+    await store.write(first);
+    await store.write(second);
+
+    expect((await store.list()).map((s) => s.sessionId)).toEqual(['sess_200_b', 'sess_100_a']);
+    expect((await store.read('sess_100_a'))?.lastUserMessage).toBe('first');
+    expect(await store.cleanup(1)).toBe(1);
+    expect((await store.list()).map((s) => s.sessionId)).toEqual(['sess_200_b']);
+  });
+
+  test('rejects traversal-like session ids through storage containment', async () => {
+    const sessionDir = createStorageDir(tempDir);
+    const store = createStorageSessionStore(sessionDir);
+
+    await expect(store.write(makeMeta({ sessionId: '../escape' }))).rejects.toMatchObject({
+      code: 'unsafe_path',
+    });
   });
 });
 

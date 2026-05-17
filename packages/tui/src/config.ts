@@ -1,4 +1,4 @@
-import { getStorage } from '@nerax-ai/storage';
+import { createStorage } from '@nerax-ai/storage';
 import type { ProviderConfig, GroupConfig } from '@synax-ai/sdk';
 
 export interface CortxConfig {
@@ -17,15 +17,17 @@ const DEFAULT_CONFIG: CortxConfig = {
   maxIterations: 200,
 };
 
-const storage = getStorage('cortx');
+function storage() {
+  return createStorage('cortx');
+}
 
 export async function loadConfig(): Promise<CortxConfig> {
-  const saved = await storage.config.readJSON<CortxConfig>('cortx.json');
+  const saved = await storage().config.readJSON<CortxConfig>('cortx.json');
   return saved ? { ...DEFAULT_CONFIG, ...saved } : DEFAULT_CONFIG;
 }
 
 export async function saveConfig(config: CortxConfig): Promise<void> {
-  await storage.config.writeJSON('cortx.json', config);
+  await storage().config.writeJSON('cortx.json', config);
 }
 
 export async function ensureConfig(): Promise<CortxConfig> {
@@ -33,5 +35,5 @@ export async function ensureConfig(): Promise<CortxConfig> {
 }
 
 export function getConfigDir(): string {
-  return storage.config.path;
+  return storage().config.path;
 }

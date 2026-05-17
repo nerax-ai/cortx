@@ -13,10 +13,10 @@
 
 import { readdir, mkdir } from 'fs/promises';
 import { join } from 'path';
-import { getStorage } from '@nerax-ai/storage';
 import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
 import type { TuiFactoryMap, TuiExtensionType, CommandDef, CommandContext } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
+import { createDefaultSessionStore, type SessionStore } from '../session-store.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +63,8 @@ export interface SessionPluginDeps {
   openSessionPicker?: () => void;
   /** Called to restore a session by ID. */
   onRestoreSession?: (sessionId: string) => void;
+  /** Storage boundary for production and tests. */
+  sessionStore?: SessionStore;
   /** Logger for diagnostics. */
   logger?: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
 }
@@ -322,10 +324,11 @@ export function createAutoSaveHandler(deps: {
   getMessages: () => TurnEntry[];
   getAgentMessages: () => unknown[];
   getModel: () => string;
-  sessionsDir: string;
+  sessionsDir?: string;
+  sessionStore?: SessionStore;
   startTime: string;
 }): (eventType: string) => Promise<void> {
-  const { getSessionId, getMessages, getAgentMessages, getModel, sessionsDir, startTime } = deps;
+  const { getSessionId, getMessages, getAgentMessages, getModel, sessionsDir, sessionStore, startTime } = deps;
 
   return async (eventType: string): Promise<void> => {
     if (eventType !== 'done' && eventType !== 'error') return;
@@ -346,13 +349,21 @@ export function createAutoSaveHandler(deps: {
     );
 
     try {
-      await saveSession(sessionsDir, metadata, async (path, data) => {
-        const { writeFile } = await import('fs/promises');
-        await writeFile(path, JSON.stringify(data, null, 2), 'utf8');
-      });
+      if (sessionStore) {
+        await sessionStore.write(metadata);
+        await sessionStore.cleanup(MAX_SESSIONS);
+        return;
+      }
 
-      // Cleanup old sessions
-      await cleanupOldSessions(sessionsDir);
+      if (sessionsDir) {
+        await saveSession(sessionsDir, metadata, async (path, data) => {
+          const { writeFile } = await import('fs/promises');
+          await writeFile(path, JSON.stringify(data, null, 2), 'utf8');
+        });
+
+        // Cleanup old sessions
+        await cleanupOldSessions(sessionsDir);
+      }
     } catch {
       // Silently ignore save failures — auto-save is best-effort
     }
@@ -373,21 +384,10 @@ export function sessionPlugin(
   const {
     openSessionPicker,
     logger,
+    sessionStore,
   } = deps;
 
   const log = logger ?? { info: () => {}, warn: () => {}, error: () => {} };
-
-  // We'll set these up after storage is available
-  let storageStateDir = '';
-  let sessionsDir = '';
-
-  function ensurePaths(): void {
-    if (!storageStateDir) {
-      const storage = getStorage('cortx');
-      storageStateDir = storage.state.path;
-      sessionsDir = getSessionsDir(storageStateDir);
-    }
-  }
 
   return {
     manifest: {
@@ -407,16 +407,8 @@ export function sessionPlugin(
             openSessionPicker();
           } else {
             // Fallback: list sessions as text
-            ensurePaths();
-            const summaries = await listSessions(sessionsDir, async (path) => {
-              const { readFile } = await import('fs/promises');
-              try {
-                const data = await readFile(path, 'utf8');
-                return JSON.parse(data) as SessionMetadata;
-              } catch {
-                return undefined;
-              }
-            });
+            const store = sessionStore ?? createDefaultSessionStore();
+            const summaries = await store.list();
             if (summaries.length === 0) {
               log.info('No previous sessions found.');
             } else {

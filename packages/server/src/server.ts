@@ -152,10 +152,16 @@ export function createServer(config: ServerConfig): Hono {
         unsub?.();
       });
 
-      // Keep connection alive
-      while (true) {
-        await stream.sleep(30000);
-        await stream.writeSSE({ event: 'ping', data: '{}' });
+      // Keep connection alive with periodic heartbeats
+      try {
+        while (true) {
+          await stream.sleep(15000);
+          await stream.writeSSE({ data: '{}' });
+        }
+      } catch {
+        // Stream closed or timed out
+      } finally {
+        unsub?.();
       }
     });
   });

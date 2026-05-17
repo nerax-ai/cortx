@@ -27,12 +27,12 @@
     "@cortx/store": "workspace:*",
     "@nerax-ai/logger": "link:@nerax-ai/logger",
     "@nerax-ai/plugin": "link:@nerax-ai/plugin",
-    "@nerax-ai/storage": "link:@nerax-ai/storage",
+    "@nerax-ai/storage": "file:../../../nerax/packages/storage",
     "@synax-ai/core": "link:@synax-ai/core",
     "@synax-ai/sdk": "link:@synax-ai/sdk",
     "cli-highlight": "^2.1.11",
     "ink": "^7.0.1",
-    "react": "^19.1.0"
+    "react": "19.2.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
