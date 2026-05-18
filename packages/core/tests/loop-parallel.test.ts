@@ -145,6 +145,72 @@ describe('parallel tool execution', () => {
     }
   });
 
+  test('read tools do not jump ahead of earlier write tools', async () => {
+    const executionOrder: string[] = [];
+    let value = 'old';
+    const writeTool: Tool = {
+      name: 'write',
+      inputSchema: {},
+      sideEffects: 'write',
+      execute: async () => {
+        executionOrder.push('write');
+        value = 'new';
+        return { success: true, output: 'written' };
+      },
+    };
+    const readTool: Tool = {
+      name: 'read',
+      inputSchema: {},
+      sideEffects: 'read',
+      execute: async () => {
+        executionOrder.push('read');
+        return { success: true, output: value };
+      },
+    };
+
+    const language = mockLanguage([
+      multiToolResponse([
+        { id: 'c1', name: 'write', input: '{}' },
+        { id: 'c2', name: 'read', input: '{}' },
+      ]),
+      textResponse('done'),
+    ]);
+
+    const events = await collectEvents({
+      language,
+      model: 'test',
+      messages: [{ role: 'user', content: 'write then read' }],
+      tools: [writeTool, readTool],
+    });
+
+    const readResult = events.find(e => e.type === 'tool_result' && e.toolCallId === 'c2');
+    expect(executionOrder).toEqual(['write', 'read']);
+    expect(readResult?.result).toBe('new');
+  });
+
+  test('failed tool results surface error text when output is absent', async () => {
+    const failingTool: Tool = {
+      name: 'fail',
+      inputSchema: {},
+      execute: async () => ({ success: false, error: 'explicit failure text' }),
+    };
+    const language = mockLanguage([
+      multiToolResponse([{ id: 'c1', name: 'fail', input: '{}' }]),
+      textResponse('done'),
+    ]);
+
+    const events = await collectEvents({
+      language,
+      model: 'test',
+      messages: [{ role: 'user', content: 'fail' }],
+      tools: [failingTool],
+    });
+
+    const result = events.find(e => e.type === 'tool_result');
+    expect(result?.isError).toBe(true);
+    expect(result?.result).toBe('explicit failure text');
+  });
+
   test('one parallel read failure does not affect others', async () => {
     const goodRead = makeTool('goodRead', 'read');
     const badRead: Tool = {

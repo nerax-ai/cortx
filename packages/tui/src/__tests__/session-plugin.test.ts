@@ -27,6 +27,7 @@ import {
   formatTime,
   truncate,
 } from '../components/session-picker.js';
+import { parseAgentMessages, turnsToMessages } from '../message-io.js';
 import type { SessionMetadata, SessionSummary } from '../plugins/session-plugin.js';
 
 // ---------------------------------------------------------------------------
@@ -575,6 +576,38 @@ describe('sessionPlugin', () => {
 
     await resumeCmd.handler('', { args: '', abort: () => {} });
     expect(pickerOpened).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session restore message parsing tests
+// ---------------------------------------------------------------------------
+
+describe('message restore parsing', () => {
+  test('converts legacy display turns to structured language messages', () => {
+    const messages = turnsToMessages([
+      { role: 'user', content: 'hello', timestamp: 1 },
+      { role: 'assistant', content: 'hi', timestamp: 2 },
+      { role: 'tool', content: 'tool output', timestamp: 3 },
+    ]);
+
+    expect(messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+    ]);
+  });
+
+  test('rejects malformed persisted agent messages', () => {
+    const messages = parseAgentMessages([
+      { role: 'user', content: 'legacy string is invalid here' },
+      { role: 'assistant', content: [{ type: 'text', text: 'valid' }] },
+      { role: 'tool', content: [{ type: 'text', text: 'wrong part' }] },
+      { role: 'unknown', content: [] },
+    ]);
+
+    expect(messages).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: 'valid' }] },
+    ]);
   });
 });
 

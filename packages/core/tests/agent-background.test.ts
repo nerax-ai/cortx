@@ -22,6 +22,17 @@ function mockLanguageClient(): LanguageClient {
   } as unknown as LanguageClient;
 }
 
+function failingLanguageClient(): LanguageClient {
+  return {
+    stream: async function* () {
+      yield { type: 'tool-input-start', id: 'tc_fail', toolName: 'missing' };
+      yield { type: 'tool-input-delta', id: 'tc_fail', delta: '{}' };
+      yield { type: 'tool-input-end', id: 'tc_fail' };
+      yield { type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+    },
+  } as unknown as LanguageClient;
+}
+
 function mockCtx(overrides?: Partial<Record<string, unknown>>) {
   const progressMessages: string[] = [];
   return {
@@ -163,5 +174,52 @@ describe('agent tool: run_in_background', () => {
     const started = events.find(e => e.type === 'agent_started') as any;
     const session = cortx.agentSessions.get(started.toolCallId);
     expect(session!.isBackground).toBe(false);
+  });
+
+  test('foreground sub-agent returns failure when loop emits an error', async () => {
+    const cortx = new Cortx(failingLanguageClient(), { model: 'test', maxIterations: 1 });
+    const events: AgentEvent[] = [];
+    cortx.onAgentEvent = (event: AgentEvent) => events.push(event);
+    const agentTool = cortx.tools.get('agent')!;
+
+    const result = await agentTool.execute(
+      { prompt: 'Do something' },
+      mockCtx() as any,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Sub-agent failed');
+    const completed = events.find(e => e.type === 'agent_completed') as any;
+    expect(completed?.isError).toBe(true);
+  });
+
+  test('background sub-agent marks session failed when loop emits an error', async () => {
+    const cortx = new Cortx(failingLanguageClient(), { model: 'test', maxIterations: 1 });
+    const events: AgentEvent[] = [];
+    const errors: string[] = [];
+    cortx.onAgentEvent = (event: AgentEvent) => events.push(event);
+    const ctx = mockCtx({
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: (...args: unknown[]) => errors.push(String(args[0] ?? '')),
+        scope: function () { return this; },
+      },
+    });
+    const agentTool = cortx.tools.get('agent')!;
+
+    const result = await agentTool.execute(
+      { prompt: 'Do something', run_in_background: true },
+      ctx as any,
+    );
+    expect(result.success).toBe(true);
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    const session = cortx.agentSessions.get(ctx.toolCallId)!;
+    expect(session.status).toBe('error');
+    expect(events.some(e => e.type === 'agent_completed' && (e as any).isError === true)).toBe(true);
+    expect(errors.some((message) => message.includes('Background agent'))).toBe(true);
   });
 });

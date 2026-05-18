@@ -45,7 +45,8 @@ async function runSubAgentLoop(
       onAgentEvent?.({ type: 'agent_progress', toolCallId, text: progressText });
     }
     if (event.type === 'text') session.output += event.content;
-    if (event.type === 'done' || event.type === 'error') break;
+    if (event.type === 'error') throw event.error;
+    if (event.type === 'done') break;
   }
 }
 

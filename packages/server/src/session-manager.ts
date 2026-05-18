@@ -104,11 +104,12 @@ export class SessionManager {
         }
       } catch (e) {
         if (!this.sessions.has(session.id)) return;
+        const error = e instanceof Error ? e : new Error(String(e));
         const errEvent: AgentEvent = {
           type: 'error',
-          error: { message: e instanceof Error ? e.message : String(e), name: e instanceof Error ? e.name : 'Error' },
+          error,
           code: 'stream_error',
-        } as AgentEvent;
+        };
         this.broadcast(session, errEvent);
       } finally {
         session.isRunning = false;

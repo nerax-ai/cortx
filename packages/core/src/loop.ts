@@ -1,6 +1,6 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import { noopLogger, type Logger, type CortxPlugin, type LanguageMessage, type LanguageToolCallContent, type LanguageToolResultContent, type Tool, type ToolContext, type ErrorCode } from '@cortx/sdk';
+import { noopLogger, type Logger, type CortxPlugin, type LanguageMessage, type LanguageToolCallContent, type LanguageToolResultContent, type Tool, type ToolContext, type ToolResult, type ErrorCode } from '@cortx/sdk';
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
 import { AgentLoopController } from './types.js';
 import { isToolCallContent } from './message-helpers.js';
@@ -17,6 +17,32 @@ interface ToolExecOutput {
   progressMessages: string[];
   finalOutput: string;
   isError: boolean;
+}
+
+interface PendingToolExecution {
+  tc: LanguageToolCallContent;
+  tool?: Tool;
+  beforeProgress: string[];
+  readyOutput?: ToolExecOutput;
+}
+
+function isReadOnlyTool(tool: Tool): boolean {
+  const sideEffects = tool.sideEffects ?? 'write';
+  return sideEffects === 'none' || sideEffects === 'read';
+}
+
+function formatToolResultOutput(result: ToolResult): string {
+  const value = !result.success && result.output === undefined && result.error
+    ? result.error
+    : result.output;
+  return typeof value === 'string' ? value : JSON.stringify(value ?? '');
+}
+
+function withBeforeProgress(item: PendingToolExecution, output: ToolExecOutput): ToolExecOutput {
+  return {
+    ...output,
+    progressMessages: [...item.beforeProgress, ...output.progressMessages],
+  };
 }
 
 async function runToolCall(
@@ -41,7 +67,7 @@ async function runToolCall(
     const input: Record<string, unknown> = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed : {};
     let result = await tool.execute(input, ctx);
 
-    let output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+    let output = formatToolResultOutput(result);
     if (output.length > budget) {
       const marker = `\n\n... (truncated, ${output.length} chars total) ...\n\n`;
       const window = Math.max(0, Math.floor((budget - marker.length) / 2));
@@ -50,7 +76,7 @@ async function runToolCall(
     }
     for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result)) ?? result;
 
-    const finalOutput = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+    const finalOutput = formatToolResultOutput(result);
     return { progressMessages, finalOutput, isError: !result.success };
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
@@ -75,6 +101,16 @@ async function* emitToolOutput(tc: LanguageToolCallContent, output: ToolExecOutp
   }
   const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: output.finalOutput, isError: output.isError };
   await emit(plugins, e); yield e;
+}
+
+async function* executePendingOutput(
+  item: PendingToolExecution,
+  output: ToolExecOutput,
+  plugins: CortxPlugin[],
+  toolResults: LanguageToolResultContent[],
+): AsyncGenerator<AgentEvent> {
+  yield* emitToolOutput(item.tc, output, plugins);
+  toolResults.push(makeToolResult(item.tc, output));
 }
 
 async function emit(plugins: CortxPlugin[], event: AgentEvent): Promise<void> {
@@ -357,9 +393,8 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         : undefined;
     const baseCtx = { sessionId, workingDirectory, logger, askUser: resolvedAskUser };
 
-    // Phase 1: Emit tool_use events, run before hooks, group by side effect level
-    const parallelPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
-    const serialPending: { tc: LanguageToolCallContent; tool: Tool }[] = [];
+    // Phase 1: Emit tool_use events and run before hooks in model order.
+    const pendingTools: PendingToolExecution[] = [];
     const agentCallCount = toolCalls.filter(tc => tc.toolName === 'agent').length;
     if (agentCallCount > 0) logger.info(`[loop] agent tool_calls in this turn: ${agentCallCount} (concurrent batching requires >1)`);
 
@@ -384,9 +419,11 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       const tool = toolMap.get(tc.toolName);
       if (!tool) {
         const err = `Unknown tool: ${tc.toolName}`;
-        const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: err, isError: true };
-        await emit(plugins, e); yield e;
-        toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'error-text', value: err }, isError: true });
+        pendingTools.push({
+          tc,
+          beforeProgress: [],
+          readyOutput: { progressMessages: [], finalOutput: err, isError: true },
+        });
         continue;
       }
 
@@ -398,54 +435,25 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const r = await p['tool.execute.before']?.(tc, ctx);
         if (r?.skip) {
           const out = r.result ?? 'skipped';
-          for (const text of beforeProgress) {
-            const pe: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
-            await emit(plugins, pe); yield pe;
-          }
-          const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: out, isError: false };
-          await emit(plugins, e); yield e;
-          toolResults.push({ type: 'tool-result', toolCallId: tc.toolCallId, toolName: tc.toolName, output: { type: 'text', value: out }, isError: false });
+          pendingTools.push({
+            tc,
+            beforeProgress: [],
+            readyOutput: { progressMessages: beforeProgress, finalOutput: out, isError: false },
+          });
           skipped = true;
           break;
         }
       }
       if (skipped) continue;
 
-      // Emit any progress from before hooks
-      for (const text of beforeProgress) {
-        const pe: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
-        await emit(plugins, pe); yield pe;
-      }
-
-      const se = tool.sideEffects ?? 'write';
-      if ((se === 'none' || se === 'read') && parallelPending.length < maxConcurrent) {
-        parallelPending.push({ tc, tool });
-      } else {
-        serialPending.push({ tc, tool });
-      }
+      pendingTools.push({ tc, tool, beforeProgress });
     }
 
-    // Phase 2: Execute parallel group (read-only tools)
-    if (parallelPending.length > 0) {
-      const settled = await Promise.allSettled(
-        parallelPending.map(({ tc, tool }) => runToolCall(tc, tool, plugins, baseCtx, budget)),
-      );
-      for (let i = 0; i < parallelPending.length; i++) {
-        const { tc } = parallelPending[i];
-        const s = settled[i];
-        const output: ToolExecOutput = s.status === 'fulfilled'
-          ? s.value
-          : { progressMessages: [], finalOutput: s.reason instanceof Error ? s.reason.message : String(s.reason), isError: true };
-        yield* emitToolOutput(tc, output, plugins);
-        toolResults.push(makeToolResult(tc, output));
-      }
-    }
-
-    // Phase 3: Execute serial group (write/destructive tools)
-    // Detect parallelizable agent batches within the serial queue
+    // Phase 2: Execute ordered batches. Contiguous read-only spans may run in
+    // parallel, but no read is allowed to jump ahead of an earlier write.
     const maxConcurrentAgents = Math.max(1, opts.maxConcurrentAgents ?? 3);
-    let serialIdx = 0;
-    while (serialIdx < serialPending.length) {
+    let pendingIdx = 0;
+    while (pendingIdx < pendingTools.length) {
       const ctrl = controller;
       if (ctrl?.isSteered) {
         const steerMsgs = ctrl.consumeSteering();
@@ -460,39 +468,81 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         await emit(plugins, e); yield e; return;
       }
 
-      const { tc, tool } = serialPending[serialIdx];
+      const item = pendingTools[pendingIdx];
+      if (item.readyOutput) {
+        pendingIdx++;
+        yield* executePendingOutput(item, item.readyOutput, plugins, toolResults);
+        continue;
+      }
+
+      const { tc, tool } = item;
+      if (!tool) {
+        pendingIdx++;
+        continue;
+      }
+
+      if (isReadOnlyTool(tool)) {
+        const readBatch: PendingToolExecution[] = [];
+        while (
+          pendingIdx < pendingTools.length &&
+          pendingTools[pendingIdx].tool &&
+          isReadOnlyTool(pendingTools[pendingIdx].tool!) &&
+          readBatch.length < maxConcurrent
+        ) {
+          readBatch.push(pendingTools[pendingIdx]);
+          pendingIdx++;
+        }
+
+        const settled = await Promise.allSettled(
+          readBatch.map((readItem) => runToolCall(readItem.tc, readItem.tool!, plugins, baseCtx, budget)),
+        );
+        for (let i = 0; i < readBatch.length; i++) {
+          const readItem = readBatch[i];
+          const settledOutput = settled[i];
+          const output: ToolExecOutput = settledOutput.status === 'fulfilled'
+            ? settledOutput.value
+            : { progressMessages: [], finalOutput: settledOutput.reason instanceof Error ? settledOutput.reason.message : String(settledOutput.reason), isError: true };
+          yield* executePendingOutput(readItem, withBeforeProgress(readItem, output), plugins, toolResults);
+        }
+        continue;
+      }
 
       // Check for consecutive agent calls to batch
       if (tc.toolName === 'agent') {
-        const agentBatch: { tc: LanguageToolCallContent; tool: Tool }[] = [];
-        while (serialIdx < serialPending.length && serialPending[serialIdx].tc.toolName === 'agent' && agentBatch.length < maxConcurrentAgents) {
-          agentBatch.push(serialPending[serialIdx]);
-          serialIdx++;
+        const agentBatch: PendingToolExecution[] = [];
+        let agentIdx = pendingIdx;
+        while (
+          agentIdx < pendingTools.length &&
+          pendingTools[agentIdx].tool &&
+          !isReadOnlyTool(pendingTools[agentIdx].tool!) &&
+          pendingTools[agentIdx].tc.toolName === 'agent' &&
+          agentBatch.length < maxConcurrentAgents
+        ) {
+          agentBatch.push(pendingTools[agentIdx]);
+          agentIdx++;
         }
 
         if (agentBatch.length > 1) {
+          pendingIdx = agentIdx;
           // Execute multiple agents concurrently
           const agentOutputs = await Promise.allSettled(
-            agentBatch.map(({ tc: agentTc, tool: agentTool }) => runToolCall(agentTc, agentTool, plugins, baseCtx, budget)),
+            agentBatch.map((agentItem) => runToolCall(agentItem.tc, agentItem.tool!, plugins, baseCtx, budget)),
           );
           for (let i = 0; i < agentBatch.length; i++) {
-            const { tc: agentTc } = agentBatch[i];
+            const agentItem = agentBatch[i];
             const settled = agentOutputs[i];
             const output: ToolExecOutput = settled.status === 'fulfilled'
               ? settled.value
               : { progressMessages: [], finalOutput: settled.reason instanceof Error ? settled.reason.message : String(settled.reason), isError: true };
-            yield* emitToolOutput(agentTc, output, plugins);
-            toolResults.push(makeToolResult(agentTc, output));
+            yield* executePendingOutput(agentItem, withBeforeProgress(agentItem, output), plugins, toolResults);
           }
           continue;
         }
-      } else {
-        serialIdx++;
       }
 
+      pendingIdx++;
       const output = await runToolCall(tc, tool, plugins, baseCtx, budget);
-      yield* emitToolOutput(tc, output, plugins);
-      toolResults.push(makeToolResult(tc, output));
+      yield* executePendingOutput(item, withBeforeProgress(item, output), plugins, toolResults);
     }
 
     if (toolResults.length) messages.push({ role: 'tool', content: toolResults });

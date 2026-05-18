@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer } from '../src/server';
+import { SessionManager } from '../src/session-manager';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
 import type { ServerConfig } from '../src/types';
 import type { AgentEvent } from '@cortx/sdk';
@@ -187,5 +188,32 @@ describe('server logging', () => {
     await logger.flush();
 
     expect(sink.records.some((record) => record.message.includes('Binding to 0.0.0.0'))).toBe(true);
+  });
+});
+
+describe('SessionManager', () => {
+  test('stream failures are broadcast with real Error instances', async () => {
+    const manager = new SessionManager({
+      language: {
+        stream: async function* () {
+          const error = new Error('stream failed') as Error & { statusCode?: number };
+          error.statusCode = 400;
+          throw error;
+        },
+      } as any,
+      model: 'test-model',
+      logger: createLogger({ appName: 'session-manager-test', console: false }),
+    });
+    const created = await manager.create();
+    if ('error' in created) throw new Error(created.error);
+    const events: AgentEvent[] = [];
+    manager.subscribe(created.id, (event) => events.push(event));
+
+    expect(await manager.prompt(created.id, 'hello')).toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const errorEvent = events.find((event) => event.type === 'error') as Extract<AgentEvent, { type: 'error' }>;
+    expect(errorEvent.error).toBeInstanceOf(Error);
+    expect(errorEvent.error.message).toBe('stream failed');
   });
 });
