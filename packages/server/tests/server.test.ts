@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer } from '../src/server';
+import { createLogger, createMemorySink } from '@nerax-ai/logger';
 import type { ServerConfig } from '../src/types';
 import type { AgentEvent } from '@cortx/sdk';
 
@@ -171,5 +172,20 @@ describe('server routes', () => {
       body: JSON.stringify({ toolCallId: 'tc_1', response: 'yes' }),
     });
     expect(res.status).toBe(200);
+  });
+});
+
+describe('server logging', () => {
+  test('network binding warning goes through configured logger', async () => {
+    const sink = createMemorySink();
+    const logger = createLogger({ appName: 'server-test', console: false, sinks: [sink] });
+    createServer({
+      ...config,
+      host: '0.0.0.0',
+      logger,
+    });
+    await logger.flush();
+
+    expect(sink.records.some((record) => record.message.includes('Binding to 0.0.0.0'))).toBe(true);
   });
 });

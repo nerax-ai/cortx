@@ -1,6 +1,7 @@
 import type { Logger } from '@nerax-ai/logger';
 
 export type { Logger };
+export { noopLogger } from '@nerax-ai/logger';
 
 import type {
   LanguageMessage,

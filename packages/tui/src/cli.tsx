@@ -1,12 +1,13 @@
 import { render } from 'ink';
-import { getLogger } from '@nerax-ai/logger';
+import { createLogger } from '@nerax-ai/logger';
 import { Cortx, CortxSession } from '@cortx/core';
 import { createAllTools } from '@cortx/code';
 import { ensureConfig } from './config.js';
 import { createLanguageClient } from './language.js';
 import App from './app.js';
 
-const log = getLogger('cortx', {
+const log = createLogger({
+  appName: 'cortx',
   console: false,
   files: [{ filename: 'cortx-%DATE%.log', level: 'debug' }],
 });
@@ -45,10 +46,12 @@ async function main() {
   );
 
   await waitUntilExit();
+  await log.close();
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   log.error(e);
+  await log.close();
   console.error(e);
   process.exit(1);
 });

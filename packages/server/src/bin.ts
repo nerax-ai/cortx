@@ -1,6 +1,7 @@
 import { Synax } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
+import { createLogger } from '@nerax-ai/logger';
 import { createServer } from './server.js';
 
 interface CortxConfig {
@@ -18,21 +19,28 @@ export async function loadServerConfig(): Promise<CortxConfig | undefined> {
   return storage.config.readJSON<CortxConfig>('cortx.json');
 }
 
+const log = createLogger({
+  appName: 'cortx',
+  console: false,
+  files: [{ filename: 'server-%DATE%.log', level: 'debug' }],
+});
+
 async function main() {
   const config = await loadServerConfig();
   if (!config) {
     console.error('No cortx config found. Run the TUI first to set up providers.');
+    await log.close();
     process.exit(1);
   }
 
   const apiKey = process.env.CORTX_API_KEY || 'cortx-dev-key';
 
-  const registry = PluginRegistry.getInstance({ appName: 'cortx' });
+  const registry = PluginRegistry.getInstance({ appName: 'cortx', logger: log });
   for (const source of config.plugins ?? []) {
     await registry.load(source);
   }
 
-  const synax = new Synax({ providers: [], groups: config.groups ?? [] });
+  const synax = new Synax({ providers: [], groups: config.groups ?? [], logger: log.scope('synax') });
   for (const p of config.providers ?? []) {
     await synax.addProvider(p);
   }
@@ -42,6 +50,7 @@ async function main() {
     language: synax.language,
     model: config.model,
     system: config.system,
+    logger: log.scope('server'),
     maxSessions: 10,
     idleTimeoutMs: 30 * 60 * 1000,
   });
@@ -57,7 +66,9 @@ async function main() {
   console.log(`  Model: ${config.model}\n`);
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
+  log.error(e);
+  await log.close();
   console.error(e);
   process.exit(1);
 });

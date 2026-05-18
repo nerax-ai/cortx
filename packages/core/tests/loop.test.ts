@@ -2,8 +2,22 @@ import { describe, test, expect } from 'bun:test';
 import { agentLoop, AgentLoopController } from '../src/index';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
+import type { Logger } from '@cortx/sdk';
 
 type StreamParts = LanguageStreamPart[];
+
+function createTestLogger(namespace: string[] = [], records: Array<{ namespace: string[]; message: string }> = []): Logger & { records: Array<{ namespace: string[]; message: string }> } {
+  const logger: Logger & { records: Array<{ namespace: string[]; message: string }> } = {
+    records,
+    debug: (...args: unknown[]) => records.push({ namespace, message: String(args[0] ?? '') }),
+    info: (...args: unknown[]) => records.push({ namespace, message: String(args[0] ?? '') }),
+    warn: (...args: unknown[]) => records.push({ namespace, message: String(args[0] ?? '') }),
+    error: (...args: unknown[]) => records.push({ namespace, message: String(args[0] ?? '') }),
+    scope: (name: string) => createTestLogger([...namespace, name], records),
+    withContext: () => logger,
+  };
+  return logger;
+}
 
 function mockLanguage(responses: StreamParts[]): LanguageClient {
   let i = 0;
@@ -34,6 +48,68 @@ function toolResponse(toolCallId: string, toolName: string, input: string): Stre
 }
 
 describe('agentLoop (streaming)', () => {
+  test('default logger fallback is silent without configured output', async () => {
+    const original = {
+      log: console.log,
+      warn: console.warn,
+      error: console.error,
+    };
+    const calls: string[] = [];
+    console.log = (...args: unknown[]) => calls.push(String(args[0] ?? ''));
+    console.warn = (...args: unknown[]) => calls.push(String(args[0] ?? ''));
+    console.error = (...args: unknown[]) => calls.push(String(args[0] ?? ''));
+    try {
+      const language = mockLanguage([textResponse('hello')]);
+      const events = [];
+      for await (const event of agentLoop({ language, model: 'test', messages: [{ role: 'user', content: 'hi' }] })) {
+        events.push(event);
+      }
+      expect(events.at(-1)?.type).toBe('done');
+      expect(calls).toHaveLength(0);
+    } finally {
+      console.log = original.log;
+      console.warn = original.warn;
+      console.error = original.error;
+    }
+  });
+
+  test('separate injected loggers keep tool execution records isolated', async () => {
+    const firstLogger = createTestLogger(['first']);
+    const secondLogger = createTestLogger(['second']);
+    const language = () =>
+      mockLanguage([
+        toolResponse('c1', 'echo', '{"msg":"hi"}'),
+        textResponse('done'),
+      ]);
+    const tool = {
+      name: 'echo',
+      inputSchema: {},
+      execute: async (_input: unknown, ctx: { logger: { info: (...args: unknown[]) => void } }) => {
+        ctx.logger.info('tool ran');
+        return { success: true, output: 'ok' };
+      },
+    };
+
+    for await (const _event of agentLoop({
+      language: language(),
+      model: 'test',
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [tool],
+      logger: firstLogger,
+    })) {}
+    for await (const _event of agentLoop({
+      language: language(),
+      model: 'test',
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [tool],
+      logger: secondLogger,
+    })) {}
+    expect(firstLogger.records.some((record) => record.namespace.join('/') === 'first/echo')).toBe(true);
+    expect(secondLogger.records.some((record) => record.namespace.join('/') === 'second/echo')).toBe(true);
+    expect(firstLogger.records.every((record) => record.namespace[0] === 'first')).toBe(true);
+    expect(secondLogger.records.every((record) => record.namespace[0] === 'second')).toBe(true);
+  });
+
   test('text response yields text_delta + text + done', async () => {
     const language = mockLanguage([textResponse('hello')]);
     const events = [];
@@ -188,7 +264,10 @@ describe('agentLoop (streaming)', () => {
     const language = { stream: async function* (opts: any) { captured = opts.messages; yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 0 }, outputTokens: { total: 0 } } }; } } as any;
     const plugin = { 'system.transform': (s: string) => s + ' transformed' };
     for await (const _ of agentLoop({ language, model: 'test', system: 'base', messages: [], plugins: [plugin] }));
-    expect(captured[0]).toMatchObject({ role: 'system', content: 'base transformed' });
+    expect(captured[0]).toMatchObject({
+      role: 'system',
+      content: [{ type: 'text', text: 'base transformed' }],
+    });
   });
 
   test('plugin messages.transform modifies messages', async () => {

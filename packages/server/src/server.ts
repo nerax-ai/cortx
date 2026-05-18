@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import type { AgentEvent } from '@cortx/sdk';
+import { noopLogger, type AgentEvent } from '@cortx/sdk';
 import type { ServerConfig } from './types.js';
 import { createAuthMiddleware, handleTokenExchange } from './auth.js';
 import { SessionManager } from './session-manager.js';
@@ -13,14 +13,6 @@ function serializeEvent(event: AgentEvent): string {
   }
   return JSON.stringify(event);
 }
-
-const noopLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  scope: function() { return this; },
-};
 
 export function createServer(config: ServerConfig): Hono {
   const app = new Hono();

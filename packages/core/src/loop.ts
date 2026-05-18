@@ -1,17 +1,9 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import type { Logger, CortxPlugin, LanguageMessage, LanguageToolCallContent, LanguageToolResultContent, Tool, ToolContext, ErrorCode } from '@cortx/sdk';
+import { noopLogger, type Logger, type CortxPlugin, type LanguageMessage, type LanguageToolCallContent, type LanguageToolResultContent, type Tool, type ToolContext, type ErrorCode } from '@cortx/sdk';
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
 import { AgentLoopController } from './types.js';
 import { isToolCallContent } from './message-helpers.js';
-
-const noopLogger: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  scope: function() { return this; },
-};
 
 export interface AgentLoopOptions extends Omit<CortxConfig, 'plugins'> {
   language: LanguageClient;
