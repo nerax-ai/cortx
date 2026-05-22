@@ -11,11 +11,13 @@ import { discoverSkillItems, type SkillItem } from './plugins/skill-plugin.js';
 import type { TurnEntry } from './types/tui-state.js';
 import { processEvent } from './renderer.js';
 import { parseAgentMessages, turnsToMessages } from './message-io.js';
+import type { Logger } from '@nerax-ai/logger';
 
 export interface AppProps {
   session: CortxSession;
   model: string;
   cwd: string;
+  logger?: Logger;
 }
 
 export type RegistryStatus = 'loading' | 'ready' | 'failed';
@@ -62,7 +64,7 @@ export async function submitInput(value: string, deps: SubmitInputDeps): Promise
   Promise.resolve(deps.session.prompt(value)).catch(() => {});
 }
 
-export default function App({ session, model, cwd }: AppProps) {
+export default function App({ session, model, cwd, logger }: AppProps) {
   const { exit } = useApp();
 
   const store = useMemo(() => new TuiStore(), []);
@@ -116,8 +118,8 @@ export default function App({ session, model, cwd }: AppProps) {
   }, [sessionStore]);
 
   const registry = useMemo(() => {
-    return new TuiRegistry();
-  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore]);
+    return new TuiRegistry({ logger });
+  }, [logger, exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore]);
   const [registryStatus, setRegistryStatus] = useState<RegistryStatus>('loading');
   const [registryError, setRegistryError] = useState<string | null>(null);
   const registryReady = registryStatus === 'ready';

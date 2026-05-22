@@ -3,7 +3,7 @@ export { CortxSession } from './session.js';
 export type { CortxState } from './session.js';
 export { agentLoop } from './loop.js';
 export { AgentLoopController, isPluginConfig } from './types.js';
-export type { CortxConfig, AgentEvent, AgentController, DeliveryMode, PluginConfig, PluginEntry } from './types.js';
+export type { CortxConfig, AgentEvent, AgentController, DeliveryMode, PluginConfig, PluginEntry, CortxPluginRegistry } from './types.js';
 export type { CortxPlugin, Tool, ToolContext, ToolResult } from '@cortx/sdk';
 export { discoverSkills } from './skill/discover.js';
 export { createSkillPlugin } from './skill/plugin.js';

@@ -391,9 +391,11 @@ export function sessionPlugin(
 
   return {
     manifest: {
+      manifestVersion: 1,
       id: '@cortx/tui-session',
       name: 'TUI Session Persistence',
       version: '1.0.0',
+      runtime: { main: 'inline' },
       description: 'Auto-save sessions and provide /resume command',
     },
 

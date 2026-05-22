@@ -28,6 +28,8 @@ export function createServer(config: ServerConfig): Hono {
     language: config.language,
     model: config.model,
     system: config.system,
+    registry: config.registry,
+    plugins: config.plugins,
     logger,
   });
 

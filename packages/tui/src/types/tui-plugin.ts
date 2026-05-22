@@ -11,6 +11,8 @@
 
 import type { ReactNode } from 'react';
 import type { AgentEvent } from '@cortx/sdk';
+import type { Logger } from '@nerax-ai/logger';
+import type { PluginStorage } from '@nerax-ai/plugin';
 
 // ---------------------------------------------------------------------------
 // Extension type constants
@@ -119,6 +121,6 @@ export interface TuiFactoryMap {
 export interface TuiFactoryContext {
   instanceId: string;
   options: Record<string, unknown>;
-  logger: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
-  storage: { get: <T>(key: string) => Promise<T | undefined>; set: <T>(key: string, value: T) => Promise<void> };
+  logger: Logger;
+  storage: PluginStorage;
 }

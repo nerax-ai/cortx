@@ -32,9 +32,11 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
 
   return {
     manifest: {
+      manifestVersion: 1,
       id: '@cortx/tui-commands',
       name: 'TUI Built-in Commands',
       version: '1.0.0',
+      runtime: { main: 'inline' },
       description: 'Core slash commands for the cortx TUI',
     },
 

@@ -9,7 +9,7 @@ import type {
   TuiFactoryMap,
   TuiExtensionType,
 } from '../types/tui-plugin.js';
-import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
+import type { InlinePlugin, PluginContext, PluginStorage } from '@nerax-ai/plugin';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,13 +22,28 @@ function createCleanRegistry(): TuiRegistry {
   return reg;
 }
 
+function createMemoryStorage(): PluginStorage {
+  const data = new Map<string, unknown>();
+  return {
+    async get<T>(key: string) {
+      return data.get(key) as T | undefined;
+    },
+    async set<T>(key: string, value: T) {
+      data.set(key, value);
+    },
+    async delete(key: string) {
+      data.delete(key);
+    },
+  };
+}
+
 /** Create an InlinePlugin that registers a single tui.command. */
 function makeCommandPlugin(
   id: string,
   cmd: CommandDef,
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_COMMAND, id, () => cmd);
     },
@@ -41,7 +56,7 @@ function makeRegionPlugin(
   region: RegionDef,
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_REGION, id, () => region);
     },
@@ -54,7 +69,7 @@ function makeRendererPlugin(
   renderer: RendererDef,
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_RENDERER, id, () => renderer);
     },
@@ -67,7 +82,7 @@ function makeKeyBindPlugin(
   binding: KeyBindDef,
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_KEYBIND, id, () => binding);
     },
@@ -103,7 +118,7 @@ describe('TuiRegistry', () => {
 
     await expect(
       registry.registerPlugin({
-        manifest: { id: 'broken-async', name: 'broken-async', version: '0.0.0' },
+        manifest: { manifestVersion: 1, id: 'broken-async', name: 'broken-async', version: '0.0.0', runtime: { main: 'inline' } },
         async setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
           ctx.register(TUI_COMMAND, 'broken-async', () => ({
             name: '/broken',
@@ -240,7 +255,7 @@ describe('TuiRegistry', () => {
       }),
     );
     await registry.registerPlugin({
-      manifest: { id: 'dup-cmd-v2', name: 'dup-cmd-v2', version: '0.0.0' },
+      manifest: { manifestVersion: 1, id: 'dup-cmd-v2', name: 'dup-cmd-v2', version: '0.0.0', runtime: { main: 'inline' } },
       setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
         ctx.register(TUI_COMMAND, 'dup-cmd', () => ({
           name: '/dup',
@@ -349,7 +364,7 @@ describe('TuiRegistry', () => {
   test('getCommands gracefully handles factory that throws', async () => {
     const registry = createCleanRegistry();
     await registry.registerPlugin({
-      manifest: { id: 'bad-factory', name: 'bad-factory', version: '0.0.0' },
+      manifest: { manifestVersion: 1, id: 'bad-factory', name: 'bad-factory', version: '0.0.0', runtime: { main: 'inline' } },
       setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
         ctx.register(TUI_COMMAND, 'broken', () => {
           throw new Error('factory broke');
@@ -371,7 +386,7 @@ describe('TuiRegistry', () => {
   test('getRegions gracefully handles factory that throws', async () => {
     const registry = createCleanRegistry();
     await registry.registerPlugin({
-      manifest: { id: 'bad-region-factory', name: 'bad-region-factory', version: '0.0.0' },
+      manifest: { manifestVersion: 1, id: 'bad-region-factory', name: 'bad-region-factory', version: '0.0.0', runtime: { main: 'inline' } },
       setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
         ctx.register(TUI_REGION, 'broken', () => {
           throw new Error('region factory broke');
@@ -393,6 +408,75 @@ describe('TuiRegistry', () => {
     const pluginReg = registry.getPluginRegistry();
     expect(pluginReg).toBeDefined();
     expect(typeof pluginReg.listExtensions).toBe('function');
+  });
+
+  test('factory context exposes full logger and plugin storage surfaces', async () => {
+    const registry = createCleanRegistry();
+    const seen: { loggerMethods?: string[]; deleted?: boolean } = {};
+
+    await registry.registerPlugin({
+      manifest: { manifestVersion: 1, id: 'ctx-surface', name: 'ctx-surface', version: '0.0.0', runtime: { main: 'inline' } },
+      setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
+        ctx.register(TUI_COMMAND, 'ctx-surface', (factoryCtx) => ({
+          name: '/ctx',
+          description: 'Context surface',
+          handler: async () => {
+            seen.loggerMethods = ['debug', 'info', 'warn', 'error', 'scope', 'withContext'].filter(
+              (name) => typeof (factoryCtx.logger as any)[name] === 'function',
+            );
+            await factoryCtx.storage.set('key', 'value');
+            await factoryCtx.storage.delete('key');
+            seen.deleted = (await factoryCtx.storage.get('key')) === undefined;
+          },
+        }));
+      },
+    });
+
+    await registry.executeCommand('/ctx', '', { args: '', abort: () => {} });
+
+    expect(seen.loggerMethods).toEqual(['debug', 'info', 'warn', 'error', 'scope', 'withContext']);
+    expect(seen.deleted).toBe(true);
+  });
+
+  test('factory storage is scoped per plugin package', async () => {
+    const parentStorage = createMemoryStorage();
+    const registry = new TuiRegistry({ storage: parentStorage });
+    const seen: Record<string, unknown> = {};
+
+    await registry.registerPlugin({
+      manifest: { manifestVersion: 1, id: 'storage-a', name: 'storage-a', version: '0.0.0', runtime: { main: 'inline' } },
+      setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
+        ctx.register(TUI_COMMAND, 'storage-a', (factoryCtx) => ({
+          name: '/storage-a',
+          description: 'Storage A',
+          handler: async () => {
+            await factoryCtx.storage.set('shared', 'a');
+            seen.aOwn = await factoryCtx.storage.get('shared');
+          },
+        }));
+      },
+    });
+    await registry.registerPlugin({
+      manifest: { manifestVersion: 1, id: 'storage-b', name: 'storage-b', version: '0.0.0', runtime: { main: 'inline' } },
+      setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
+        ctx.register(TUI_COMMAND, 'storage-b', (factoryCtx) => ({
+          name: '/storage-b',
+          description: 'Storage B',
+          handler: async () => {
+            seen.bBefore = await factoryCtx.storage.get('shared');
+            await factoryCtx.storage.set('shared', 'b');
+            seen.bOwn = await factoryCtx.storage.get('shared');
+          },
+        }));
+      },
+    });
+
+    await registry.executeCommand('/storage-a', '', { args: '', abort: () => {} });
+    await registry.executeCommand('/storage-b', '', { args: '', abort: () => {} });
+
+    expect(seen).toEqual({ aOwn: 'a', bBefore: undefined, bOwn: 'b' });
+    expect(await parentStorage.get('storage-a:shared')).toBe('a');
+    expect(await parentStorage.get('storage-b:shared')).toBe('b');
   });
 
   // --- Multiple plugins can register different extension types ---

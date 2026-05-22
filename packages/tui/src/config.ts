@@ -7,6 +7,7 @@ export interface CortxConfig {
   maxIterations?: number;
   workingDirectory?: string;
   plugins?: string[];
+  agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
   providers?: ProviderConfig[];
   groups?: GroupConfig[];
 }

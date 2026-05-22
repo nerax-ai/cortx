@@ -208,7 +208,7 @@ describe('Integration: plugin commands in palette', () => {
 
     // Register an additional plugin command
     await registry.registerPlugin({
-      manifest: { id: 'custom-plugin', name: 'custom-plugin', version: '0.0.0' },
+      manifest: { manifestVersion: 1, id: 'custom-plugin', name: 'custom-plugin', version: '0.0.0', runtime: { main: 'inline' } },
       setup(ctx: any) {
         ctx.register(TUI_COMMAND, 'custom', () => ({
           name: '/custom',

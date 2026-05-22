@@ -17,8 +17,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@nerax-ai/logger": "link:@nerax-ai/logger",
-    "@nerax-ai/plugin": "link:@nerax-ai/plugin",
+    "@nerax-ai/logger": "^0.2.0",
+    "@nerax-ai/plugin": "^0.2.0",
     "@synax-ai/sdk": "link:@synax-ai/sdk"
   }
 }

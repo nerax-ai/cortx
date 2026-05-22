@@ -2,8 +2,10 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer } from '../src/server';
 import { SessionManager } from '../src/session-manager';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
+import { PluginRegistry } from '@nerax-ai/plugin';
 import type { ServerConfig } from '../src/types';
 import type { AgentEvent } from '@cortx/sdk';
+import type { CortxPlugin } from '@cortx/core';
 
 // Mock language client that yields a simple response
 function mockLanguageClient() {
@@ -192,8 +194,43 @@ describe('server logging', () => {
 });
 
 describe('SessionManager', () => {
-  test('stream failures are broadcast with real Error instances', async () => {
+  test('passes configured registry plugins into managed sessions', async () => {
+    PluginRegistry.reset();
+    let pluginSawDone = false;
+    const registry = PluginRegistry.getInstance<'cortx', { cortx: () => CortxPlugin }>({ appName: 'session-manager-plugin-test' });
+    await registry.register({
+      manifest: { manifestVersion: 1, id: 'session-plugin', name: 'session-plugin', version: '0.0.0', runtime: { main: 'inline' } },
+      setup(ctx) {
+        ctx.register('cortx', 'event-plugin', () => ({
+          event(event) {
+            if (event.type === 'done') pluginSawDone = true;
+          },
+        }));
+      },
+    });
+
     const manager = new SessionManager({
+      registry,
+      plugins: [{ use: 'event-plugin' }],
+      language: mockLanguageClient(),
+      model: 'test-model',
+      logger: createLogger({ appName: 'session-manager-plugin-test', console: false }),
+    });
+    const created = await manager.create();
+    if ('error' in created) throw new Error(created.error);
+
+    expect(await manager.prompt(created.id, 'hello')).toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(pluginSawDone).toBe(true);
+    manager.dispose();
+    PluginRegistry.reset();
+  });
+
+  test('stream failures are broadcast with real Error instances', async () => {
+    PluginRegistry.reset();
+    const manager = new SessionManager({
+      registry: PluginRegistry.getInstance({ appName: 'session-manager-test' }),
       language: {
         stream: async function* () {
           const error = new Error('stream failed') as Error & { statusCode?: number };
@@ -215,5 +252,7 @@ describe('SessionManager', () => {
     const errorEvent = events.find((event) => event.type === 'error') as Extract<AgentEvent, { type: 'error' }>;
     expect(errorEvent.error).toBeInstanceOf(Error);
     expect(errorEvent.error.message).toBe('stream failed');
+    manager.dispose();
+    PluginRegistry.reset();
   });
 });

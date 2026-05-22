@@ -18,9 +18,11 @@ import { TUI_REGION, TUI_RENDERER } from '../types/tui-plugin.js';
 export function markdownPlugin(): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
     manifest: {
+      manifestVersion: 1,
       id: '@cortx/tui-markdown',
       name: 'TUI Markdown Renderer',
       version: '1.0.0',
+      runtime: { main: 'inline' },
       description: 'Streaming markdown renderer for agent text output',
     },
 

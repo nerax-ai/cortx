@@ -1,7 +1,8 @@
-import { describe, test, expect } from 'bun:test';
+import { afterEach, describe, test, expect } from 'bun:test';
 import { Cortx } from '../src/index';
-import type { AgentEvent } from '../src/index';
+import type { AgentEvent, CortxPlugin } from '../src/index';
 import type { LanguageClient } from '@synax-ai/core';
+import { PluginRegistry } from '@nerax-ai/plugin';
 
 /**
  * Mock LanguageClient that yields a configurable set of events from agentLoop.
@@ -53,6 +54,42 @@ function mockCtx(overrides?: Partial<Record<string, unknown>>) {
 }
 
 describe('agent tool: run_in_background', () => {
+  afterEach(() => {
+    PluginRegistry.reset();
+  });
+
+  test('loads configured cortx plugin entries through the project registry', async () => {
+    const registry = PluginRegistry.getInstance<'cortx', { cortx: () => CortxPlugin }>({ appName: 'cortx' });
+    let pluginSawDone = false;
+    await registry.register({
+      manifest: { manifestVersion: 1, id: 'agent-plugin', name: 'agent-plugin', version: '0.0.0', runtime: { main: 'inline' } },
+      setup(ctx) {
+        ctx.register('cortx', 'event-plugin', () => ({
+          event(event) {
+            if (event.type === 'done') {
+              pluginSawDone = true;
+              void ctx.storage.set('done', true);
+            }
+          },
+        }));
+      },
+    });
+
+    const cortx = new Cortx(mockLanguageClient(), {
+      appName: 'cortx',
+      model: 'test',
+      registry,
+      plugins: [{ use: 'event-plugin' }],
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of cortx.run('hello')) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe('done');
+    expect(pluginSawDone).toBe(true);
+  });
+
   test('background mode returns immediately with reference ID', async () => {
     const cortx = new Cortx(mockLanguageClient(), { model: 'test' });
     const agentTool = cortx.tools.get('agent')!;

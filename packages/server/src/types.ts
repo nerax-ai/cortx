@@ -1,5 +1,6 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { Logger } from '@cortx/sdk';
+import type { CortxPluginRegistry, PluginEntry } from '@cortx/core';
 
 export interface ServerConfig {
   apiKey: string;
@@ -11,6 +12,8 @@ export interface ServerConfig {
   language: LanguageClient;
   model: string;
   system?: string;
+  registry?: CortxPluginRegistry;
+  plugins?: PluginEntry[];
   logger?: Logger;
 }
 

@@ -9,19 +9,69 @@
  */
 
 import { PluginRegistry } from '@nerax-ai/plugin';
-import type { InlinePlugin } from '@nerax-ai/plugin';
+import { noopLogger, type Logger } from '@nerax-ai/logger';
+import type { Extension, InlinePlugin, PluginStorage } from '@nerax-ai/plugin';
 import type { CommandDef, RegionDef, RendererDef, KeyBindDef, TuiFactoryMap, TuiExtensionType, CommandContext } from './types/tui-plugin.js';
 import { TUI_COMMAND, TUI_REGION, TUI_RENDERER, TUI_KEYBIND } from './types/tui-plugin.js';
 import { commandPlugin } from './plugins/command-plugin.js';
 import { markdownPlugin } from './plugins/markdown-plugin.js';
 
+export interface TuiRegistryOptions {
+  logger?: Logger;
+  storage?: PluginStorage;
+}
+
+function createMemoryStorage(): PluginStorage {
+  const data = new Map<string, unknown>();
+  return {
+    async get<T>(key: string) {
+      return data.get(key) as T | undefined;
+    },
+    async set<T>(key: string, value: T) {
+      data.set(key, value);
+    },
+    async delete(key: string) {
+      data.delete(key);
+    },
+  };
+}
+
+class ScopedPluginStorage implements PluginStorage {
+  constructor(
+    private readonly parent: PluginStorage,
+    private readonly scope: string,
+  ) {}
+
+  async get<T>(key: string) {
+    return this.parent.get<T>(this.key(key));
+  }
+
+  async set<T>(key: string, value: T) {
+    await this.parent.set(this.key(key), value);
+  }
+
+  async delete(key: string) {
+    await this.parent.delete(this.key(key));
+  }
+
+  private key(key: string) {
+    return `${this.scope}:${key}`;
+  }
+}
+
 export class TuiRegistry {
   private readonly registry: PluginRegistry<TuiExtensionType, TuiFactoryMap>;
+  private readonly logger: Logger;
+  private readonly storage: PluginStorage;
   private readonly errors: Array<{ source: string; error: Error; timestamp: number }> = [];
 
-  constructor() {
+  constructor(options: TuiRegistryOptions = {}) {
+    this.logger = options.logger ?? noopLogger;
+    this.storage = options.storage ?? createMemoryStorage();
     this.registry = new PluginRegistry<TuiExtensionType, TuiFactoryMap>({
       appName: 'cortx',
+      logger: this.logger.scope('tui'),
+      storageFactory: (packageName) => this.scopedStorage(packageName),
     });
   }
 
@@ -50,13 +100,7 @@ export class TuiRegistry {
     const commands: CommandDef[] = [];
     for (const ext of extensions) {
       try {
-        const ctx = {
-          instanceId: ext.id,
-          options: ext.defaultOptions ?? {},
-          logger: { info: () => {}, warn: () => {}, error: () => {} },
-          storage: { get: async <T>() => undefined as T | undefined, set: async () => {} },
-        };
-        const cmd = ext.factory(ctx) as CommandDef;
+        const cmd = ext.factory(this.factoryContext(ext, ext.defaultOptions ?? {})) as CommandDef;
         commands.push(cmd);
       } catch (err) {
         this.logError(`getCommands(${ext.fullId})`, err);
@@ -73,13 +117,7 @@ export class TuiRegistry {
     const regions: RegionDef[] = [];
     for (const ext of extensions) {
       try {
-        const ctx = {
-          instanceId: ext.id,
-          options: ext.defaultOptions ?? {},
-          logger: { info: () => {}, warn: () => {}, error: () => {} },
-          storage: { get: async <T>() => undefined as T | undefined, set: async () => {} },
-        };
-        const region = ext.factory(ctx) as RegionDef;
+        const region = ext.factory(this.factoryContext(ext, ext.defaultOptions ?? {})) as RegionDef;
         if (!position || region.position === position) {
           regions.push(region);
         }
@@ -98,13 +136,7 @@ export class TuiRegistry {
     const renderers: RendererDef[] = [];
     for (const ext of extensions) {
       try {
-        const ctx = {
-          instanceId: ext.id,
-          options: ext.defaultOptions ?? {},
-          logger: { info: () => {}, warn: () => {}, error: () => {} },
-          storage: { get: async <T>() => undefined as T | undefined, set: async () => {} },
-        };
-        const renderer = ext.factory(ctx) as RendererDef;
+        const renderer = ext.factory(this.factoryContext(ext, ext.defaultOptions ?? {})) as RendererDef;
         if (!eventType || renderer.eventType === eventType) {
           renderers.push(renderer);
         }
@@ -123,13 +155,7 @@ export class TuiRegistry {
     const bindings: KeyBindDef[] = [];
     for (const ext of extensions) {
       try {
-        const ctx = {
-          instanceId: ext.id,
-          options: ext.defaultOptions ?? {},
-          logger: { info: () => {}, warn: () => {}, error: () => {} },
-          storage: { get: async <T>() => undefined as T | undefined, set: async () => {} },
-        };
-        const binding = ext.factory(ctx) as KeyBindDef;
+        const binding = ext.factory(this.factoryContext(ext, ext.defaultOptions ?? {})) as KeyBindDef;
         bindings.push(binding);
       } catch (err) {
         this.logError(`getKeyBindings(${ext.fullId})`, err);
@@ -170,10 +196,22 @@ export class TuiRegistry {
     return this.registry;
   }
 
+  private factoryContext(ext: Extension<TuiExtensionType, TuiFactoryMap>, options: Record<string, unknown>) {
+    return {
+      instanceId: ext.fullId,
+      options,
+      logger: this.logger.scope(ext.packageName).scope(ext.id),
+      storage: this.scopedStorage(ext.packageName),
+    };
+  }
+
+  private scopedStorage(scope: string) {
+    return new ScopedPluginStorage(this.storage, scope);
+  }
+
   private logError(source: string, err: unknown): void {
     const error = err instanceof Error ? err : new Error(String(err));
     this.errors.push({ source, error, timestamp: Date.now() });
-    // In a real TUI, this would go through the logger and potentially
-    // display an error notification in the status bar.
+    this.logger.scope('TuiRegistry').error(source, error);
   }
 }

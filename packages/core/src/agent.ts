@@ -1,7 +1,7 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentEvent, AgentController, CortxConfig, CortxPlugin } from './types.js';
+import type { AgentEvent, AgentController, CortxConfig, CortxPlugin, CortxPluginRegistry } from './types.js';
 import type { LanguageMessage, Tool } from '@cortx/sdk';
-import { formatToolSummary } from '@cortx/sdk';
+import { formatToolSummary, noopLogger } from '@cortx/sdk';
 import { AgentLoopController, isPluginConfig } from './types.js';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { agentLoop } from './loop.js';
@@ -10,17 +10,23 @@ import { createSkillPlugin } from './skill/plugin.js';
 import { SubAgentSessionStore } from './sub-agent-session.js';
 import { createUserMessage } from './message-helpers.js';
 
-type CortxFactoryMap = { cortx: () => CortxPlugin | Promise<CortxPlugin> };
-
-function getRegistry() {
-  return PluginRegistry.getInstance<'cortx', CortxFactoryMap>();
+function getRegistry(config: CortxConfig): CortxPluginRegistry {
+  if (config.registry) return config.registry;
+  return PluginRegistry.getInstance<'cortx', { cortx: () => CortxPlugin | Promise<CortxPlugin> }>({
+    appName: config.appName ?? 'cortx',
+    logger: config.logger ?? noopLogger,
+  });
 }
 
-async function resolvePlugins(entries: CortxConfig['plugins']): Promise<CortxPlugin[]> {
+async function resolvePlugins(
+  entries: CortxConfig['plugins'],
+  registry: CortxPluginRegistry,
+  namespace: string,
+): Promise<CortxPlugin[]> {
   if (!entries?.length) return [];
   return Promise.all(entries.map((e) =>
     isPluginConfig(e)
-      ? getRegistry().create('cortx', e.use, e.use, e.options) as Promise<CortxPlugin>
+      ? registry.create('cortx', e.use, `${namespace}:${e.use}`, e.options, namespace) as Promise<CortxPlugin>
       : Promise.resolve(e as CortxPlugin),
   ));
 }
@@ -53,6 +59,7 @@ async function runSubAgentLoop(
 export class Cortx {
   private readonly language: LanguageClient;
   private readonly config: CortxConfig;
+  private readonly registry: CortxPluginRegistry;
   private readonly tools = new Map<string, Tool>();
   private _messages: LanguageMessage[] = [];
   private _controller = new AgentLoopController();
@@ -63,6 +70,7 @@ export class Cortx {
   constructor(language: LanguageClient, config: CortxConfig) {
     this.language = language;
     this.config = config;
+    this.registry = getRegistry(config);
     for (const t of config.tools ?? []) this.tools.set(t.name, t);
     this.tools.set('agent', this.createAgentTool());
   }
@@ -77,7 +85,8 @@ export class Cortx {
   abort(reason?: string): void { this._controller.abort(reason); }
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
-    const plugins = await resolvePlugins(this.config.plugins);
+    const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace);
 
     const cwd = this.config.workingDirectory ?? process.cwd();
     const skills = await discoverSkills(cwd, this.config);
@@ -101,7 +110,8 @@ export class Cortx {
   }
 
   async *continue(): AsyncGenerator<AgentEvent> {
-    const plugins = await resolvePlugins(this.config.plugins);
+    const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace);
     const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
     const messages = [...this._messages];
     for await (const event of agentLoop({
@@ -163,11 +173,13 @@ export class Cortx {
         cortx.onAgentEvent?.({ type: 'agent_started', toolCallId, description: desc, isBackground });
 
         const subSystem = `You are a sub-agent. Complete the task using available tools.`;
+        const inheritedPlugins = await resolvePlugins(config.plugins, cortx.registry, `agent-${toolCallId}`);
         const loopOpts = {
           language,
           model: config.model,
           system: subSystem,
           tools: getTools(),
+          plugins: inheritedPlugins,
           messages: [createUserMessage(prompt)],
           workingDirectory: ctx.workingDirectory,
           logger: ctx.logger,

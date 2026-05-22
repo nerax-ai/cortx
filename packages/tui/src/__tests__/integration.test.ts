@@ -35,7 +35,7 @@ function createRecorderPlugin(
   calls: AgentEvent[],
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_RENDERER, id, () => ({
         eventType,
@@ -54,7 +54,7 @@ function createThrowingPlugin(
   eventType: string,
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_RENDERER, id, () => ({
         eventType,

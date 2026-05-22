@@ -1,9 +1,10 @@
 import { render } from 'ink';
 import { createLogger } from '@nerax-ai/logger';
-import { Cortx, CortxSession } from '@cortx/core';
+import { PluginRegistry } from '@nerax-ai/plugin';
+import { Cortx, CortxSession, type CortxPluginRegistry } from '@cortx/core';
 import { createAllTools } from '@cortx/code';
 import { ensureConfig } from './config.js';
-import { createLanguageClient } from './language.js';
+import { createLanguageClient, type ProjectPluginRegistry } from './language.js';
 import App from './app.js';
 
 const log = createLogger({
@@ -15,7 +16,11 @@ const log = createLogger({
 async function main() {
   const config = await ensureConfig();
   const cwd = config.workingDirectory ?? process.cwd();
-  const language = await createLanguageClient(config, log);
+  const registry = PluginRegistry.getInstance<'cortx', { cortx: () => unknown }>({
+    appName: 'cortx',
+    logger: log,
+  }) as CortxPluginRegistry & ProjectPluginRegistry;
+  const language = await createLanguageClient(config, log, registry);
 
   // askUser callback: for tool permission prompts, we use a simple readline fallback
   // since Ink hasn't taken over stdin yet at this point
@@ -27,11 +32,14 @@ async function main() {
   };
 
   const agent = new Cortx(language, {
+    appName: 'cortx',
     model: config.model,
     system: config.system,
     maxIterations: config.maxIterations,
     workingDirectory: cwd,
     tools: createAllTools(cwd),
+    registry,
+    plugins: config.agentPlugins,
     askUser,
     logger: log,
   });
@@ -41,7 +49,7 @@ async function main() {
   // Render Ink TUI (non-fullscreen with patchConsole so console.log output
   // appears above the Ink frame — gives native terminal scrollback)
   const { waitUntilExit } = render(
-    <App session={session} model={config.model} cwd={cwd} />,
+    <App session={session} model={config.model} cwd={cwd} logger={log.scope('tui')} />,
     { exitOnCtrlC: false, patchConsole: true },
   );
 

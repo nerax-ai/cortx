@@ -16,7 +16,7 @@ function createRendererPlugin(
   renderer: RendererDef,
 ): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   return {
-    manifest: { id, name: id, version: '0.0.0' },
+    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
       ctx.register(TUI_RENDERER, id, () => renderer);
     },

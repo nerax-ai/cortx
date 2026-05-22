@@ -1,7 +1,8 @@
-import { Synax } from '@synax-ai/core';
+import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
+import type { CortxPluginRegistry } from '@cortx/core';
 import { createServer } from './server.js';
 
 interface CortxConfig {
@@ -10,6 +11,7 @@ interface CortxConfig {
   maxIterations?: number;
   workingDirectory?: string;
   plugins?: string[];
+  agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
   providers?: Array<{ id: string; use: string; options: Record<string, unknown> }>;
   groups?: Array<{ id: string; members: Array<{ provider: string; model: string }> }>;
 }
@@ -35,12 +37,21 @@ async function main() {
 
   const apiKey = process.env.CORTX_API_KEY || 'cortx-dev-key';
 
-  const registry = PluginRegistry.getInstance({ appName: 'cortx', logger: log });
+  const registry = PluginRegistry.getInstance<'cortx', { cortx: () => unknown }>({
+    appName: 'cortx',
+    logger: log,
+  }) as CortxPluginRegistry;
   for (const source of config.plugins ?? []) {
     await registry.load(source);
   }
 
-  const synax = new Synax({ providers: [], groups: config.groups ?? [], logger: log.scope('synax') });
+  const synax = new Synax({
+    appName: 'cortx',
+    registry: registry as unknown as SynaxRegistry,
+    providers: [],
+    groups: config.groups ?? [],
+    logger: log.scope('synax'),
+  });
   for (const p of config.providers ?? []) {
     await synax.addProvider(p);
   }
@@ -50,6 +61,8 @@ async function main() {
     language: synax.language,
     model: config.model,
     system: config.system,
+    registry,
+    plugins: config.agentPlugins,
     logger: log.scope('server'),
     maxSessions: 10,
     idleTimeoutMs: 30 * 60 * 1000,
