@@ -1,6 +1,6 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentController, CortxConfig, CortxRegistry } from './types.js';
-import type { LanguageMessage, Tool } from '@cortx/sdk';
+import type { LanguageMessage, Tool, ToolResult } from '@cortx/sdk';
 import { formatToolSummary, mergeAgentRuntimeExtensions, type AgentRuntimeExtensions } from '@cortx/sdk';
 import { AgentLoopController } from './types.js';
 import { agentLoop } from './loop.js';
@@ -118,6 +118,33 @@ export class Cortx {
   clearHistory(): void { this._messages = []; }
   replaceMessages(messages: LanguageMessage[]): void { this._messages = messages.slice(); }
 
+  private async applySubAgentPolicies(input: {
+    sessionId: string;
+    parentToolCallId: string;
+    prompt: string;
+    description: string;
+    isBackground: boolean;
+    extensions: AgentRuntimeExtensions;
+  }): Promise<ToolResult | undefined> {
+    for (const policy of input.extensions.sessionPolicies) {
+      if (!policy.beforeSubAgent) continue;
+      const decision = await policy.beforeSubAgent({
+        sessionId: input.sessionId,
+        parentToolCallId: input.parentToolCallId,
+        prompt: input.prompt,
+        description: input.description,
+        isBackground: input.isBackground,
+      });
+      if (!decision || decision.action === 'allow') continue;
+      if (decision.action === 'deny') {
+        const result = decision.result;
+        if (typeof result === 'object' && result !== null) return result;
+        return { success: false, error: String(result ?? decision.reason ?? 'Denied by session policy') };
+      }
+    }
+    return undefined;
+  }
+
   private createAgentTool(): Tool {
     const language = this.language;
     const config = this.config;
@@ -137,7 +164,7 @@ export class Cortx {
         },
         required: ['prompt'],
       },
-      async execute(input: Record<string, unknown>, ctx): Promise<import('@cortx/sdk').ToolResult> {
+      async execute(input: Record<string, unknown>, ctx): Promise<ToolResult> {
         const prompt = input.prompt as string;
         if (!prompt || typeof prompt !== 'string') {
           return { success: false, error: 'Parameter "prompt" is required and must be a non-empty string.' };
@@ -146,19 +173,30 @@ export class Cortx {
         const desc = (input.description as string | undefined) ?? 'sub-agent';
         const isBackground = input.run_in_background === true;
         const toolCallId = ctx.toolCallId;
+        const inheritedExtensions = await resolveExtensions(config.plugins, cortx.registry, `agent-${toolCallId}`);
+        const childExtensions = mergeAgentRuntimeExtensions(cortx._skillExtensions, inheritedExtensions);
+        const policyResult = await cortx.applySubAgentPolicies({
+          sessionId: ctx.sessionId,
+          parentToolCallId: toolCallId,
+          prompt,
+          description: desc,
+          isBackground,
+          extensions: childExtensions,
+        });
+        if (policyResult) return policyResult;
+
         const session = cortx.agentSessions.create(toolCallId, desc, isBackground);
 
         ctx.reportProgress?.(`⏳ ${desc}: starting...`);
         cortx.onAgentEvent?.({ type: 'agent_started', toolCallId, description: desc, isBackground });
 
         const subSystem = `You are a sub-agent. Complete the task using available tools.`;
-        const inheritedExtensions = await resolveExtensions(config.plugins, cortx.registry, `agent-${toolCallId}`);
         const loopOpts = {
           language,
           model: config.model,
           system: subSystem,
           tools: getTools(),
-          extensions: mergeAgentRuntimeExtensions(cortx._skillExtensions, inheritedExtensions),
+          extensions: childExtensions,
           messages: [createUserMessage(prompt)],
           workingDirectory: ctx.workingDirectory,
           logger: ctx.logger,

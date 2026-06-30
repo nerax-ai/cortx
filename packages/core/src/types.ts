@@ -37,7 +37,11 @@ export class AgentLoopController implements AgentController {
 
   steer(message: string | LanguageMessage): void { this._steer.push(this.toMsg(message)); }
   followUp(message: string | LanguageMessage): void { this._followUps.push(this.toMsg(message)); }
-  abort(reason?: string): void { this._aborted = true; this._abortReason = reason; }
+  abort(reason?: string): void {
+    this._aborted = true;
+    this._abortReason = reason;
+    this.rejectPendingQuestions(reason ?? 'aborted');
+  }
 
   get isSteered(): boolean { return this._steer.length > 0; }
   get isAborted(): boolean { return this._aborted; }

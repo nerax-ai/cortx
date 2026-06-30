@@ -5,6 +5,7 @@ import {
   AGENT_EVENT_OBSERVER,
   AGENT_EXTENSION_TYPES,
   AGENT_MESSAGES_TRANSFORM,
+  AGENT_SESSION_POLICY,
   AGENT_SYSTEM_TRANSFORM,
   AGENT_TOOL,
   AGENT_TOOL_AFTER,
@@ -55,6 +56,7 @@ export async function resolveExtensions(
       else if (ext.type === AGENT_ERROR_RECOVER) resolved.errorRecovers.push(value as AgentRuntimeExtensions['errorRecovers'][number]);
       else if (ext.type === AGENT_CONTEXT_OVERFLOW) resolved.contextOverflows.push(value as AgentRuntimeExtensions['contextOverflows'][number]);
       else if (ext.type === AGENT_EVENT_OBSERVER) resolved.eventObservers.push(value as AgentRuntimeExtensions['eventObservers'][number]);
+      else if (ext.type === AGENT_SESSION_POLICY) resolved.sessionPolicies.push(value as AgentRuntimeExtensions['sessionPolicies'][number]);
     }
   }
 

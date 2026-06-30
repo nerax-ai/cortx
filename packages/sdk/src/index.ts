@@ -45,6 +45,7 @@ export const AGENT_TOOL_AFTER = 'agent.toolAfter' as const;
 export const AGENT_ERROR_RECOVER = 'agent.errorRecover' as const;
 export const AGENT_CONTEXT_OVERFLOW = 'agent.contextOverflow' as const;
 export const AGENT_EVENT_OBSERVER = 'agent.eventObserver' as const;
+export const AGENT_SESSION_POLICY = 'agent.sessionPolicy' as const;
 
 export const AGENT_EXTENSION_TYPES = [
   AGENT_TOOL,
@@ -55,6 +56,7 @@ export const AGENT_EXTENSION_TYPES = [
   AGENT_ERROR_RECOVER,
   AGENT_CONTEXT_OVERFLOW,
   AGENT_EVENT_OBSERVER,
+  AGENT_SESSION_POLICY,
 ] as const;
 
 export const CORTX_EXTENSION_TYPES = [
@@ -156,6 +158,50 @@ export interface AgentEventObserverContribution {
   onAgentEvent(event: AgentEvent): void | Promise<void>;
 }
 
+export interface AgentTurnPolicyInput {
+  sessionId: string;
+  iteration: number;
+  messages: LanguageMessage[];
+}
+
+export interface AgentModelRequestPolicyInput {
+  sessionId: string;
+  iteration: number;
+  messages: LanguageMessage[];
+  tools: Tool[];
+}
+
+export interface AgentToolPolicyInput {
+  sessionId: string;
+  toolCall: LanguageToolCallContent;
+  tool?: Tool;
+  input: Record<string, unknown>;
+  toolContext: ToolContext;
+}
+
+export interface AgentSubAgentPolicyInput {
+  sessionId: string;
+  parentToolCallId: string;
+  prompt: string;
+  description: string;
+  isBackground: boolean;
+}
+
+export type AgentSessionPolicyDecision =
+  | { action?: 'allow' }
+  | { action: 'deny'; reason?: string; result?: ToolResult | string; code?: ErrorCode }
+  | { action: 'rewriteMessages'; messages: LanguageMessage[] }
+  | { action: 'rewriteTools'; tools: Tool[] }
+  | { action: 'rewriteToolInput'; input: string | Record<string, unknown> }
+  | { action: 'shortCircuitTool'; result: ToolResult | string; isError?: boolean };
+
+export interface AgentSessionPolicyContribution {
+  beforeTurn?(input: AgentTurnPolicyInput): AgentSessionPolicyDecision | Promise<AgentSessionPolicyDecision>;
+  beforeModelRequest?(input: AgentModelRequestPolicyInput): AgentSessionPolicyDecision | Promise<AgentSessionPolicyDecision>;
+  beforeToolCall?(input: AgentToolPolicyInput): AgentSessionPolicyDecision | Promise<AgentSessionPolicyDecision>;
+  beforeSubAgent?(input: AgentSubAgentPolicyInput): AgentSessionPolicyDecision | Promise<AgentSessionPolicyDecision>;
+}
+
 export interface AgentRuntimeExtensions {
   tools: Tool[];
   systemTransforms: AgentSystemTransformContribution[];
@@ -165,6 +211,7 @@ export interface AgentRuntimeExtensions {
   errorRecovers: AgentErrorRecoverContribution[];
   contextOverflows: AgentContextOverflowContribution[];
   eventObservers: AgentEventObserverContribution[];
+  sessionPolicies: AgentSessionPolicyContribution[];
 }
 
 export function createEmptyAgentRuntimeExtensions(): AgentRuntimeExtensions {
@@ -177,6 +224,7 @@ export function createEmptyAgentRuntimeExtensions(): AgentRuntimeExtensions {
     errorRecovers: [],
     contextOverflows: [],
     eventObservers: [],
+    sessionPolicies: [],
   };
 }
 
@@ -192,6 +240,7 @@ export function mergeAgentRuntimeExtensions(...sets: Array<AgentRuntimeExtension
     merged.errorRecovers.push(...set.errorRecovers);
     merged.contextOverflows.push(...set.contextOverflows);
     merged.eventObservers.push(...set.eventObservers);
+    merged.sessionPolicies.push(...set.sessionPolicies);
   }
   return merged;
 }
@@ -205,6 +254,7 @@ export interface CortxFactoryMap {
   [AGENT_ERROR_RECOVER]: (ctx: CortxFactoryContext) => AgentErrorRecoverContribution | Promise<AgentErrorRecoverContribution>;
   [AGENT_CONTEXT_OVERFLOW]: (ctx: CortxFactoryContext) => AgentContextOverflowContribution | Promise<AgentContextOverflowContribution>;
   [AGENT_EVENT_OBSERVER]: (ctx: CortxFactoryContext) => AgentEventObserverContribution | Promise<AgentEventObserverContribution>;
+  [AGENT_SESSION_POLICY]: (ctx: CortxFactoryContext) => AgentSessionPolicyContribution | Promise<AgentSessionPolicyContribution>;
 }
 
 export function defineCortxPlugin<T extends InlinePlugin<CortxExtensionType, CortxFactoryMap>>(plugin: T): T {
