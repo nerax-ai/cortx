@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@cortx/sdk';
-import type { Cortx, CortxPluginRegistry, PluginEntry } from '@cortx/core';
+import type { Cortx, CortxRegistry, PluginConfig } from '@cortx/core';
 import type { LanguageClient } from '@synax-ai/core';
 import type { Logger } from '@cortx/sdk';
 import type { SessionInfo } from './types.js';
@@ -23,8 +23,8 @@ export class SessionManager {
   private readonly language: LanguageClient;
   private readonly model: string;
   private readonly system?: string;
-  private readonly registry?: CortxPluginRegistry;
-  private readonly plugins?: PluginEntry[];
+  private readonly registry?: CortxRegistry;
+  private readonly plugins?: PluginConfig[];
   private readonly logger: Logger;
 
   constructor(opts: {
@@ -33,8 +33,8 @@ export class SessionManager {
     language: LanguageClient;
     model: string;
     system?: string;
-    registry?: CortxPluginRegistry;
-    plugins?: PluginEntry[];
+    registry?: CortxRegistry;
+    plugins?: PluginConfig[];
     logger: Logger;
   }) {
     this.maxSessions = opts.maxSessions ?? 10;

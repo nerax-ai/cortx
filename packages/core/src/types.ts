@@ -1,8 +1,8 @@
 import type { LanguageMessage } from '@synax-ai/sdk';
-import type { Logger, CortxPlugin, AgentEvent, Tool, ErrorCode, CortxExtensionType, CortxFactoryMap } from '@cortx/sdk';
+import type { Logger, AgentEvent, Tool, ErrorCode, CortxExtensionType, CortxFactoryMap } from '@cortx/sdk';
 import type { PluginRegistry } from '@nerax-ai/plugin';
 
-export type { CortxPlugin, AgentEvent, ErrorCode, CortxExtensionType, CortxFactoryMap };
+export type { AgentEvent, ErrorCode, CortxExtensionType, CortxFactoryMap };
 
 export type DeliveryMode = 'all' | 'one-at-a-time';
 
@@ -98,20 +98,15 @@ export interface PluginConfig {
   options?: Record<string, unknown>;
 }
 
-export type PluginEntry = CortxPlugin | PluginConfig;
-export type CortxPluginRegistry = PluginRegistry<CortxExtensionType, CortxFactoryMap>;
-
-export function isPluginConfig(p: PluginEntry): p is PluginConfig {
-  return 'use' in p;
-}
+export type CortxRegistry = PluginRegistry<CortxExtensionType, CortxFactoryMap>;
 
 export interface CortxConfig {
   model: string;
   system?: string;
   tools?: Tool[];
   appName?: string;
-  registry?: CortxPluginRegistry;
-  plugins?: PluginEntry[];
+  registry?: CortxRegistry;
+  plugins?: PluginConfig[];
   logger?: Logger;
   askUser?: (question: string) => Promise<string>;
   maxIterations?: number;

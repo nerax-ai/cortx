@@ -1,13 +1,25 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import { noopLogger, type Logger, type CortxPlugin, type LanguageMessage, type LanguageToolCallContent, type LanguageToolResultContent, type Tool, type ToolContext, type ToolResult, type ErrorCode } from '@cortx/sdk';
+import {
+  createEmptyAgentRuntimeExtensions,
+  noopLogger,
+  type AgentRuntimeExtensions,
+  type LanguageMessage,
+  type LanguageToolCallContent,
+  type LanguageToolResultContent,
+  type Logger,
+  type Tool,
+  type ToolContext,
+  type ToolResult,
+  type ErrorCode,
+} from '@cortx/sdk';
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
 import { AgentLoopController } from './types.js';
 import { isToolCallContent } from './message-helpers.js';
 
 export interface AgentLoopOptions extends Omit<CortxConfig, 'plugins'> {
   language: LanguageClient;
-  plugins?: CortxPlugin[];
+  extensions?: AgentRuntimeExtensions;
   messages?: LanguageMessage[];
   controller?: AgentController;
   skipInitialLlm?: boolean;
@@ -62,7 +74,7 @@ function withBeforeProgress(item: PendingToolExecution, output: ToolExecOutput):
 async function runToolCall(
   tc: LanguageToolCallContent,
   tool: Tool,
-  plugins: CortxPlugin[],
+  extensions: AgentRuntimeExtensions,
   baseCtx: { sessionId: string; workingDirectory: string; logger: Logger; askUser?: (question: string, toolCallId: string) => Promise<string> },
   budget: number,
 ): Promise<ToolExecOutput> {
@@ -87,7 +99,10 @@ async function runToolCall(
       output = window === 0 ? output.slice(0, budget) : `${output.slice(0, window)}${marker}${output.slice(-window)}`;
       result = { ...result, output };
     }
-    for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result, tool)) ?? result;
+    for (const contribution of extensions.toolAfters) {
+      const afterResult = await contribution.afterToolExecute({ toolCall: tc, tool, result });
+      result = afterResult.result;
+    }
 
     const finalOutput = formatToolResultOutput(result);
     return { progressMessages, finalOutput, isError: !result.success };
@@ -107,27 +122,35 @@ function makeToolResult(tc: LanguageToolCallContent, output: ToolExecOutput): La
   };
 }
 
-async function* emitToolOutput(tc: LanguageToolCallContent, output: ToolExecOutput, plugins: CortxPlugin[]): AsyncGenerator<AgentEvent> {
+async function* emitToolOutput(tc: LanguageToolCallContent, output: ToolExecOutput, extensions: AgentRuntimeExtensions, logger: Logger): AsyncGenerator<AgentEvent> {
   for (const text of output.progressMessages) {
     const e: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
-    await emit(plugins, e); yield e;
+    await emit(extensions, e, logger); yield e;
   }
   const e: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: output.finalOutput, isError: output.isError };
-  await emit(plugins, e); yield e;
+  await emit(extensions, e, logger); yield e;
 }
 
 async function* executePendingOutput(
   item: PendingToolExecution,
   output: ToolExecOutput,
-  plugins: CortxPlugin[],
+  extensions: AgentRuntimeExtensions,
   toolResults: LanguageToolResultContent[],
+  logger: Logger,
 ): AsyncGenerator<AgentEvent> {
-  yield* emitToolOutput(item.tc, output, plugins);
+  yield* emitToolOutput(item.tc, output, extensions, logger);
   toolResults.push(makeToolResult(item.tc, output));
 }
 
-async function emit(plugins: CortxPlugin[], event: AgentEvent): Promise<void> {
-  for (const p of plugins) await p['event']?.(event);
+async function emit(extensions: AgentRuntimeExtensions, event: AgentEvent, logger: Logger): Promise<void> {
+  const observerLogger = logger.scope('agent.eventObserver');
+  for (const observer of extensions.eventObservers) {
+    try {
+      await observer.onAgentEvent(event);
+    } catch (error) {
+      observerLogger.warn(`agent.eventObserver failed for ${event.type}`, error);
+    }
+  }
 }
 
 function classifyError(e: unknown): ErrorCode {
@@ -147,7 +170,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     model,
     system,
     tools = [],
-    plugins = [],
+    extensions = createEmptyAgentRuntimeExtensions(),
     messages = [],
     maxIterations = 20,
     maxOutputTokens,
@@ -159,16 +182,15 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     skipInitialLlm = false,
   } = opts;
 
-  // Merge plugin tools into toolMap
-  const allTools = [...tools, ...plugins.flatMap((p) => p.tools ?? [])];
+  const allTools = [...tools, ...extensions.tools];
   const toolMap = new Map<string, Tool>(allTools.map((t) => [t.name, t]));
   const sdkTools = allTools.map((t) => ({ type: 'function' as const, name: t.name, description: t.description, inputSchema: t.inputSchema }));
   const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-  // Apply system.transform hooks
   let resolvedSystem = system ?? '';
-  for (const p of plugins) {
-    if (p['system.transform']) resolvedSystem = await p['system.transform'](resolvedSystem);
+  for (const contribution of extensions.systemTransforms) {
+    const result = await contribution.transformSystem({ system: resolvedSystem });
+    resolvedSystem = result.system;
   }
   const systemMessages: LanguageMessage[] = resolvedSystem ? [{ role: 'system' as const, content: [{ type: 'text' as const, text: resolvedSystem }] }] : [];
   let iteration = 0;
@@ -183,7 +205,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     }
     if (!resumeFromToolCalls?.length) {
       const e: AgentEvent = { type: 'error', error: new Error('continue() requires last message to be an assistant message with tool calls'), code: 'stream_error' };
-      await emit(plugins, e); yield e; return;
+      await emit(extensions, e, logger); yield e; return;
     }
   }
 
@@ -198,16 +220,16 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     const ctrl = controller;
     if (ctrl?.isAborted) {
       const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted'), code: 'user_abort' };
-      await emit(plugins, e); yield e; return;
+      await emit(extensions, e, logger); yield e; return;
     }
     if (iteration >= maxIterations) {
       const e: AgentEvent = { type: 'error', error: new Error(`Max iterations (${maxIterations}) reached`), code: 'max_iterations' };
-      await emit(plugins, e); yield e; return;
+      await emit(extensions, e, logger); yield e; return;
     }
     iteration++;
     isResuming = false;
     const turnStart: AgentEvent = { type: 'turn_start', iteration };
-    await emit(plugins, turnStart); yield turnStart;
+    await emit(extensions, turnStart, logger); yield turnStart;
 
     // --- stream LLM response (or resume from persisted tool calls) ---
     const toolCalls: LanguageToolCallContent[] = [];
@@ -223,10 +245,10 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       isResuming = true;
       finishReason = 'tool-calls';
     } else {
-      // Apply messages.transform hooks
       let transformedMessages: LanguageMessage[] = [...systemMessages, ...messages];
-      for (const p of plugins) {
-        if (p['messages.transform']) transformedMessages = await p['messages.transform'](transformedMessages);
+      for (const contribution of extensions.messagesTransforms) {
+        const result = await contribution.transformMessages({ messages: transformedMessages });
+        transformedMessages = result.messages;
       }
       // Sync plugin transforms (e.g., skill expansion) back to messages for persistence across turns
       const offset = systemMessages.length;
@@ -248,12 +270,12 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           if (p.type === 'text-delta') {
             textBuffer += p.delta;
             const e: AgentEvent = { type: 'text_delta', delta: p.delta };
-            for (const pl of plugins) pl['event']?.(e);
+            await emit(extensions, e, logger);
             yield e;
           } else if (p.type === 'reasoning-delta') {
             thinkingBuffer += p.delta;
             const e: AgentEvent = { type: 'thinking_delta', delta: p.delta };
-            for (const pl of plugins) pl['event']?.(e);
+            await emit(extensions, e, logger);
             yield e;
           } else if (p.type === 'tool-input-start') {
             toolInputBuffers.set(p.id, { name: p.toolName, buf: '' });
@@ -275,18 +297,20 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const error = e instanceof Error ? e : new Error(String(e));
         const code = classifyError(e);
 
-        // Context overflow: try context.overflow plugin hook
+        // Context overflow recovery is separate from ordinary stream retry.
         if (code === 'context_overflow') {
           overflowRecoveryCount++;
           const overflowEvent: AgentEvent = { type: 'context_overflow', messages: [...messages] };
-          await emit(plugins, overflowEvent); yield overflowEvent;
+          await emit(extensions, overflowEvent, logger); yield overflowEvent;
 
-          const hasOverflowHook = plugins.some(p => p['context.overflow']);
-          if (hasOverflowHook && overflowRecoveryCount <= maxOverflowRecoveries) {
+          if (extensions.contextOverflows.length && overflowRecoveryCount <= maxOverflowRecoveries) {
             let compressed: LanguageMessage[] | null = null;
-            for (const p of plugins) {
-              const result = await p['context.overflow']?.([...messages]);
-              if (result) { compressed = result; break; }
+            for (const contribution of extensions.contextOverflows) {
+              const result = await contribution.handleContextOverflow({ messages: [...messages] });
+              if (result.action === 'recover') {
+                compressed = result.messages;
+                break;
+              }
             }
             if (compressed) {
               messages.length = 0;
@@ -296,19 +320,22 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           }
 
           const err: AgentEvent = { type: 'error', error, code: 'context_overflow' };
-          await emit(plugins, err); yield err; return;
+          await emit(extensions, err, logger); yield err; return;
         }
 
-        // Try error.recover plugin hook first
+        // Let configured recovery policies decide before falling back to core defaults.
         let shouldRetry = false;
         let retryDelay = 1000;
 
-        const hasRecoverHook = plugins.some(p => p['error.recover']);
-        if (hasRecoverHook) {
+        if (extensions.errorRecovers.length) {
           const errorEvent: AgentEvent & { type: 'error' } = { type: 'error', error, code };
-          for (const p of plugins) {
-            const result = await p['error.recover']?.(errorEvent);
-            if (result?.retry && retryCount < maxRetries) { shouldRetry = true; retryDelay = result.delay ?? 1000; break; }
+          for (const contribution of extensions.errorRecovers) {
+            const result = await contribution.recoverError({ event: errorEvent, error, code });
+            if (result.action === 'retry' && retryCount < maxRetries) {
+              shouldRetry = true;
+              retryDelay = result.delayMs ?? 1000;
+              break;
+            }
           }
         } else {
           // Default: retry once on rate_limited or server errors
@@ -322,16 +349,16 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         }
 
         const err: AgentEvent = { type: 'error', error, code };
-        await emit(plugins, err); yield err; return;
+        await emit(extensions, err, logger); yield err; return;
       }
 
       if (thinkingBuffer) {
         const e: AgentEvent = { type: 'thinking', content: thinkingBuffer };
-        await emit(plugins, e); yield e;
+        await emit(extensions, e, logger); yield e;
       }
       if (textBuffer) {
         const e: AgentEvent = { type: 'text', content: textBuffer };
-        await emit(plugins, e); yield e;
+        await emit(extensions, e, logger); yield e;
       }
       retryCount = 0;
     }
@@ -353,9 +380,9 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         });
         messages.push({ role: 'user', content: [{ type: 'text' as const, text: 'Continue where you left off.' }] });
         const e: AgentEvent = { type: 'follow_up', message: 'auto-continue (output truncated)' };
-        await emit(plugins, e); yield e;
+        await emit(extensions, e, logger); yield e;
         const te: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };
-        await emit(plugins, te); yield te;
+        await emit(extensions, te, logger); yield te;
         continue mainLoop;
       }
       // Non-truncated turn: reset auto-continue budget
@@ -365,19 +392,19 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         for (const msg of controller.consumeFollowUps()) {
           messages.push(msg);
           const e: AgentEvent = { type: 'follow_up', message: typeof msg.content === 'string' ? msg.content : 'follow-up' };
-          await emit(plugins, e); yield e;
+          await emit(extensions, e, logger); yield e;
         }
         const te: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };
-        await emit(plugins, te); yield te;
+        await emit(extensions, te, logger); yield te;
         continue mainLoop;
       }
       const te: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };
-      await emit(plugins, te); yield te;
+      await emit(extensions, te, logger); yield te;
       const done: AgentEvent = {
         type: 'done',
         usage: usage ? { inputTokens: usage.inputTokens.total ?? 0, outputTokens: usage.outputTokens.total ?? 0 } : undefined,
       };
-      await emit(plugins, done); yield done;
+      await emit(extensions, done, logger); yield done;
       return;
     }
 
@@ -400,7 +427,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       : controller instanceof AgentLoopController
         ? (q: string, tcId: string) => {
             const e: AgentEvent = { type: 'user_question', question: q, toolCallId: tcId };
-            for (const pl of plugins) pl['event']?.(e);
+            void emit(extensions, e, logger);
             return controller.registerQuestion(tcId);
           }
         : undefined;
@@ -417,17 +444,17 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const steerMsgs = ctrl.consumeSteering();
         const label = typeof steerMsgs[0]?.content === 'string' ? steerMsgs[0].content : 'steered';
         const e: AgentEvent = { type: 'steered', message: label };
-        await emit(plugins, e); yield e;
+        await emit(extensions, e, logger); yield e;
         messages.push(...steerMsgs);
         continue mainLoop;
       }
       if (ctrl?.isAborted) {
         const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted'), code: 'user_abort' };
-        await emit(plugins, e); yield e; return;
+        await emit(extensions, e, logger); yield e; return;
       }
 
       const tuEvent: AgentEvent = { type: 'tool_use', toolCall: tc };
-      await emit(plugins, tuEvent); yield tuEvent;
+      await emit(extensions, tuEvent, logger); yield tuEvent;
 
       const tool = toolMap.get(tc.toolName);
       if (!tool) {
@@ -440,17 +467,15 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         continue;
       }
 
-      // tool.execute.before
       const beforeProgress: string[] = [];
       const ctx: ToolContext = { sessionId, toolCallId: tc.toolCallId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser: resolvedAskUser ? (q: string) => resolvedAskUser(q, tc.toolCallId) : undefined };
       let skipped = false;
       let inputError = parseToolInputError(tc.input);
       let parsedInput = inputError ? {} : parseToolInput(tc.input);
-      for (const p of plugins) {
+      for (const contribution of extensions.toolBefores) {
         let r;
-        const previousInput = tc.input;
         try {
-          r = await p['tool.execute.before']?.(tc, ctx, tool, parsedInput);
+          r = await contribution.beforeToolExecute({ toolCall: { ...tc }, tool, input: parsedInput, toolContext: ctx });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           pendingTools.push({
@@ -461,21 +486,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           skipped = true;
           break;
         }
-        if (tc.input !== previousInput && (!r || r.input === undefined)) {
-          const rewriteError = parseToolInputError(tc.input);
-          if (rewriteError) {
-            pendingTools.push({
-              tc,
-              beforeProgress: [],
-              readyOutput: { progressMessages: beforeProgress, finalOutput: rewriteError, isError: true },
-            });
-            skipped = true;
-            break;
-          }
-          inputError = undefined;
-          parsedInput = parseToolInput(tc.input);
-        }
-        if (!r) continue;
+        if (!r || r.action === 'allow') continue;
         if (r.action === 'rewrite' && r.input !== undefined) {
           const rewriteError = parseToolInputError(r.input);
           if (rewriteError) {
@@ -492,30 +503,22 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           parsedInput = parseToolInput(r.input);
           continue;
         }
-        if (r.input !== undefined) {
-          const rewriteError = parseToolInputError(r.input);
-          if (rewriteError) {
-            pendingTools.push({
-              tc,
-              beforeProgress: [],
-              readyOutput: { progressMessages: beforeProgress, finalOutput: rewriteError, isError: true },
-            });
-            skipped = true;
-            break;
-          }
-          tc.input = r.input;
-          inputError = undefined;
-          parsedInput = parseToolInput(r.input);
-        }
-        if (r.skip || r.action === 'deny' || r.action === 'shortCircuit') {
-          const out = r.result ?? (r.action === 'deny' ? 'Denied' : 'skipped');
+        if (r.action === 'deny' || r.action === 'shortCircuit') {
+          const rawResult = 'result' in r ? r.result : undefined;
+          const result = typeof rawResult === 'object' && rawResult !== null
+            ? rawResult
+            : {
+                success: r.action === 'shortCircuit' && r.isError !== true,
+                output: rawResult ?? (r.action === 'deny' ? r.reason ?? 'Denied' : 'short-circuited'),
+              };
+          const out = formatToolResultOutput(result);
           pendingTools.push({
             tc,
             beforeProgress: [],
             readyOutput: {
               progressMessages: beforeProgress,
               finalOutput: out,
-              isError: r.isError ?? r.action === 'deny',
+              isError: r.action === 'deny' || !result.success,
             },
           });
           skipped = true;
@@ -545,19 +548,19 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         const steerMsgs = ctrl.consumeSteering();
         const label = typeof steerMsgs[0]?.content === 'string' ? steerMsgs[0].content : 'steered';
         const e: AgentEvent = { type: 'steered', message: label };
-        await emit(plugins, e); yield e;
+        await emit(extensions, e, logger); yield e;
         messages.push(...steerMsgs);
         continue mainLoop;
       }
       if (ctrl?.isAborted) {
         const e: AgentEvent = { type: 'error', error: new Error(ctrl.abortReason ?? 'aborted'), code: 'user_abort' };
-        await emit(plugins, e); yield e; return;
+        await emit(extensions, e, logger); yield e; return;
       }
 
       const item = pendingTools[pendingIdx];
       if (item.readyOutput) {
         pendingIdx++;
-        yield* executePendingOutput(item, item.readyOutput, plugins, toolResults);
+        yield* executePendingOutput(item, item.readyOutput, extensions, toolResults, logger);
         continue;
       }
 
@@ -580,7 +583,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         }
 
         const settled = await Promise.allSettled(
-          readBatch.map((readItem) => runToolCall(readItem.tc, readItem.tool!, plugins, baseCtx, budget)),
+          readBatch.map((readItem) => runToolCall(readItem.tc, readItem.tool!, extensions, baseCtx, budget)),
         );
         for (let i = 0; i < readBatch.length; i++) {
           const readItem = readBatch[i];
@@ -588,7 +591,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           const output: ToolExecOutput = settledOutput.status === 'fulfilled'
             ? settledOutput.value
             : { progressMessages: [], finalOutput: settledOutput.reason instanceof Error ? settledOutput.reason.message : String(settledOutput.reason), isError: true };
-          yield* executePendingOutput(readItem, withBeforeProgress(readItem, output), plugins, toolResults);
+          yield* executePendingOutput(readItem, withBeforeProgress(readItem, output), extensions, toolResults, logger);
         }
         continue;
       }
@@ -612,7 +615,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
           pendingIdx = agentIdx;
           // Execute multiple agents concurrently
           const agentOutputs = await Promise.allSettled(
-            agentBatch.map((agentItem) => runToolCall(agentItem.tc, agentItem.tool!, plugins, baseCtx, budget)),
+            agentBatch.map((agentItem) => runToolCall(agentItem.tc, agentItem.tool!, extensions, baseCtx, budget)),
           );
           for (let i = 0; i < agentBatch.length; i++) {
             const agentItem = agentBatch[i];
@@ -620,19 +623,19 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
             const output: ToolExecOutput = settled.status === 'fulfilled'
               ? settled.value
               : { progressMessages: [], finalOutput: settled.reason instanceof Error ? settled.reason.message : String(settled.reason), isError: true };
-            yield* executePendingOutput(agentItem, withBeforeProgress(agentItem, output), plugins, toolResults);
+            yield* executePendingOutput(agentItem, withBeforeProgress(agentItem, output), extensions, toolResults, logger);
           }
           continue;
         }
       }
 
       pendingIdx++;
-      const output = await runToolCall(tc, tool, plugins, baseCtx, budget);
-      yield* executePendingOutput(item, withBeforeProgress(item, output), plugins, toolResults);
+      const output = await runToolCall(tc, tool, extensions, baseCtx, budget);
+      yield* executePendingOutput(item, withBeforeProgress(item, output), extensions, toolResults, logger);
     }
 
     if (toolResults.length) messages.push({ role: 'tool', content: toolResults });
     const turnEnd: AgentEvent = { type: 'turn_end', iteration, toolCallCount: toolCalls.length };
-    await emit(plugins, turnEnd); yield turnEnd;
+    await emit(extensions, turnEnd, logger); yield turnEnd;
   }
 }

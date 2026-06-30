@@ -1,9 +1,9 @@
 /**
- * Live skill system test — exercises discovery, parsing, plugin hooks, and tool execution
+ * Live skill system test — exercises discovery, parsing, runtime extensions, and tool execution
  * against real CE skills copied into .cortx/skills/
  */
 import { discoverSkills } from '../src/skill/discover.js';
-import { createSkillPlugin } from '../src/skill/plugin.js';
+import { createSkillExtensions } from '../src/skill/plugin.js';
 import { parseInvocation, substituteArgs } from '../src/skill/substitute.js';
 import { renderSkillSummary } from '../src/skill/render.js';
 
@@ -30,10 +30,11 @@ if (skills.length === 0) {
 }
 
 // 2. System prompt injection
-console.log('2. Testing system.transform...');
-const plugin = createSkillPlugin(skills, cwd);
+console.log('2. Testing system transform...');
+const extensions = createSkillExtensions(skills);
 const basePrompt = 'You are a helpful coding assistant.';
-const systemPrompt = plugin['system.transform']!(basePrompt);
+const systemResult = await extensions.systemTransforms[0].transformSystem({ system: basePrompt });
+const systemPrompt = systemResult.system;
 const hasSummary = systemPrompt.includes('## Available Skills');
 console.log(`   Base prompt injected: ${hasSummary ? 'YES' : 'NO'}`);
 const gitCommitFound = systemPrompt.includes('git-commit');
@@ -41,11 +42,12 @@ console.log(`   git-commit skill listed: ${gitCommitFound ? 'YES' : 'NO'}`);
 console.log();
 
 // 3. Pre-parse with /skill-name
-console.log('3. Testing messages.transform with /git-commit...');
+console.log('3. Testing messages transform with /git-commit...');
 const messages = [
   { role: 'user', content: '/git-commit fix: skill system tests' },
 ];
-const transformed = await plugin['messages.transform']!(messages as any);
+const transformedResult = await extensions.messagesTransforms[0].transformMessages({ messages: messages as any });
+const transformed = transformedResult.messages;
 const lastContent = Array.isArray(transformed[0].content)
   ? (transformed[0].content as any[]).find((p: any) => p.type === 'text')?.text
   : transformed[0].content;
@@ -58,7 +60,8 @@ console.log();
 // 4. Unknown skill error
 console.log('4. Testing unknown skill error...');
 const badMessages = [{ role: 'user', content: '/nonexistent-skill' }];
-const badResult = await plugin['messages.transform']!(badMessages as any);
+const badTransformResult = await extensions.messagesTransforms[0].transformMessages({ messages: badMessages as any });
+const badResult = badTransformResult.messages;
 const badContent = Array.isArray(badResult[0].content)
   ? (badResult[0].content as any[]).find((p: any) => p.type === 'text')?.text
   : badResult[0].content;
@@ -68,7 +71,7 @@ console.log();
 
 // 5. Skill tool execution
 console.log('5. Testing skill tool execution...');
-const tool = plugin.tools![0];
+const tool = extensions.tools[0];
 const toolResult = await tool.execute({ name: 'git-commit' }, {
   sessionId: 'test-session',
   workingDirectory: cwd,
@@ -92,7 +95,7 @@ console.log();
 console.log('7. Testing immutability...');
 const origMsgs = [{ role: 'user', content: '/git-commit fix: test' }];
 const origRef = origMsgs[0];
-await plugin['messages.transform']!(origMsgs as any);
+await extensions.messagesTransforms[0].transformMessages({ messages: origMsgs as any });
 const isImmutable = origMsgs[0] === origRef;
 console.log(`   Original array unchanged: ${isImmutable ? 'YES' : 'NO'}`);
 console.log();
@@ -102,4 +105,4 @@ console.log('=== Summary ===');
 const allPassed = skills.length > 0 && hasSummary && wasExpanded && hasError && toolResult.success && isImmutable;
 console.log(`All checks passed: ${allPassed ? 'YES ✓' : 'NO ✗'}`);
 console.log(`Skills discovered: ${skills.length}`);
-console.log(`Tests: discovery, system.transform, messages.transform (skill + error), tool, substitution, immutability`);
+console.log(`Tests: discovery, system transform, messages transform (skill + error), tool, substitution, immutability`);

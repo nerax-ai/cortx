@@ -37,31 +37,6 @@ export interface Tool {
   execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 }
 
-export interface ToolExecuteBeforeResult {
-  skip?: boolean;
-  result?: string;
-  isError?: boolean;
-  action?: 'allow' | 'rewrite' | 'deny' | 'shortCircuit';
-  input?: string | Record<string, unknown>;
-}
-
-export interface ErrorRecoverResult {
-  retry: boolean;
-  delay?: number;
-}
-
-export interface CortxPlugin {
-  'messages.transform'?: (messages: LanguageMessage[]) => LanguageMessage[] | Promise<LanguageMessage[]>;
-  'system.transform'?: (system: string) => string | Promise<string>;
-  'tool.execute.before'?: (tc: LanguageToolCallContent, ctx: ToolContext, tool?: Tool, input?: Record<string, unknown>) => ToolExecuteBeforeResult | Promise<ToolExecuteBeforeResult>;
-  'tool.execute.after'?: (tc: LanguageToolCallContent, result: ToolResult, tool?: Tool) => ToolResult | Promise<ToolResult>;
-  'error.recover'?: (event: AgentEvent & { type: 'error' }) => ErrorRecoverResult | Promise<ErrorRecoverResult>;
-  'context.overflow'?: (messages: LanguageMessage[]) => Promise<LanguageMessage[] | null>;
-  'event'?: (event: AgentEvent) => void | Promise<void>;
-  tools?: Tool[];
-}
-
-export const CORTX_LEGACY_PLUGIN = 'cortx' as const;
 export const AGENT_TOOL = 'agent.tool' as const;
 export const AGENT_SYSTEM_TRANSFORM = 'agent.systemTransform' as const;
 export const AGENT_MESSAGES_TRANSFORM = 'agent.messagesTransform' as const;
@@ -83,7 +58,6 @@ export const AGENT_EXTENSION_TYPES = [
 ] as const;
 
 export const CORTX_EXTENSION_TYPES = [
-  CORTX_LEGACY_PLUGIN,
   ...AGENT_EXTENSION_TYPES,
 ] as const;
 
@@ -101,7 +75,9 @@ export interface AgentSystemTransformInput {
   system: string;
 }
 
-export type AgentSystemTransformResult = string | { system: string };
+export interface AgentSystemTransformResult {
+  system: string;
+}
 
 export interface AgentSystemTransformContribution {
   transformSystem(input: AgentSystemTransformInput): AgentSystemTransformResult | Promise<AgentSystemTransformResult>;
@@ -111,7 +87,9 @@ export interface AgentMessagesTransformInput {
   messages: LanguageMessage[];
 }
 
-export type AgentMessagesTransformResult = LanguageMessage[] | { messages: LanguageMessage[] };
+export interface AgentMessagesTransformResult {
+  messages: LanguageMessage[];
+}
 
 export interface AgentMessagesTransformContribution {
   transformMessages(input: AgentMessagesTransformInput): AgentMessagesTransformResult | Promise<AgentMessagesTransformResult>;
@@ -140,7 +118,9 @@ export interface AgentToolAfterInput {
   result: ToolResult;
 }
 
-export type AgentToolAfterResult = ToolResult | { result: ToolResult };
+export interface AgentToolAfterResult {
+  result: ToolResult;
+}
 
 export interface AgentToolAfterContribution {
   afterToolExecute(input: AgentToolAfterInput): AgentToolAfterResult | Promise<AgentToolAfterResult>;
@@ -154,8 +134,7 @@ export interface AgentErrorRecoverInput {
 
 export type AgentErrorRecoverResult =
   | { action: 'retry'; delayMs?: number; reason?: string }
-  | { action: 'fail'; reason?: string }
-  | { retry: boolean; delay?: number };
+  | { action: 'decline'; reason?: string };
 
 export interface AgentErrorRecoverContribution {
   recoverError(input: AgentErrorRecoverInput): AgentErrorRecoverResult | Promise<AgentErrorRecoverResult>;
@@ -166,10 +145,8 @@ export interface AgentContextOverflowInput {
 }
 
 export type AgentContextOverflowResult =
-  | LanguageMessage[]
-  | { messages: LanguageMessage[] }
-  | { action: 'fail' }
-  | null;
+  | { action: 'recover'; messages: LanguageMessage[] }
+  | { action: 'decline'; reason?: string };
 
 export interface AgentContextOverflowContribution {
   handleContextOverflow(input: AgentContextOverflowInput): AgentContextOverflowResult | Promise<AgentContextOverflowResult>;
@@ -179,8 +156,47 @@ export interface AgentEventObserverContribution {
   onAgentEvent(event: AgentEvent): void | Promise<void>;
 }
 
+export interface AgentRuntimeExtensions {
+  tools: Tool[];
+  systemTransforms: AgentSystemTransformContribution[];
+  messagesTransforms: AgentMessagesTransformContribution[];
+  toolBefores: AgentToolBeforeContribution[];
+  toolAfters: AgentToolAfterContribution[];
+  errorRecovers: AgentErrorRecoverContribution[];
+  contextOverflows: AgentContextOverflowContribution[];
+  eventObservers: AgentEventObserverContribution[];
+}
+
+export function createEmptyAgentRuntimeExtensions(): AgentRuntimeExtensions {
+  return {
+    tools: [],
+    systemTransforms: [],
+    messagesTransforms: [],
+    toolBefores: [],
+    toolAfters: [],
+    errorRecovers: [],
+    contextOverflows: [],
+    eventObservers: [],
+  };
+}
+
+export function mergeAgentRuntimeExtensions(...sets: Array<AgentRuntimeExtensions | null | undefined>): AgentRuntimeExtensions {
+  const merged = createEmptyAgentRuntimeExtensions();
+  for (const set of sets) {
+    if (!set) continue;
+    merged.tools.push(...set.tools);
+    merged.systemTransforms.push(...set.systemTransforms);
+    merged.messagesTransforms.push(...set.messagesTransforms);
+    merged.toolBefores.push(...set.toolBefores);
+    merged.toolAfters.push(...set.toolAfters);
+    merged.errorRecovers.push(...set.errorRecovers);
+    merged.contextOverflows.push(...set.contextOverflows);
+    merged.eventObservers.push(...set.eventObservers);
+  }
+  return merged;
+}
+
 export interface CortxFactoryMap {
-  [CORTX_LEGACY_PLUGIN]: (ctx: CortxFactoryContext) => CortxPlugin | Promise<CortxPlugin>;
   [AGENT_TOOL]: (ctx: CortxFactoryContext) => Tool | Promise<Tool>;
   [AGENT_SYSTEM_TRANSFORM]: (ctx: CortxFactoryContext) => AgentSystemTransformContribution | Promise<AgentSystemTransformContribution>;
   [AGENT_MESSAGES_TRANSFORM]: (ctx: CortxFactoryContext) => AgentMessagesTransformContribution | Promise<AgentMessagesTransformContribution>;
@@ -197,7 +213,7 @@ export function defineCortxPlugin<T extends InlinePlugin<CortxExtensionType, Cor
 
 export type ErrorCode = 'context_overflow' | 'rate_limited' | 'max_iterations' | 'user_abort' | 'stream_error' | 'client_error';
 
-// AgentEvent is needed by CortxPlugin['event'], defined here to avoid circular deps
+// AgentEvent lives in the SDK so runtime extensions, tools, and hosts share one event contract.
 export type AgentEvent =
   | { type: 'turn_start'; iteration: number }
   | { type: 'turn_end'; iteration: number; toolCallCount: number }

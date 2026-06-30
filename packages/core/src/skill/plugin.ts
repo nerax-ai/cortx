@@ -1,4 +1,9 @@
-import type { CortxPlugin, LanguageMessage, SkillInfo } from '@cortx/sdk';
+import {
+  createEmptyAgentRuntimeExtensions,
+  type AgentRuntimeExtensions,
+  type LanguageMessage,
+  type SkillInfo,
+} from '@cortx/sdk';
 import { parseInvocation, substituteArgs } from './substitute.js';
 import { renderSkillSummary } from './render.js';
 import { createSkillTool } from './tool.js';
@@ -32,35 +37,39 @@ function replaceLastMessage(messages: LanguageMessage[], lastIdx: number, last: 
   return [...messages.slice(0, lastIdx), replaceMessageContent(last, [{ type: 'text' as const, text: newContent }])];
 }
 
-export function createSkillPlugin(skills: SkillInfo[], cwd: string): CortxPlugin {
+export function createSkillExtensions(skills: SkillInfo[]): AgentRuntimeExtensions {
   const skillMap = new Map(skills.map(s => [s.name, s]));
-  const skillTool = createSkillTool(skillMap, skills);
-
-  return {
-    'system.transform'(system: string): string {
+  const extensions = createEmptyAgentRuntimeExtensions();
+  extensions.tools.push(createSkillTool(skillMap, skills));
+  extensions.systemTransforms.push({
+    transformSystem(input) {
       const summary = renderSkillSummary(skills);
-      return summary ? system + '\n\n' + summary : system;
+      if (!summary) return { system: input.system };
+      return { system: input.system ? `${input.system}\n\n${summary}` : summary };
     },
-
-    async 'messages.transform'(messages: LanguageMessage[]): Promise<LanguageMessage[]> {
+  });
+  extensions.messagesTransforms.push({
+    async transformMessages(input) {
+      const messages = input.messages;
       const lastIdx = messages.length - 1;
       const last = messages[lastIdx];
-      if (!last || last.role !== 'user') return messages;
+      if (!last || last.role !== 'user') return { messages };
 
       const content = extractTextContent(last.content);
       const parsed = parseInvocation(content);
-      if (!parsed) return messages;
+      if (!parsed) return { messages };
 
       const skill = skillMap.get(parsed.skillName);
       if (!skill) {
         const available = skills.length > 20 ? skills.slice(0, 20).map(s => s.name).join(', ') + '...' : skills.map(s => s.name).join(', ');
-        return replaceLastMessage(messages, lastIdx, last, `[Skill Error] Skill "${parsed.skillName}" not found. Available skills: ${available || 'none'}`);
+        return {
+          messages: replaceLastMessage(messages, lastIdx, last, `[Skill Error] Skill "${parsed.skillName}" not found. Available skills: ${available || 'none'}`),
+        };
       }
 
       const expanded = substituteArgs(skill.content, parsed.argsString, parsed.positionalArgs);
-      return replaceLastMessage(messages, lastIdx, last, expanded + SKILL_EXECUTION_GUIDANCE);
+      return { messages: replaceLastMessage(messages, lastIdx, last, expanded + SKILL_EXECUTION_GUIDANCE) };
     },
-
-    tools: [skillTool],
-  };
+  });
+  return extensions;
 }

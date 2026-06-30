@@ -9,12 +9,10 @@ import {
   AGENT_TOOL,
   AGENT_TOOL_AFTER,
   AGENT_TOOL_BEFORE,
-  CORTX_LEGACY_PLUGIN,
   defineCortxPlugin,
   type AgentEvent,
   type CortxFactoryMap,
-  type CortxPlugin,
-  type CortxPluginRegistry,
+  type CortxRegistry,
   type CortxExtensionType,
   type LanguageMessage,
 } from '../src/index';
@@ -53,7 +51,7 @@ function mockLanguage(responses: StreamParts[], onStream?: (opts: { messages: La
   } as unknown as LanguageClient;
 }
 
-function createRegistry(appName: string): CortxPluginRegistry {
+function createRegistry(appName: string): CortxRegistry {
   return PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({ appName });
 }
 
@@ -68,32 +66,6 @@ async function collect(cortx: Cortx, message = 'hello'): Promise<AgentEvent[]> {
 describe('core agent.* extensions', () => {
   afterEach(() => {
     PluginRegistry.reset();
-  });
-
-  test('preserves legacy cortx registry plugins', async () => {
-    const registry = createRegistry('core-extension-legacy-test');
-    let sawDone = false;
-    await registry.register(defineCortxPlugin({
-      manifest: { manifestVersion: 1, id: 'legacy-plugin', name: 'legacy-plugin', version: '0.0.0', runtime: { main: 'inline' } },
-      setup(ctx) {
-        ctx.register(CORTX_LEGACY_PLUGIN, 'legacy-event', () => ({
-          event(event) {
-            if (event.type === 'done') sawDone = true;
-          },
-        }));
-      },
-    }));
-
-    const cortx = new Cortx(mockLanguage([textResponse('ok')]), {
-      appName: 'core-extension-legacy-test',
-      model: 'test',
-      registry,
-      plugins: [{ use: 'legacy-event' }],
-    });
-
-    const events = await collect(cortx);
-    expect(events.at(-1)?.type).toBe('done');
-    expect(sawDone).toBe(true);
   });
 
   test('loads a package worth of agent extensions from one configured use', async () => {
@@ -368,6 +340,7 @@ describe('core agent.* extensions', () => {
         ctx.register(AGENT_CONTEXT_OVERFLOW, 'compact', () => ({
           handleContextOverflow() {
             return {
+              action: 'recover',
               messages: [{ role: 'user', content: [{ type: 'text', text: 'compact summary' }] }],
             };
           },
@@ -429,6 +402,6 @@ describe('core agent.* extensions', () => {
       plugins: [{ use: 'missing-extension' }],
     });
 
-    await expect(collect(cortx)).rejects.toThrow('cortx factory not found');
+    await expect(collect(cortx)).rejects.toThrow('agent extension not found');
   });
 });

@@ -1,14 +1,14 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentEvent, AgentController, CortxConfig, CortxPlugin, CortxPluginRegistry } from './types.js';
+import type { AgentEvent, AgentController, CortxConfig, CortxRegistry } from './types.js';
 import type { LanguageMessage, Tool } from '@cortx/sdk';
-import { formatToolSummary } from '@cortx/sdk';
+import { formatToolSummary, mergeAgentRuntimeExtensions, type AgentRuntimeExtensions } from '@cortx/sdk';
 import { AgentLoopController } from './types.js';
 import { agentLoop } from './loop.js';
 import { discoverSkills } from './skill/discover.js';
-import { createSkillPlugin } from './skill/plugin.js';
+import { createSkillExtensions } from './skill/plugin.js';
 import { SubAgentSessionStore } from './sub-agent-session.js';
 import { createUserMessage } from './message-helpers.js';
-import { getRegistry, resolvePlugins } from './plugin-resolver.js';
+import { getRegistry, resolveExtensions } from './plugin-resolver.js';
 
 async function runSubAgentLoop(
   loopOpts: Parameters<typeof agentLoop>[0],
@@ -38,11 +38,11 @@ async function runSubAgentLoop(
 export class Cortx {
   private readonly language: LanguageClient;
   private readonly config: CortxConfig;
-  private readonly registry: CortxPluginRegistry;
+  private readonly registry: CortxRegistry;
   private readonly tools = new Map<string, Tool>();
   private _messages: LanguageMessage[] = [];
   private _controller = new AgentLoopController();
-  private _skillPlugin: CortxPlugin | null = null;
+  private _skillExtensions: AgentRuntimeExtensions | null = null;
   readonly agentSessions = new SubAgentSessionStore();
   onAgentEvent?: (event: AgentEvent) => void;
 
@@ -65,19 +65,19 @@ export class Cortx {
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
     const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace, this.config.logger);
+    const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
 
     const cwd = this.config.workingDirectory ?? process.cwd();
     const skills = await discoverSkills(cwd, this.config);
-    this._skillPlugin = skills.length ? createSkillPlugin(skills, cwd) : null;
+    this._skillExtensions = skills.length ? createSkillExtensions(skills) : null;
 
-    const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
+    const extensions = mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions);
     const messages = [...this._messages];
     messages.push(typeof userMessage === 'string' ? { role: 'user' as const, content: [{ type: 'text' as const, text: userMessage }] } : userMessage);
 
     for await (const event of agentLoop({
       ...this.config,
-      plugins: allPlugins,
+      extensions,
       language: this.language,
       tools: [...this.tools.values()],
       messages,
@@ -90,12 +90,12 @@ export class Cortx {
 
   async *continue(): AsyncGenerator<AgentEvent> {
     const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace, this.config.logger);
-    const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
+    const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
+    const extensions = mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions);
     const messages = [...this._messages];
     for await (const event of agentLoop({
       ...this.config,
-      plugins: allPlugins,
+      extensions,
       language: this.language,
       tools: [...this.tools.values()],
       messages,
@@ -152,13 +152,13 @@ export class Cortx {
         cortx.onAgentEvent?.({ type: 'agent_started', toolCallId, description: desc, isBackground });
 
         const subSystem = `You are a sub-agent. Complete the task using available tools.`;
-        const inheritedPlugins = await resolvePlugins(config.plugins, cortx.registry, `agent-${toolCallId}`, config.logger);
+        const inheritedExtensions = await resolveExtensions(config.plugins, cortx.registry, `agent-${toolCallId}`);
         const loopOpts = {
           language,
           model: config.model,
           system: subSystem,
           tools: getTools(),
-          plugins: inheritedPlugins,
+          extensions: mergeAgentRuntimeExtensions(cortx._skillExtensions, inheritedExtensions),
           messages: [createUserMessage(prompt)],
           workingDirectory: ctx.workingDirectory,
           logger: ctx.logger,

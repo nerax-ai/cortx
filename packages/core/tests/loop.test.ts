@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { agentLoop, AgentLoopController } from '../src/index';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
-import type { Logger } from '@cortx/sdk';
+import { createEmptyAgentRuntimeExtensions, type AgentRuntimeExtensions, type Logger } from '@cortx/sdk';
 
 type StreamParts = LanguageStreamPart[];
 
@@ -45,6 +45,10 @@ function toolResponse(toolCallId: string, toolName: string, input: string): Stre
     { type: 'tool-input-end', id: toolCallId },
     { type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } } as any },
   ];
+}
+
+function extensions(overrides: Partial<AgentRuntimeExtensions>): AgentRuntimeExtensions {
+  return { ...createEmptyAgentRuntimeExtensions(), ...overrides };
 }
 
 describe('agentLoop (streaming)', () => {
@@ -249,52 +253,52 @@ describe('agentLoop (streaming)', () => {
     expect(events.find(e => e.type === 'tool_progress')).toMatchObject({ type: 'tool_progress', text: 'step 1' });
   });
 
-  test('plugin event hook is called', async () => {
+  test('agent.eventObserver is called', async () => {
     const language = mockLanguage([textResponse('hi')]);
     const received: string[] = [];
-    const plugin = { event: (e: any) => { received.push(e.type); } };
+    const runtime = extensions({ eventObservers: [{ onAgentEvent: (e) => { received.push(e.type); } }] });
     const events = [];
-    for await (const e of agentLoop({ language, model: 'test', messages: [], plugins: [plugin] })) events.push(e);
+    for await (const e of agentLoop({ language, model: 'test', messages: [], extensions: runtime })) events.push(e);
     expect(received).toContain('text');
     expect(received).toContain('done');
   });
 
-  test('plugin system.transform modifies system prompt', async () => {
+  test('agent.systemTransform modifies system prompt', async () => {
     let captured: any;
     const language = { stream: async function* (opts: any) { captured = opts.messages; yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 0 }, outputTokens: { total: 0 } } }; } } as any;
-    const plugin = { 'system.transform': (s: string) => s + ' transformed' };
-    for await (const _ of agentLoop({ language, model: 'test', system: 'base', messages: [], plugins: [plugin] }));
+    const runtime = extensions({ systemTransforms: [{ transformSystem: ({ system }) => ({ system: `${system} transformed` }) }] });
+    for await (const _ of agentLoop({ language, model: 'test', system: 'base', messages: [], extensions: runtime }));
     expect(captured[0]).toMatchObject({
       role: 'system',
       content: [{ type: 'text', text: 'base transformed' }],
     });
   });
 
-  test('plugin messages.transform modifies messages', async () => {
+  test('agent.messagesTransform modifies messages', async () => {
     let captured: any;
     const language = { stream: async function* (opts: any) { captured = opts.messages; yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 0 }, outputTokens: { total: 0 } } }; } } as any;
-    const plugin = { 'messages.transform': (msgs: any[]) => [...msgs, { role: 'user', content: 'injected' }] };
-    for await (const _ of agentLoop({ language, model: 'test', messages: [{ role: 'user', content: 'original' }], plugins: [plugin] }));
+    const runtime = extensions({ messagesTransforms: [{ transformMessages: ({ messages }) => ({ messages: [...messages, { role: 'user', content: 'injected' } as any] }) }] });
+    for await (const _ of agentLoop({ language, model: 'test', messages: [{ role: 'user', content: 'original' }], extensions: runtime }));
     expect(captured.at(-1)).toMatchObject({ content: 'injected' });
   });
 
-  test('plugin tool.execute.before can skip tool', async () => {
+  test('agent.toolBefore can short-circuit tool execution', async () => {
     const language = mockLanguage([toolResponse('c1', 'echo', '{}'), textResponse('done')]);
     const tool = { name: 'echo', inputSchema: {}, execute: async () => ({ success: true, output: 'real' }) };
-    const plugin = { 'tool.execute.before': async () => ({ skip: true, result: 'skipped' }) };
+    const runtime = extensions({ toolBefores: [{ beforeToolExecute: async () => ({ action: 'shortCircuit', result: { success: true, output: 'skipped' } }) }] });
     const events = [];
-    for await (const e of agentLoop({ language, model: 'test', messages: [], tools: [tool], plugins: [plugin] })) events.push(e);
+    for await (const e of agentLoop({ language, model: 'test', messages: [], tools: [tool], extensions: runtime })) events.push(e);
     const r = events.find(e => e.type === 'tool_result') as any;
     expect(r?.result).toBe('skipped');
     expect(r?.isError).toBe(false);
   });
 
-  test('plugin tool.execute.after can modify result', async () => {
+  test('agent.toolAfter can modify result', async () => {
     const language = mockLanguage([toolResponse('c1', 'echo', '{"msg":"hi"}'), textResponse('done')]);
     const tool = { name: 'echo', inputSchema: {}, execute: async (input: any) => ({ success: true, output: input.msg }) };
-    const plugin = { 'tool.execute.after': async (_: any, r: any) => ({ ...r, output: r.output + '!' }) };
+    const runtime = extensions({ toolAfters: [{ afterToolExecute: async ({ result }) => ({ result: { ...result, output: `${result.output}!` } }) }] });
     const events = [];
-    for await (const e of agentLoop({ language, model: 'test', messages: [], tools: [tool], plugins: [plugin] })) events.push(e);
+    for await (const e of agentLoop({ language, model: 'test', messages: [], tools: [tool], extensions: runtime })) events.push(e);
     const r = events.find(e => e.type === 'tool_result') as any;
     expect(r?.result).toBe('hi!');
   });

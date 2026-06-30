@@ -2,9 +2,9 @@ import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import type { Logger } from '@nerax-ai/logger';
 import type { CortxConfig } from './config.js';
-import type { CortxFactoryMap, CortxExtensionType, CortxPluginRegistry } from '@cortx/core';
+import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/core';
 
-export type ProjectPluginRegistry = CortxPluginRegistry & SynaxRegistry;
+export type ProjectPluginRegistry = CortxRegistry & SynaxRegistry;
 
 export async function createLanguageClient(config: CortxConfig, logger?: Logger, registry?: ProjectPluginRegistry) {
   const projectRegistry = registry ?? PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({

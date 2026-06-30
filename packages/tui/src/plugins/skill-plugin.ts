@@ -5,7 +5,7 @@
  * command palette. When the user selects a skill from the palette, the text
  * `/skill-name ` is injected into the input field (not executed as a command).
  * On submit, `handleSubmit` sends it to the agent, where the core skill
- * plugin's `messages.transform` hook expands it.
+ * asset bridge expands it through `agent.messagesTransform`.
  */
 
 import type { SkillInfo } from '@cortx/sdk';

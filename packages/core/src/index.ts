@@ -2,9 +2,10 @@ export { Cortx } from './agent.js';
 export { CortxSession } from './session.js';
 export type { CortxState } from './session.js';
 export { agentLoop } from './loop.js';
-export { AgentLoopController, isPluginConfig } from './types.js';
-export type { CortxConfig, AgentEvent, AgentController, DeliveryMode, PluginConfig, PluginEntry, CortxPluginRegistry, CortxExtensionType, CortxFactoryMap } from './types.js';
+export { AgentLoopController } from './types.js';
+export type { CortxConfig, AgentEvent, AgentController, DeliveryMode, PluginConfig, CortxRegistry, CortxExtensionType, CortxFactoryMap } from './types.js';
 export type {
+  AgentRuntimeExtensions,
   AgentContextOverflowContribution,
   AgentErrorRecoverContribution,
   AgentEventObserverContribution,
@@ -12,7 +13,6 @@ export type {
   AgentSystemTransformContribution,
   AgentToolAfterContribution,
   AgentToolBeforeContribution,
-  CortxPlugin,
   Tool,
   ToolContext,
   ToolResult,
@@ -28,11 +28,12 @@ export {
   AGENT_TOOL_AFTER,
   AGENT_TOOL_BEFORE,
   CORTX_EXTENSION_TYPES,
-  CORTX_LEGACY_PLUGIN,
+  createEmptyAgentRuntimeExtensions,
   defineCortxPlugin,
+  mergeAgentRuntimeExtensions,
 } from '@cortx/sdk';
 export { discoverSkills } from './skill/discover.js';
-export { createSkillPlugin } from './skill/plugin.js';
+export { createSkillExtensions } from './skill/plugin.js';
 export { parseInvocation, substituteArgs } from './skill/substitute.js';
 export { parseSkillFile, parseFrontmatter, SkillParseError } from './skill/parse.js';
 export { renderSkillSummary } from './skill/render.js';

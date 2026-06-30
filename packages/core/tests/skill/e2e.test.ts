@@ -3,7 +3,7 @@ import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { discoverSkills } from '../../src/skill/discover.js';
-import { createSkillPlugin } from '../../src/skill/plugin.js';
+import { createSkillExtensions } from '../../src/skill/plugin.js';
 import type { LanguageMessage } from '@synax-ai/sdk';
 
 let testDir: string;
@@ -37,10 +37,11 @@ describe('E2E: Skill system', () => {
     const skills = await discoverSkills(testDir, {});
     expect(skills.length).toBeGreaterThanOrEqual(2);
 
-    const plugin = createSkillPlugin(skills, testDir);
+    const extensions = createSkillExtensions(skills);
 
     // 1. System prompt injection
-    const system = plugin['system.transform']!('You are an assistant.');
+    const systemResult = await extensions.systemTransforms[0].transformSystem({ system: 'You are an assistant.' });
+    const system = systemResult.system;
     expect(system).toContain('## Available Skills');
     expect(system).toContain('- commit: Create a commit');
     expect(system).toContain('- review: Review code');
@@ -49,7 +50,8 @@ describe('E2E: Skill system', () => {
     const messages: LanguageMessage[] = [
       { role: 'user', content: '/commit fix: typo' } as any,
     ];
-    const transformed = await plugin['messages.transform']!(messages);
+    const transformedResult = await extensions.messagesTransforms[0].transformMessages({ messages });
+    const transformed = transformedResult.messages;
     const content = transformed[0].content;
     const lastContent = typeof content === 'string'
       ? content
@@ -58,7 +60,7 @@ describe('E2E: Skill system', () => {
     expect(lastContent).toContain('fix: for scope'); // $1 substituted with first arg "fix:"
 
     // 3. Skill tool returns full content
-    const tool = plugin.tools![0];
+    const tool = extensions.tools[0];
     const result = await tool.execute({ name: 'review' }, {
       sessionId: 'test',
       workingDirectory: testDir,
@@ -75,8 +77,8 @@ describe('E2E: Skill system', () => {
     });
 
     const skills = await discoverSkills(testDir, {});
-    const plugin = createSkillPlugin(skills, testDir);
-    const tool = plugin.tools![0];
+    const extensions = createSkillExtensions(skills);
+    const tool = extensions.tools[0];
 
     const result = await tool.execute({ name: 'deploy' }, {
       sessionId: 'test',
@@ -94,9 +96,10 @@ describe('E2E: Skill system', () => {
     await createSkillDir('skill-b', 'Skill B', 'Content B');
 
     const skills = await discoverSkills(testDir, {});
-    const plugin = createSkillPlugin(skills, testDir);
+    const extensions = createSkillExtensions(skills);
 
-    const system = plugin['system.transform']!('System');
+    const systemResult = await extensions.systemTransforms[0].transformSystem({ system: 'System' });
+    const system = systemResult.system;
     expect(system).toContain('skill-a');
     expect(system).toContain('skill-b');
   });

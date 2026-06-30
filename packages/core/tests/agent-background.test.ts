@@ -1,6 +1,6 @@
 import { afterEach, describe, test, expect } from 'bun:test';
 import { Cortx } from '../src/index';
-import { CORTX_LEGACY_PLUGIN, type AgentEvent, type CortxFactoryMap, type CortxExtensionType } from '../src/index';
+import { AGENT_EVENT_OBSERVER, type AgentEvent, type CortxFactoryMap, type CortxExtensionType } from '../src/index';
 import type { LanguageClient } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 
@@ -58,14 +58,14 @@ describe('agent tool: run_in_background', () => {
     PluginRegistry.reset();
   });
 
-  test('loads configured cortx plugin entries through the project registry', async () => {
+  test('loads configured agent extensions through the project registry', async () => {
     const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({ appName: 'cortx' });
     let pluginSawDone = false;
     await registry.register({
       manifest: { manifestVersion: 1, id: 'agent-plugin', name: 'agent-plugin', version: '0.0.0', runtime: { main: 'inline' } },
       setup(ctx) {
-        ctx.register(CORTX_LEGACY_PLUGIN, 'event-plugin', () => ({
-          event(event) {
+        ctx.register(AGENT_EVENT_OBSERVER, 'event-plugin', () => ({
+          onAgentEvent(event) {
             if (event.type === 'done') {
               pluginSawDone = true;
               void ctx.storage.set('done', true);
