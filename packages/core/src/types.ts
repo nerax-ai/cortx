@@ -1,8 +1,8 @@
 import type { LanguageMessage } from '@synax-ai/sdk';
-import type { Logger, CortxPlugin, AgentEvent, Tool, ErrorCode } from '@cortx/sdk';
+import type { Logger, CortxPlugin, AgentEvent, Tool, ErrorCode, CortxExtensionType, CortxFactoryMap } from '@cortx/sdk';
 import type { PluginRegistry } from '@nerax-ai/plugin';
 
-export type { CortxPlugin, AgentEvent, ErrorCode };
+export type { CortxPlugin, AgentEvent, ErrorCode, CortxExtensionType, CortxFactoryMap };
 
 export type DeliveryMode = 'all' | 'one-at-a-time';
 
@@ -99,7 +99,7 @@ export interface PluginConfig {
 }
 
 export type PluginEntry = CortxPlugin | PluginConfig;
-export type CortxPluginRegistry = PluginRegistry<'cortx', { cortx: () => CortxPlugin | Promise<CortxPlugin> }>;
+export type CortxPluginRegistry = PluginRegistry<CortxExtensionType, CortxFactoryMap>;
 
 export function isPluginConfig(p: PluginEntry): p is PluginConfig {
   return 'use' in p;

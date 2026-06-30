@@ -50,7 +50,10 @@ describe('E2E: Skill system', () => {
       { role: 'user', content: '/commit fix: typo' } as any,
     ];
     const transformed = await plugin['messages.transform']!(messages);
-    const lastContent = typeof transformed[0].content === 'string' ? transformed[0].content as string : '';
+    const content = transformed[0].content;
+    const lastContent = typeof content === 'string'
+      ? content
+      : content.find((part) => part.type === 'text')?.text ?? '';
     expect(lastContent).toContain('fix: typo');
     expect(lastContent).toContain('fix: for scope'); // $1 substituted with first arg "fix:"
 

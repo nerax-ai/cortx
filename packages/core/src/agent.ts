@@ -1,35 +1,14 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentController, CortxConfig, CortxPlugin, CortxPluginRegistry } from './types.js';
 import type { LanguageMessage, Tool } from '@cortx/sdk';
-import { formatToolSummary, noopLogger } from '@cortx/sdk';
-import { AgentLoopController, isPluginConfig } from './types.js';
-import { PluginRegistry } from '@nerax-ai/plugin';
+import { formatToolSummary } from '@cortx/sdk';
+import { AgentLoopController } from './types.js';
 import { agentLoop } from './loop.js';
 import { discoverSkills } from './skill/discover.js';
 import { createSkillPlugin } from './skill/plugin.js';
 import { SubAgentSessionStore } from './sub-agent-session.js';
 import { createUserMessage } from './message-helpers.js';
-
-function getRegistry(config: CortxConfig): CortxPluginRegistry {
-  if (config.registry) return config.registry;
-  return PluginRegistry.getInstance<'cortx', { cortx: () => CortxPlugin | Promise<CortxPlugin> }>({
-    appName: config.appName ?? 'cortx',
-    logger: config.logger ?? noopLogger,
-  });
-}
-
-async function resolvePlugins(
-  entries: CortxConfig['plugins'],
-  registry: CortxPluginRegistry,
-  namespace: string,
-): Promise<CortxPlugin[]> {
-  if (!entries?.length) return [];
-  return Promise.all(entries.map((e) =>
-    isPluginConfig(e)
-      ? registry.create('cortx', e.use, `${namespace}:${e.use}`, e.options, namespace) as Promise<CortxPlugin>
-      : Promise.resolve(e as CortxPlugin),
-  ));
-}
+import { getRegistry, resolvePlugins } from './plugin-resolver.js';
 
 async function runSubAgentLoop(
   loopOpts: Parameters<typeof agentLoop>[0],
@@ -86,7 +65,7 @@ export class Cortx {
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
     const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace);
+    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace, this.config.logger);
 
     const cwd = this.config.workingDirectory ?? process.cwd();
     const skills = await discoverSkills(cwd, this.config);
@@ -111,7 +90,7 @@ export class Cortx {
 
   async *continue(): AsyncGenerator<AgentEvent> {
     const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace);
+    const plugins = await resolvePlugins(this.config.plugins, this.registry, namespace, this.config.logger);
     const allPlugins = this._skillPlugin ? [this._skillPlugin, ...plugins] : plugins;
     const messages = [...this._messages];
     for await (const event of agentLoop({
@@ -173,7 +152,7 @@ export class Cortx {
         cortx.onAgentEvent?.({ type: 'agent_started', toolCallId, description: desc, isBackground });
 
         const subSystem = `You are a sub-agent. Complete the task using available tools.`;
-        const inheritedPlugins = await resolvePlugins(config.plugins, cortx.registry, `agent-${toolCallId}`);
+        const inheritedPlugins = await resolvePlugins(config.plugins, cortx.registry, `agent-${toolCallId}`, config.logger);
         const loopOpts = {
           language,
           model: config.model,

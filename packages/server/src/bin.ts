@@ -2,7 +2,7 @@ import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
-import type { CortxPluginRegistry } from '@cortx/core';
+import type { CortxFactoryMap, CortxExtensionType, CortxPluginRegistry } from '@cortx/core';
 import { createServer } from './server.js';
 
 interface CortxConfig {
@@ -37,7 +37,7 @@ async function main() {
 
   const apiKey = process.env.CORTX_API_KEY || 'cortx-dev-key';
 
-  const registry = PluginRegistry.getInstance<'cortx', { cortx: () => unknown }>({
+  const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({
     appName: 'cortx',
     logger: log,
   }) as CortxPluginRegistry;

@@ -38,6 +38,20 @@ function formatToolResultOutput(result: ToolResult): string {
   return typeof value === 'string' ? value : JSON.stringify(value ?? '');
 }
 
+function parseToolInput(input: LanguageToolCallContent['input']): Record<string, unknown> {
+  const parsed = typeof input === 'string' ? JSON.parse(input) : input;
+  return (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed as Record<string, unknown> : {};
+}
+
+function parseToolInputError(input: LanguageToolCallContent['input']): string | undefined {
+  try {
+    parseToolInput(input);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 function withBeforeProgress(item: PendingToolExecution, output: ToolExecOutput): ToolExecOutput {
   return {
     ...output,
@@ -63,8 +77,7 @@ async function runToolCall(
   };
 
   try {
-    const parsed = typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input;
-    const input: Record<string, unknown> = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed : {};
+    const input = parseToolInput(tc.input);
     let result = await tool.execute(input, ctx);
 
     let output = formatToolResultOutput(result);
@@ -74,7 +87,7 @@ async function runToolCall(
       output = window === 0 ? output.slice(0, budget) : `${output.slice(0, window)}${marker}${output.slice(-window)}`;
       result = { ...result, output };
     }
-    for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result)) ?? result;
+    for (const p of plugins) result = (await p['tool.execute.after']?.(tc, result, tool)) ?? result;
 
     const finalOutput = formatToolResultOutput(result);
     return { progressMessages, finalOutput, isError: !result.success };
@@ -431,20 +444,93 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       const beforeProgress: string[] = [];
       const ctx: ToolContext = { sessionId, toolCallId: tc.toolCallId, workingDirectory, logger: logger.scope(tc.toolName), reportProgress: (t) => beforeProgress.push(t), askUser: resolvedAskUser ? (q: string) => resolvedAskUser(q, tc.toolCallId) : undefined };
       let skipped = false;
+      let inputError = parseToolInputError(tc.input);
+      let parsedInput = inputError ? {} : parseToolInput(tc.input);
       for (const p of plugins) {
-        const r = await p['tool.execute.before']?.(tc, ctx);
-        if (r?.skip) {
-          const out = r.result ?? 'skipped';
+        let r;
+        const previousInput = tc.input;
+        try {
+          r = await p['tool.execute.before']?.(tc, ctx, tool, parsedInput);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           pendingTools.push({
             tc,
             beforeProgress: [],
-            readyOutput: { progressMessages: beforeProgress, finalOutput: out, isError: false },
+            readyOutput: { progressMessages: beforeProgress, finalOutput: message, isError: true },
+          });
+          skipped = true;
+          break;
+        }
+        if (tc.input !== previousInput && (!r || r.input === undefined)) {
+          const rewriteError = parseToolInputError(tc.input);
+          if (rewriteError) {
+            pendingTools.push({
+              tc,
+              beforeProgress: [],
+              readyOutput: { progressMessages: beforeProgress, finalOutput: rewriteError, isError: true },
+            });
+            skipped = true;
+            break;
+          }
+          inputError = undefined;
+          parsedInput = parseToolInput(tc.input);
+        }
+        if (!r) continue;
+        if (r.action === 'rewrite' && r.input !== undefined) {
+          const rewriteError = parseToolInputError(r.input);
+          if (rewriteError) {
+            pendingTools.push({
+              tc,
+              beforeProgress: [],
+              readyOutput: { progressMessages: beforeProgress, finalOutput: rewriteError, isError: true },
+            });
+            skipped = true;
+            break;
+          }
+          tc.input = r.input;
+          inputError = undefined;
+          parsedInput = parseToolInput(r.input);
+          continue;
+        }
+        if (r.input !== undefined) {
+          const rewriteError = parseToolInputError(r.input);
+          if (rewriteError) {
+            pendingTools.push({
+              tc,
+              beforeProgress: [],
+              readyOutput: { progressMessages: beforeProgress, finalOutput: rewriteError, isError: true },
+            });
+            skipped = true;
+            break;
+          }
+          tc.input = r.input;
+          inputError = undefined;
+          parsedInput = parseToolInput(r.input);
+        }
+        if (r.skip || r.action === 'deny' || r.action === 'shortCircuit') {
+          const out = r.result ?? (r.action === 'deny' ? 'Denied' : 'skipped');
+          pendingTools.push({
+            tc,
+            beforeProgress: [],
+            readyOutput: {
+              progressMessages: beforeProgress,
+              finalOutput: out,
+              isError: r.isError ?? r.action === 'deny',
+            },
           });
           skipped = true;
           break;
         }
       }
       if (skipped) continue;
+      if (inputError) {
+        pendingTools.push({
+          tc,
+          beforeProgress: [],
+          readyOutput: { progressMessages: beforeProgress, finalOutput: inputError, isError: true },
+        });
+        continue;
+      }
 
       pendingTools.push({ tc, tool, beforeProgress });
     }

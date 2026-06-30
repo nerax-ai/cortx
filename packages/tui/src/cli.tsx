@@ -1,7 +1,7 @@
 import { render } from 'ink';
 import { createLogger } from '@nerax-ai/logger';
 import { PluginRegistry } from '@nerax-ai/plugin';
-import { Cortx, CortxSession, type CortxPluginRegistry } from '@cortx/core';
+import { Cortx, CortxSession, type CortxFactoryMap, type CortxExtensionType } from '@cortx/core';
 import { createAllTools } from '@cortx/code';
 import { ensureConfig } from './config.js';
 import { createLanguageClient, type ProjectPluginRegistry } from './language.js';
@@ -16,10 +16,10 @@ const log = createLogger({
 async function main() {
   const config = await ensureConfig();
   const cwd = config.workingDirectory ?? process.cwd();
-  const registry = PluginRegistry.getInstance<'cortx', { cortx: () => unknown }>({
+  const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({
     appName: 'cortx',
     logger: log,
-  }) as CortxPluginRegistry & ProjectPluginRegistry;
+  }) as ProjectPluginRegistry;
   const language = await createLanguageClient(config, log, registry);
 
   // askUser callback: for tool permission prompts, we use a simple readline fallback

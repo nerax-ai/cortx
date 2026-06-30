@@ -5,7 +5,7 @@ import { createLogger, createMemorySink } from '@nerax-ai/logger';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import type { ServerConfig } from '../src/types';
 import type { AgentEvent } from '@cortx/sdk';
-import type { CortxPlugin } from '@cortx/core';
+import { CORTX_LEGACY_PLUGIN, type CortxFactoryMap, type CortxExtensionType } from '@cortx/core';
 
 // Mock language client that yields a simple response
 function mockLanguageClient() {
@@ -197,11 +197,11 @@ describe('SessionManager', () => {
   test('passes configured registry plugins into managed sessions', async () => {
     PluginRegistry.reset();
     let pluginSawDone = false;
-    const registry = PluginRegistry.getInstance<'cortx', { cortx: () => CortxPlugin }>({ appName: 'session-manager-plugin-test' });
+    const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({ appName: 'session-manager-plugin-test' });
     await registry.register({
       manifest: { manifestVersion: 1, id: 'session-plugin', name: 'session-plugin', version: '0.0.0', runtime: { main: 'inline' } },
       setup(ctx) {
-        ctx.register('cortx', 'event-plugin', () => ({
+        ctx.register(CORTX_LEGACY_PLUGIN, 'event-plugin', () => ({
           event(event) {
             if (event.type === 'done') pluginSawDone = true;
           },

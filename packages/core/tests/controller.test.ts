@@ -14,7 +14,7 @@ describe('AgentLoopController', () => {
     c.steer('stop!');
     expect(c.isSteered).toBe(true);
     const msgs = c.consumeSteering();
-    expect(msgs[0]?.content).toBe('stop!');
+    expect(msgs[0]?.content).toEqual([{ type: 'text', text: 'stop!' }]);
     expect(c.isSteered).toBe(false);
   });
 
