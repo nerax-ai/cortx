@@ -160,12 +160,21 @@ function killProcessTreeWindows(pid: number): void {
   }
 }
 
+const ROOT_FIND_PATTERN = /(^|[;&|]\s*)find\s+(?:-\w+\s+)*\/(?:\s|$)/;
+
+export function validateCommandScope(command: string): string | undefined {
+  if (ROOT_FIND_PATTERN.test(command.trim())) {
+    return 'Refusing to run an unbounded filesystem scan from /. Limit the command to the current workspace, for example: find . -name "file" or use the find tool.';
+  }
+  return undefined;
+}
+
 export function createBashTool(cwd: string): Tool {
   const shellConfig = getShellConfiguration();
 
   return {
     name: 'bash',
-    description: `Execute a ${shellConfig.shell} command. Returns stdout and stderr combined. On Windows, uses ${shellConfig.shell} (${shellConfig.executable}).`,
+    description: `Execute a ${shellConfig.shell} command scoped to the current workspace. Returns stdout and stderr combined. Avoid unbounded filesystem scans such as find /. On Windows, uses ${shellConfig.shell} (${shellConfig.executable}).`,
     sideEffects: 'destructive',
     inputSchema: {
       type: 'object',
@@ -182,6 +191,11 @@ export function createBashTool(cwd: string): Tool {
           success: false,
           error: 'Parameter "command" is required and must be a non-empty string.',
         };
+      }
+
+      const scopeError = validateCommandScope(command);
+      if (scopeError) {
+        return { success: false, error: scopeError };
       }
 
       const timeoutMs = timeout ? (timeout as number) * 1000 : 120000; // Default 2 minutes

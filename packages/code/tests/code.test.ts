@@ -146,6 +146,21 @@ describe('createBashTool', () => {
     expect(result.error).toContain('required');
   });
 
+  test('rejects unbounded root filesystem scans', async () => {
+    const tool = createBashTool(tmpDir);
+    const result = await tool.execute({ command: 'find / -name "resolve-base.sh" -path "*references*"' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('unbounded filesystem scan');
+  });
+
+  test('allows workspace-scoped find commands', async () => {
+    const tool = createBashTool(tmpDir);
+    writeFileSync(join(tmpDir, 'resolve-base.sh'), 'ok');
+    const result = await tool.execute({ command: 'find . -name "resolve-base.sh"' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('resolve-base.sh');
+  });
+
   test('handles timeout', async () => {
     const tool = createBashTool(tmpDir);
     const result = await tool.execute({ command: 'sleep 5', timeout: 1 }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
