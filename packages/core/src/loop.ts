@@ -253,7 +253,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
         }
       }
 
-      const isToolUse = finishReason === 'tool-calls';
+      const isToolUse = toolCalls.length > 0;
       logger.info(
         `[loop] iter=${iteration} finishReason=${finishReason} isToolUse=${isToolUse} toolCalls=${toolCalls.length} textLen=${textBuffer.length}`,
       );

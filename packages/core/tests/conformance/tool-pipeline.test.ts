@@ -4,6 +4,7 @@ import { agentLoop } from '../../src/index.js';
 import { AgentLoopController } from '../../src/types.js';
 import {
   collectEvents,
+  lengthToolResponse,
   mockLanguage,
   multiToolResponse,
   runtimeExtensions,
@@ -159,6 +160,42 @@ describe('conformance: tool pipeline', () => {
       { id: 'c1', result: 'Unknown tool: missingTool', isError: true },
       { id: 'c2', result: 'tool exploded', isError: true },
     ]);
+  });
+
+  test('complete tool calls are executed even when the stream finish reason is length', async () => {
+    const executed: Record<string, unknown>[] = [];
+    const events = await collectEvents({
+      language: mockLanguage([
+        lengthToolResponse([
+          { id: 'c1', name: 'echo', input: '{"msg":"from length finish"}' },
+        ]),
+        textResponse('done'),
+      ]),
+      model: 'test',
+      messages: [{ role: 'user', content: 'run' }],
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {},
+          execute: async (input) => {
+            executed.push(input);
+            return { success: true, output: input.msg };
+          },
+        },
+      ],
+    });
+
+    expect(executed).toEqual([{ msg: 'from length finish' }]);
+    expect(events.find((event) => event.type === 'tool_use')).toMatchObject({
+      type: 'tool_use',
+      toolCall: { toolCallId: 'c1', toolName: 'echo' },
+    });
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      toolCallId: 'c1',
+      result: 'from length finish',
+      isError: false,
+    });
   });
 
   test('every yielded tool_result pairs with exactly one prior tool_use in model order', async () => {

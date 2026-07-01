@@ -56,6 +56,15 @@ export function multiToolResponse(calls: { id: string; name: string; input: stri
   return parts;
 }
 
+export function lengthToolResponse(calls: { id: string; name: string; input: string }[]): StreamParts {
+  const parts = multiToolResponse(calls);
+  return parts.map((part) =>
+    part.type === 'finish'
+      ? { ...part, finishReason: 'length' as const }
+      : part,
+  );
+}
+
 export function mockLanguage(
   responses: StreamParts[],
   onStream?: (opts: { messages: LanguageMessage[]; tools?: unknown[] }) => void,
