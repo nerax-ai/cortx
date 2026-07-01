@@ -513,9 +513,9 @@ function renderBlock(block: MarkdownBlock, index: number): React.ReactNode {
         lines.push(...block.content.split('\n'));
       }
       return (
-        <Box key={`unclosed-${index}`} flexDirection="column">
+        <Box key={`unclosed-${index}`} flexDirection="column" marginLeft={1}>
           {lines.map((line, i) => (
-            <Text key={i}>{line || ' '}</Text>
+            <Text key={i} dimColor>{line || ' '}</Text>
           ))}
         </Box>
       );
@@ -595,8 +595,8 @@ function CodeBlockWithHighlight({ language, code }: { language: string; code: st
   const highlightedLines = highlighted.split('\n');
 
   return (
-    <Box flexDirection="column" marginLeft={1}>
-      <Box borderStyle="round" borderColor="gray" flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" marginTop={1} marginBottom={1} marginLeft={1}>
+      <Box borderStyle="single" borderColor="gray" flexDirection="column" paddingX={1}>
         {language && (
           <Text dimColor>{language}</Text>
         )}

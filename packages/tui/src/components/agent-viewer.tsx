@@ -16,10 +16,34 @@ export interface AgentViewerProps {
 
 function statusLabel(status: SubAgentSession['status']): { text: string; color: string } {
   switch (status) {
-    case 'running': return { text: 'running', color: colors.toolPending };
-    case 'completed': return { text: 'completed', color: colors.toolSuccess };
+    case 'running': return { text: 'working', color: colors.toolPending };
+    case 'completed': return { text: 'done', color: colors.toolSuccess };
     case 'error': return { text: 'error', color: colors.toolError };
   }
+}
+
+export function agentSessionIds(agentSessions: ReadonlyMap<string, AgentSessionSummary>): string[] {
+  return [...agentSessions.values()]
+    .sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.toolCallId.localeCompare(b.toolCallId))
+    .map((session) => session.toolCallId);
+}
+
+export function adjacentAgentSessionId(
+  ids: string[],
+  currentId: string,
+  direction: 'previous' | 'next',
+): string | null {
+  if (ids.length === 0) return null;
+  const currentIndex = ids.indexOf(currentId);
+  const startIndex = currentIndex === -1 ? 0 : currentIndex;
+  const offset = direction === 'next' ? 1 : -1;
+  return ids[(startIndex + offset + ids.length) % ids.length];
+}
+
+function statusRank(status: AgentSessionSummary['status']): number {
+  if (status === 'running') return 0;
+  if (status === 'error') return 1;
+  return 2;
 }
 
 export function AgentViewer({ store, agentSessionsStore, onExit }: AgentViewerProps) {
@@ -39,6 +63,7 @@ export function AgentViewer({ store, agentSessionsStore, onExit }: AgentViewerPr
 
   const summary = activeAgentView ? agentSessions.get(activeAgentView) : undefined;
   const session = activeAgentView ? agentSessionsStore.get(activeAgentView) : undefined;
+  const sessionIds = agentSessionIds(agentSessions);
 
   // Poll for updates when viewing a running agent
   useEffect(() => {
@@ -51,9 +76,18 @@ export function AgentViewer({ store, agentSessionsStore, onExit }: AgentViewerPr
 
   useInput((input, key) => {
     if (key.escape) onExit();
+    if (!activeAgentView) return;
+    if (key.rightArrow || input === 'n') {
+      const next = adjacentAgentSessionId(sessionIds, activeAgentView, 'next');
+      if (next) store.setActiveAgentView(next);
+    }
+    if (key.leftArrow || input === 'p') {
+      const previous = adjacentAgentSessionId(sessionIds, activeAgentView, 'previous');
+      if (previous) store.setActiveAgentView(previous);
+    }
   });
 
-  if (!summary || !session) {
+  if (!activeAgentView || !summary || !session) {
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text dimColor>No agent data available. Press Escape to return.</Text>
@@ -61,6 +95,7 @@ export function AgentViewer({ store, agentSessionsStore, onExit }: AgentViewerPr
     );
   }
 
+  const activeId = activeAgentView;
   const { text: statusText, color: statusColor } = statusLabel(summary.status);
   const elapsed = session.completedAt
     ? Math.round((session.completedAt - session.startedAt) / 1000)
@@ -93,16 +128,23 @@ export function AgentViewer({ store, agentSessionsStore, onExit }: AgentViewerPr
       {/* Header bar */}
       <Box paddingX={1} borderStyle="single" borderColor={colors.border} flexDirection="column">
         <Box>
-          <Text bold color="cyan">Agent:</Text>
+          <Text bold color="cyan">Sub-agent</Text>
           <Text> {summary.description}</Text>
         </Box>
         <Box>
-          <Text dimColor>Status: </Text>
           <Text color={statusColor}>{statusText}</Text>
-          <Text dimColor>{' | '}{elapsed}s | {session.iterations} iter | {session.toolCallCount} tools</Text>
+          <Text dimColor>{'  |  '}{elapsed}s  |  {session.iterations} iter  |  {session.toolCallCount} tools</Text>
           {summary.isBackground && <Text color="magenta"> [background]</Text>}
-          <Text dimColor>{' | Esc to return'}</Text>
+          {sessionIds.length > 1 && <Text dimColor>{'  |  '}agent {sessionIds.indexOf(activeId) + 1}/{sessionIds.length}</Text>}
+          <Text dimColor>{'  |  Esc return'}</Text>
+          {sessionIds.length > 1 && <Text dimColor>{'  |  Left/Right switch'}</Text>}
         </Box>
+        {summary.progress && (
+          <Box>
+            <Text dimColor>Progress: </Text>
+            <Text>{summary.progress}</Text>
+          </Box>
+        )}
       </Box>
 
       {/* Agent text output */}

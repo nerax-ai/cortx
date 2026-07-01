@@ -16,9 +16,11 @@ export const colors = {
   activityError: 'red',
   activityInterrupt: 'red',
   border: 'gray',
+  borderActive: 'cyan',
+  muted: 'gray',
   prompt: 'green',
   link: 'cyan',
   diffAdd: 'green',
   diffRemove: 'red',
-  thinking: 'yellow',
+  thinking: 'gray',
 } as const;

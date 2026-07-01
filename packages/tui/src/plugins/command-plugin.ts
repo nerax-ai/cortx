@@ -6,6 +6,7 @@
  *   /clear  — clear the output and reset state
  *   /config — show current configuration
  *   /help   — list all available commands
+ *   /steer  — steer the active run
  */
 
 import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
@@ -15,6 +16,7 @@ import { TUI_COMMAND } from '../types/tui-plugin.js';
 export interface CommandPluginDeps {
   exit: () => void;
   clear: () => void;
+  steer: (message: string) => void;
   getConfig: () => Record<string, unknown>;
   /** Returns all registered commands (for /help). */
   getCommands?: () => CommandDef[];
@@ -27,6 +29,7 @@ export interface CommandPluginDeps {
 export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
   const exit = deps?.exit ?? (() => {});
   const clear = deps?.clear ?? (() => {});
+  const steer = deps?.steer ?? (() => {});
   const getConfig = deps?.getConfig ?? (() => ({}));
   const getCommands = deps?.getCommands;
 
@@ -76,6 +79,16 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
           const config = getConfig();
           // For now, just log it. In the full TUI this would render in output.
           ctx.logger.info(JSON.stringify(config, null, 2));
+        },
+      }));
+
+      // /steer
+      ctx.register(TUI_COMMAND, 'steer', (_ctx) => ({
+        name: '/steer',
+        description: 'Steer the active run with a new instruction',
+        handler: async (args, _cmdCtx) => {
+          const message = args.trim();
+          if (message) steer(message);
         },
       }));
 

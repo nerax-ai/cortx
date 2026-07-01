@@ -310,7 +310,7 @@ describe('TuiRegistry', () => {
 
   // --- Integration: load built-in command plugin -> /help lists commands ---
 
-  test('built-in command plugin registers /exit, /quit, /clear, /config, /help', async () => {
+  test('built-in command plugin registers core commands', async () => {
     const registry = new TuiRegistry();
     await registry.init();
 
@@ -322,7 +322,8 @@ describe('TuiRegistry', () => {
     expect(names).toContain('/clear');
     expect(names).toContain('/config');
     expect(names).toContain('/help');
-    expect(names.length).toBe(5);
+    expect(names).toContain('/steer');
+    expect(names.length).toBe(6);
   });
 
   // --- Integration: built-in /exit command calls the exit callback ---
@@ -357,6 +358,20 @@ describe('TuiRegistry', () => {
     });
 
     expect(clearFn).toHaveBeenCalledTimes(1);
+  });
+
+  test('built-in /steer command invokes steer callback with args', async () => {
+    const steerFn = mock(() => {});
+    const registry = createCleanRegistry();
+    const { commandPlugin } = await import('../plugins/command-plugin.js');
+    await registry.registerPlugin(commandPlugin({ steer: steerFn }));
+
+    await registry.executeCommand('/steer', 'use current file only', {
+      args: 'use current file only',
+      abort: () => {},
+    });
+
+    expect(steerFn).toHaveBeenCalledWith('use current file only');
   });
 
   // --- Edge case: getCommands when factory throws ---

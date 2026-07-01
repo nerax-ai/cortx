@@ -2,7 +2,7 @@ import { useState, useSyncExternalStore, useCallback, useMemo } from 'react';
 import { Box, useInput } from 'ink';
 import { OutputRegion } from './output-region.js';
 import { InputArea } from './input-area.js';
-import { ToolRegion } from './tool-region.js';
+import { ToolRegion, firstViewableAgentToolCallId } from './tool-region.js';
 import { AgentViewer } from './agent-viewer.js';
 import { CommandPalette, buildItems, filterItems, moveSelection } from './command-palette.js';
 import { SessionPicker } from './session-picker.js';
@@ -25,6 +25,7 @@ export interface AppShellProps {
   skills: SkillItem[];
   agentSessionsStore: SubAgentSessionStore;
   onSubmit: (value: string) => void;
+  onSteer?: (value: string) => void;
   onAbort?: () => void;
   onForceExit?: () => void;
   sessionPickerOpen?: boolean;
@@ -38,9 +39,11 @@ export function AppShell({
   registry,
   registryReady = true,
   model,
+  cwd,
   skills,
   agentSessionsStore,
   onSubmit,
+  onSteer,
   onAbort,
   onForceExit,
   sessionPickerOpen = false,
@@ -115,16 +118,12 @@ export function AppShell({
     if (input === 'T' && key.shift && !key.ctrl) {
       setToolExpanded((prev) => !prev);
     }
-    // 'a' key opens agent viewer for the first completed agent in expanded tool region
+    // 'a' opens agent viewer for the first visible agent in expanded tool region.
     if (input === 'a' && !key.ctrl && toolExpanded && status === 'idle') {
       const toolCalls = store.getState().toolCalls;
       const agentSessions = store.getState().agentSessions;
-      for (const [id, entry] of toolCalls) {
-        if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.has(id)) {
-          store.setActiveAgentView(id);
-          return;
-        }
-      }
+      const id = firstViewableAgentToolCallId(toolCalls, agentSessions);
+      if (id) store.setActiveAgentView(id);
     }
   });
 
@@ -150,6 +149,7 @@ export function AppShell({
         />
         <InputArea
           onSubmit={onSubmit}
+          onSteer={onSteer}
           isRunning={status === 'running'}
           onAbort={onAbort}
           onForceExit={onForceExit}
@@ -162,6 +162,8 @@ export function AppShell({
           paletteOpen={paletteOpen}
           store={store}
           model={model}
+          cwd={cwd}
+          registryReady={registryReady}
           injectedValue={injectedValue}
         />
       </Box>
@@ -175,6 +177,7 @@ export function AppShell({
       <ToolRegion store={store} collapsed={!toolExpanded} onViewAgent={(id) => store.setActiveAgentView(id)} />
       <InputArea
         onSubmit={onSubmit}
+        onSteer={onSteer}
         isRunning={status === 'running'}
         onAbort={onAbort}
         onForceExit={onForceExit}
@@ -187,6 +190,8 @@ export function AppShell({
         paletteOpen={paletteOpen}
         store={store}
         model={model}
+        cwd={cwd}
+        registryReady={registryReady}
         injectedValue={injectedValue}
       />
 

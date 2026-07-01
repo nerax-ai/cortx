@@ -46,8 +46,7 @@ async function main() {
 
   const session = new CortxSession(agent);
 
-  // Render Ink TUI (non-fullscreen with patchConsole so console.log output
-  // appears above the Ink frame — gives native terminal scrollback)
+  // Render the whole conversation inside Ink so output stays between the header and composer.
   const { waitUntilExit } = render(
     <App session={session} model={config.model} cwd={cwd} logger={log.scope('tui')} />,
     { exitOnCtrlC: false, patchConsole: true },

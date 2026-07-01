@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useSyncExternalStore, useCallback } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, usePaste, useWindowSize } from 'ink';
 import { spawnSync } from 'child_process';
 import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -7,6 +7,7 @@ import { tmpdir } from 'os';
 import type { TuiStore } from '../store.js';
 import type { TuiState } from '../types/tui-state.js';
 import { colors } from '../theme.js';
+import { headerSegments, statusBadge } from './session-header.js';
 
 // Stable module-level selectors to avoid Map key fragmentation in TuiStore
 const selectTokenUsage = (s: TuiState) => s.tokenUsage;
@@ -14,9 +15,12 @@ const selectIteration = (s: TuiState) => s.iteration;
 const selectElapsed = (s: TuiState) => s.elapsed;
 const selectTotalElapsed = (s: TuiState) => s.totalElapsed;
 const selectToolCalls = (s: TuiState) => s.toolCalls;
+const selectStatus = (s: TuiState) => s.status;
+const selectSessionId = (s: TuiState) => s.sessionId;
 
 export interface InputAreaProps {
   onSubmit: (value: string) => void;
+  onSteer?: (value: string) => void;
   isRunning: boolean;
   onAbort?: () => void;
   onForceExit?: () => void;
@@ -29,6 +33,8 @@ export interface InputAreaProps {
   paletteOpen?: boolean;
   store: TuiStore;
   model: string;
+  cwd: string;
+  registryReady?: boolean;
   /** When set, replaces the input field value (used after skill selection from palette). */
   injectedValue?: string;
 }
@@ -84,6 +90,18 @@ export function insertText(value: string, text: string): string {
   return value + text;
 }
 
+export function separator(width: number): string {
+  return '─'.repeat(Math.max(24, Math.min(120, width)));
+}
+
+export function composerBorderColor(status: string, paletteOpen: boolean): string {
+  if (paletteOpen) return colors.borderActive;
+  if (status === 'error') return colors.activityError;
+  if (status === 'interrupting') return colors.activityInterrupt;
+  if (status === 'running' || status === 'awaiting_user') return colors.borderActive;
+  return colors.border;
+}
+
 export function handleBackspace(value: string): string {
   if (value.length === 0) return value;
   return value.slice(0, -1);
@@ -105,6 +123,22 @@ export function resolveCtrlCAction(
     default:
       return 'noop';
   }
+}
+
+export function helpText(isRunning: boolean, paletteOpen: boolean, width = 80): string {
+  if (paletteOpen) return 'Enter select | Esc close | type to filter';
+  if (isRunning) return 'Enter follow-up  ·  Ctrl+S steer  ·  Ctrl+C interrupt';
+  if (width < 88) return 'Enter send  ·  Ctrl+S steer  ·  / commands  ·  Ctrl+C exit';
+  return 'Enter send  ·  Shift+Enter newline  ·  Ctrl+S steer  ·  Ctrl+E editor  ·  / commands';
+}
+
+export function visibleInputLines(value: string, maxLines = 4): { lines: string[]; hiddenCount: number } {
+  const lines = value.split('\n');
+  if (lines.length <= maxLines) return { lines, hiddenCount: 0 };
+  return {
+    lines: lines.slice(lines.length - maxLines),
+    hiddenCount: lines.length - maxLines,
+  };
 }
 
 export function openInEditor(initialContent: string): string | null {
@@ -139,6 +173,7 @@ export function openInEditor(initialContent: string): string | null {
 // ---------------------------------------------------------------------------
 
 type ActivityState = 'idle' | 'thinking' | 'executing' | 'interrupting' | 'error';
+type InputMode = 'chat' | 'steer';
 
 function deriveActivity(
   status: string,
@@ -153,75 +188,49 @@ function deriveActivity(
   return 'idle';
 }
 
-function ActivityIndicator({
-  activity,
-  model,
-  iteration,
-  elapsed,
-  totalElapsed,
-  tokenUsage,
-  toolCalls,
-}: {
-  activity: ActivityState;
-  model: string;
-  iteration: number;
-  elapsed: number;
-  totalElapsed: number;
-  tokenUsage: { inputTokens: number; outputTokens: number };
-  toolCalls: Map<string, { status: string; toolName: string }>;
-}) {
-  const parts: { key: string; node: React.ReactNode }[] = [];
-
+export function activityLabel(
+  activity: ActivityState,
+  {
+    toolCalls,
+  }: {
+    toolCalls: Map<string, { status: string; toolName: string }>;
+  },
+): string {
   switch (activity) {
     case 'thinking':
-      parts.push({ key: 'status', node: <Text color={colors.activityThinking} bold>{'⏳'} Thinking...</Text> });
-      break;
+      return 'thinking';
     case 'executing': {
       const latestTool = [...toolCalls.values()].find((e) => e.status === 'pending');
       const name = latestTool?.toolName ?? 'tool';
-      parts.push({ key: 'status', node: <Text color={colors.activityExecuting} bold>{'⚙'} {name}</Text> });
-      break;
+      return `running ${name}`;
     }
     case 'interrupting':
-      parts.push({ key: 'status', node: <Text color={colors.activityInterrupt} bold>{'⏹'} Interrupting...</Text> });
-      break;
+      return 'interrupting';
     case 'error':
-      parts.push({ key: 'status', node: <Text color={colors.activityError} bold>{'✗'} Error</Text> });
-      break;
+      return 'error';
     default:
-      parts.push({ key: 'status', node: <Text color={colors.activityIdle}>{'✓'} Ready</Text> });
-      break;
+      return 'ready';
   }
+}
 
-  parts.push({ key: 'model', node: <Text dimColor>{' │ '} {model}</Text> });
-
-  if (iteration > 0 && activity !== 'idle') {
-    parts.push({ key: 'iter', node: <Text dimColor>{' │ '} iter: {iteration}</Text> });
+function activityColor(activity: ActivityState, fallback: string): string {
+  switch (activity) {
+    case 'thinking':
+      return colors.activityThinking;
+    case 'executing':
+      return colors.activityExecuting;
+    case 'interrupting':
+      return colors.activityInterrupt;
+    case 'error':
+      return colors.activityError;
+    default:
+      return fallback;
   }
-
-  // Running: show per-turn elapsed + cumulative total
-  if (elapsed > 0 && activity !== 'idle') {
-    const total = totalElapsed + elapsed;
-    parts.push({ key: 'elapsed', node: <Text dimColor>{' │ '} {elapsed}s/{total}s</Text> });
-  }
-
-  // Idle: show total time and token usage
-  if (activity === 'idle') {
-    if (tokenUsage.inputTokens > 0 || tokenUsage.outputTokens > 0) {
-      const inK = tokenUsage.inputTokens >= 1000 ? `${(tokenUsage.inputTokens / 1000).toFixed(1)}k` : String(tokenUsage.inputTokens);
-      const outK = tokenUsage.outputTokens >= 1000 ? `${(tokenUsage.outputTokens / 1000).toFixed(1)}k` : String(tokenUsage.outputTokens);
-      parts.push({ key: 'tokens', node: <Text dimColor>{' │ '} {inK}+{outK} tokens</Text> });
-    }
-    if (totalElapsed > 0) {
-      parts.push({ key: 'total', node: <Text dimColor>{' │ '} {totalElapsed}s</Text> });
-    }
-  }
-
-  return <Box>{parts.map((p) => <Box key={p.key}>{p.node}</Box>)}</Box>;
 }
 
 export function InputArea({
   onSubmit,
+  onSteer,
   isRunning,
   onAbort,
   onForceExit,
@@ -234,9 +243,13 @@ export function InputArea({
   paletteOpen = false,
   store,
   model,
+  cwd,
+  registryReady = true,
   injectedValue,
 }: InputAreaProps) {
+  const { columns } = useWindowSize();
   const [value, setValue] = useState('');
+  const [inputMode, setInputMode] = useState<InputMode>('chat');
   const injectedRef = useRef<string>('');
 
   // Inject value from external source (e.g. skill selection from palette)
@@ -276,6 +289,24 @@ export function InputArea({
   const toolCalls = useSyncExternalStore(
     useCallback((listener) => store.select(selectToolCalls).subscribe(listener), [store]),
     useCallback(() => store.select(selectToolCalls).get(), [store]),
+  );
+
+  const storeStatus = useSyncExternalStore(
+    useCallback((listener) => store.select(selectStatus).subscribe(listener), [store]),
+    useCallback(() => store.select(selectStatus).get(), [store]),
+  );
+
+  const sessionId = useSyncExternalStore(
+    useCallback((listener) => store.select(selectSessionId).subscribe(listener), [store]),
+    useCallback(() => store.select(selectSessionId).get(), [store]),
+  );
+
+  usePaste(
+    (text) => {
+      if (overlayActive) return;
+      setValue((prev) => insertText(prev, text));
+    },
+    { isActive: !paletteOpen },
   );
 
   // Sync status with isRunning prop
@@ -349,6 +380,11 @@ export function InputArea({
       return;
     }
 
+    if (input === 's' && key.ctrl) {
+      setInputMode((prev) => (prev === 'steer' ? 'chat' : 'steer'));
+      return;
+    }
+
     if (input === 'c' && key.ctrl) {
       const action = resolveCtrlCAction(status, value);
       switch (action) {
@@ -375,7 +411,12 @@ export function InputArea({
       if (trimmed) {
         historyRef.current = pushHistory(historyRef.current, trimmed);
         historyIndexRef.current = -1;
-        onSubmit(trimmed);
+        if (inputMode === 'steer') {
+          onSteer?.(trimmed);
+          setInputMode('chat');
+        } else {
+          onSubmit(trimmed);
+        }
         setValue('');
       }
       return;
@@ -393,7 +434,12 @@ export function InputArea({
         if (trimmed) {
           historyRef.current = pushHistory(historyRef.current, trimmed);
           historyIndexRef.current = -1;
-          onSubmit(trimmed);
+          if (inputMode === 'steer') {
+            onSteer?.(trimmed);
+            setInputMode('chat');
+          } else {
+            onSubmit(trimmed);
+          }
           setValue('');
         } else {
           setValue('');
@@ -408,27 +454,18 @@ export function InputArea({
     }
 
     if (key.upArrow) {
-      const cursor = getCursorPosition(value);
-      if (cursor.row === 0 && cursor.col === 0) {
-        const result = navigateHistory(historyRef.current, historyIndexRef.current, 'up');
-        historyRef.current = result.history;
-        historyIndexRef.current = result.historyIndex;
-        setValue(result.value);
-      }
+      const result = navigateHistory(historyRef.current, historyIndexRef.current, 'up');
+      historyRef.current = result.history;
+      historyIndexRef.current = result.historyIndex;
+      setValue(result.value);
       return;
     }
 
     if (key.downArrow) {
-      const cursor = getCursorPosition(value);
-      const lines = value.split('\n');
-      const lastLine = lines[lines.length - 1];
-      const atEnd = cursor.row === lines.length - 1 && cursor.col === lastLine.length;
-      if (atEnd) {
-        const result = navigateHistory(historyRef.current, historyIndexRef.current, 'down');
-        historyRef.current = result.history;
-        historyIndexRef.current = result.historyIndex;
-        setValue(result.value);
-      }
+      const result = navigateHistory(historyRef.current, historyIndexRef.current, 'down');
+      historyRef.current = result.history;
+      historyIndexRef.current = result.historyIndex;
+      setValue(result.value);
       return;
     }
 
@@ -442,36 +479,58 @@ export function InputArea({
     }
   });
 
-  const activity = deriveActivity(status, toolCalls);
+  const effectiveStatus = status === 'interrupting' ? 'interrupting' : storeStatus;
+  const activity = deriveActivity(effectiveStatus, toolCalls);
 
-  const prompt = isRunning ? 'Follow-up > ' : '> ';
-  const lines = value.split('\n');
+  const prompt = inputMode === 'steer' ? 'steer' : isRunning ? 'follow-up' : 'cortx';
+  const { lines, hiddenCount } = visibleInputLines(value, 4);
+  const statusSummary = statusBadge(effectiveStatus, registryReady);
+  const activitySummary = effectiveStatus === 'running'
+    ? {
+      label: activityLabel(activity, { toolCalls }),
+      color: activityColor(activity, statusSummary.color),
+    }
+    : statusSummary;
+  const contextSegments = headerSegments({
+    model,
+    cwd,
+    sessionId,
+    iteration,
+    tokenUsage,
+    totalElapsed: totalElapsed + (effectiveStatus === 'running' ? elapsed : 0),
+  });
 
   return (
-    <Box flexDirection="column">
-      {/* Activity indicator line */}
-      <Box>
-        <ActivityIndicator activity={activity} model={model} iteration={iteration} elapsed={elapsed} totalElapsed={totalElapsed} tokenUsage={tokenUsage} toolCalls={toolCalls} />
-      </Box>
-
-      {/* Separator */}
-      <Box>
-        <Text color={colors.border}>{'\u2500'.repeat(80)}</Text>
-      </Box>
-
-      {/* Input lines */}
-      <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" marginTop={1}>
+      <Box
+        borderStyle="round"
+        borderColor={inputMode === 'steer' ? colors.activityThinking : composerBorderColor(effectiveStatus, paletteOpen)}
+        paddingX={1}
+        flexDirection="column"
+      >
+        <Box>
+          <Text bold color="cyan">Cortx</Text>
+          <Text dimColor>{' · '}</Text>
+          <Text color={activitySummary.color} bold>{activitySummary.label}</Text>
+          {contextSegments.length > 0 && (
+            <Text dimColor>{' · '}{contextSegments.join(' · ')}</Text>
+          )}
+        </Box>
+        {hiddenCount > 0 && (
+          <Box>
+            <Text dimColor>{`  ... ${hiddenCount} earlier input line${hiddenCount === 1 ? '' : 's'}`}</Text>
+          </Box>
+        )}
         {lines.map((line, i) => (
           <Box key={i}>
-            {i === 0 && (
-              <Text color={colors.prompt} bold>
-                {prompt}
-              </Text>
+            {i === 0 && hiddenCount === 0 && (
+              <>
+                <Text color={colors.prompt} bold>{prompt}</Text>
+                <Text dimColor>{' › '}</Text>
+              </>
             )}
-            {i > 0 && (
-              <Text>
-                {' '.repeat(prompt.length)}
-              </Text>
+            {(i > 0 || hiddenCount > 0) && (
+              <Text dimColor>{' '.repeat(prompt.length + 3)}</Text>
             )}
             <Text>{line}</Text>
             {i === lines.length - 1 && <Text dimColor>_</Text>}
@@ -479,17 +538,14 @@ export function InputArea({
         ))}
         {lines.length === 0 && (
           <Box>
-            <Text color="green" bold>
-              {prompt}
-            </Text>
+            <Text color={colors.prompt} bold>{prompt}</Text>
+            <Text dimColor>{' › '}</Text>
             <Text dimColor>_</Text>
           </Box>
         )}
-
-        {/* Help line */}
-        <Text dimColor>
-          Ctrl+K palette {' \u2502 '} Ctrl+E editor {' \u2502 '} Ctrl+C cancel
-        </Text>
+      </Box>
+      <Box paddingX={1}>
+        <Text dimColor>{helpText(isRunning, paletteOpen, columns)}</Text>
       </Box>
     </Box>
   );

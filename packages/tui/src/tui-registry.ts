@@ -120,8 +120,13 @@ export class TuiRegistry {
   private async createExtensions<T extends TuiExtensionType>(type: T): Promise<Array<ExtensionValue<T>>> {
     const values: Array<ExtensionValue<T>> = [];
     for (const ext of this.registry.listExtensions(type)) {
+      const instanceId = `tui:${type}:${ext.fullId}`;
       try {
-        values.push(await this.registry.create(type, ext.fullId, `${type}:${ext.fullId}`, {}, 'tui') as ExtensionValue<T>);
+        const existing = this.registry.getInstance(instanceId);
+        const value = existing
+          ? await this.registry.reinitialize(instanceId)
+          : await this.registry.create(type, ext.fullId, instanceId, {}, 'tui');
+        values.push(value as ExtensionValue<T>);
       } catch (err) {
         this.logError(`create(${ext.fullId})`, err);
       }

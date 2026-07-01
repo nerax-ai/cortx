@@ -219,7 +219,7 @@ describe('Integration: plugin commands in palette', () => {
     });
 
     const commands = registry.getCommands();
-    expect(commands.length).toBe(6); // 5 built-in + 1 custom
+    expect(commands.length).toBe(7); // 6 built-in + 1 custom
     expect(commands.some((c) => c.name === '/custom')).toBe(true);
 
     // Verify it appears in palette filtering
@@ -257,6 +257,7 @@ describe('Integration: plugin commands in palette', () => {
     expect(helpText).toContain('/exit');
     expect(helpText).toContain('/clear');
     expect(helpText).toContain('/help');
+    expect(helpText).toContain('/steer');
   });
 });
 

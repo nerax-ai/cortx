@@ -15,7 +15,6 @@
 import type { AgentEvent } from '@cortx/sdk';
 import type { TuiStore } from './store.js';
 import type { TuiRegistry } from './tui-registry.js';
-import { formatTurn, formatSeparator } from './output-writer.js';
 
 /** Region identifiers for event routing. */
 export type RegionTarget = 'output' | 'tool' | 'status';
@@ -54,58 +53,17 @@ export function eventToRegion(eventType: AgentEvent['type']): RegionTarget {
 }
 
 /**
- * Flush completed turns from the store to the terminal.
- *
- * ALL output is batched into a SINGLE console.log call to prevent Ink's
- * patchConsole from clearing/restoring the frame multiple times, which
- * corrupts frame height tracking and erases previous content.
- *
- * A nextTick deferral ensures Ink has finished any pending re-render before
- * we write, so the cursor position tracking stays accurate.
- */
-let flushScheduled = false;
-
-function scheduleFlush(store: TuiStore): void {
-  if (flushScheduled) return;
-  flushScheduled = true;
-  process.nextTick(() => {
-    flushScheduled = false;
-    const turns = store.getState().messages.turns;
-    if (!turns.length) return;
-
-    const parts: string[] = [];
-    for (const turn of turns) {
-      parts.push(formatSeparator());
-      parts.push(formatTurn(turn));
-    }
-
-    store.clearFlushedTurns();
-    console.log(parts.join('\n'));
-  });
-}
-
-/**
  * Process an AgentEvent through the renderer pipeline.
- *
- * @param flushToTerminal When true, completed turns are written to the terminal
- *   via console.log and cleared from the store (non-fullscreen mode). When false,
- *   turns are kept in the store for in-component rendering (testing/fullscreen).
  */
 export function processEvent(
   event: AgentEvent,
   store: TuiStore,
   registry?: TuiRegistry,
-  flushToTerminal: boolean = false,
 ): unknown[] {
   // 1. Dispatch to store — this updates the relevant state slice
   store.dispatch(event);
 
-  // 2. Schedule flush of completed turns (non-fullscreen mode)
-  if (flushToTerminal && (event.type === 'turn_start' || event.type === 'done' || event.type === 'error')) {
-    scheduleFlush(store);
-  }
-
-  // 3. Invoke registered renderer extensions
+  // 2. Invoke registered renderer extensions
   const results: unknown[] = [];
 
   if (registry) {

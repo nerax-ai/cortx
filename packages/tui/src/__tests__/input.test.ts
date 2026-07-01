@@ -4,9 +4,14 @@ import {
   pushHistory,
   getCursorPosition,
   insertText,
+  separator,
+  composerBorderColor,
   handleBackspace,
   resolveCtrlCAction,
+  helpText,
+  activityLabel,
   openInEditor,
+  visibleInputLines,
   type CtrlCAction,
 } from '../components/input-area.js';
 import { submitInput } from '../app.js';
@@ -162,6 +167,88 @@ describe('insertText', () => {
 
   test('appends to empty string', () => {
     expect(insertText('', 'start')).toBe('start');
+  });
+});
+
+describe('separator', () => {
+  test('uses a minimum width for narrow terminals', () => {
+    expect(separator(10)).toHaveLength(24);
+  });
+
+  test('caps very wide terminals', () => {
+    expect(separator(240)).toHaveLength(120);
+  });
+
+  test('uses the terminal width inside bounds', () => {
+    expect(separator(88)).toHaveLength(88);
+  });
+});
+
+describe('helpText', () => {
+  test('shows palette hints while palette is open', () => {
+    expect(helpText(false, true)).toContain('Esc close');
+  });
+
+  test('shows interrupt hint while running', () => {
+    expect(helpText(true, false)).toContain('Ctrl+C interrupt');
+  });
+
+  test('shows send and command hints while idle', () => {
+    const text = helpText(false, false);
+    expect(text).toContain('Enter send');
+    expect(text).toContain('/ commands');
+  });
+
+  test('uses shorter idle hint on narrow terminals', () => {
+    expect(helpText(false, false, 72)).not.toContain('Ctrl+E editor');
+  });
+});
+
+describe('visibleInputLines', () => {
+  test('keeps short input unchanged', () => {
+    expect(visibleInputLines('a\nb', 4)).toEqual({ lines: ['a', 'b'], hiddenCount: 0 });
+  });
+
+  test('keeps the latest lines for long input', () => {
+    expect(visibleInputLines('a\nb\nc\nd\ne', 3)).toEqual({
+      lines: ['c', 'd', 'e'],
+      hiddenCount: 2,
+    });
+  });
+});
+
+describe('composerBorderColor', () => {
+  test('uses active border while palette is open', () => {
+    expect(composerBorderColor('idle', true)).toBe('cyan');
+  });
+
+  test('uses error border for error status', () => {
+    expect(composerBorderColor('error', false)).toBe('red');
+  });
+
+  test('uses active border while running', () => {
+    expect(composerBorderColor('running', false)).toBe('cyan');
+  });
+});
+
+describe('activityLabel', () => {
+  test('uses tool name while executing', () => {
+    const toolCalls = new Map([['tc_1', { status: 'pending', toolName: 'read' }]]);
+    expect(activityLabel('executing', {
+      toolCalls,
+    })).toBe('running read');
+  });
+
+  test('uses concise thinking label', () => {
+    expect(activityLabel('thinking', {
+      toolCalls: new Map(),
+    })).toBe('thinking');
+  });
+
+  test('uses error label for error activity', () => {
+    expect(activityLabel('error', {
+      toolCalls: new Map(),
+    })).toBe('error');
   });
 });
 
@@ -518,6 +605,39 @@ describe('submitInput', () => {
 
     expect(executed).toEqual(['/clear:now']);
     expect(promptCalls).toEqual([]);
+  });
+
+  test('executes /steer as a command instead of prompting the agent', async () => {
+    const executed: string[] = [];
+    const promptCalls: string[] = [];
+    const userMessages: string[] = [];
+
+    await submitInput('/steer use current file only', {
+      registryStatus: 'ready',
+      registryError: null,
+      registry: {
+        executeCommand: async (name: string, args: string) => {
+          executed.push(`${name}:${args}`);
+          return true;
+        },
+      },
+      session: {
+        controller: { abort: () => {} } as any,
+        prompt: async (value: string) => {
+          promptCalls.push(value);
+        },
+      },
+      store: {
+        addUserMessage: (value: string) => {
+          userMessages.push(value);
+        },
+        dispatch: () => {},
+      },
+    });
+
+    expect(executed).toEqual(['/steer:use current file only']);
+    expect(promptCalls).toEqual([]);
+    expect(userMessages).toEqual([]);
   });
 
   test('sends ordinary text to the agent while registry is loading', async () => {

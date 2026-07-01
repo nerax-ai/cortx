@@ -65,18 +65,23 @@ function isFilePart(value: unknown): value is LanguageFileContent {
 }
 
 function parseMessage(item: unknown): LanguageMessage | null {
-  if (!isRecord(item) || !isRole(item.role) || !Array.isArray(item.content)) return null;
-  if (item.role === 'system' && item.content.every(isTextPart)) {
-    return { role: 'system', content: item.content } satisfies LanguageSystemMessage;
+  if (!isRecord(item) || !isRole(item.role)) return null;
+  const content = typeof item.content === 'string'
+    ? [{ type: 'text' as const, text: item.content }]
+    : item.content;
+  if (!Array.isArray(content)) return null;
+
+  if (item.role === 'system' && content.every(isTextPart)) {
+    return { role: 'system', content } satisfies LanguageSystemMessage;
   }
-  if (item.role === 'user' && item.content.every((part) => isTextPart(part) || isFilePart(part))) {
-    return { role: 'user', content: item.content } satisfies LanguageUserMessage;
+  if (item.role === 'user' && content.every((part) => isTextPart(part) || isFilePart(part))) {
+    return { role: 'user', content } satisfies LanguageUserMessage;
   }
-  if (item.role === 'tool' && item.content.every((part) => isRecord(part) && part.type === 'tool-result' && isContentPart(part))) {
-    return { role: 'tool', content: item.content } satisfies LanguageToolMessage;
+  if (item.role === 'tool' && content.every((part) => isRecord(part) && part.type === 'tool-result' && isContentPart(part))) {
+    return { role: 'tool', content } satisfies LanguageToolMessage;
   }
-  if (item.role === 'assistant' && item.content.every(isContentPart)) {
-    return { role: 'assistant', content: item.content } satisfies LanguageAssistantMessage;
+  if (item.role === 'assistant' && content.every(isContentPart)) {
+    return { role: 'assistant', content } satisfies LanguageAssistantMessage;
   }
   return null;
 }

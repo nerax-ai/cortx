@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Ideation: Cortx Agent Core</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f6f2;
+      --paper: #ffffff;
+      --ink: #1e252b;
+      --muted: #64707d;
+      --line: #d8dde3;
+      --soft: #eef3f6;
+      --accent: #246b73;
+      --accent-soft: #dcecee;
+      --warn: #8a5a1f;
+      --warn-soft: #f3eadb;
+      --good: #276749;
+      --good-soft: #dff1e7;
+      --bad: #a33b3b;
+      --bad-soft: #f4dfdf;
+      --code: #243447;
+      --shadow: 0 18px 42px rgba(31, 41, 51, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+
+    .page {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    header {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding: 30px;
+      border-radius: 8px;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      margin: 0 0 8px;
+    }
+
+    h1, h2, h3 {
+      line-height: 1.24;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: 34px;
+    }
+
+    h2 {
+      margin: 36px 0 14px;
+      font-size: 24px;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 19px;
+    }
+
+    p {
+      max-width: 74ch;
+      margin: 0 0 12px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    code {
+      color: var(--code);
+      background: #eef0f2;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--soft);
+      padding: 3px 10px;
+      color: #3c4a55;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .metric {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 21px;
+      line-height: 1.2;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 26px;
+      margin-top: 22px;
+    }
+
+    .callout {
+      background: var(--accent-soft);
+      border: 1px solid #bfd8dc;
+      color: #214c52;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin: 14px 0;
+    }
+
+    .callout.warn {
+      background: var(--warn-soft);
+      border-color: #dbc8aa;
+      color: #5d3d16;
+    }
+
+    ul {
+      padding-left: 22px;
+      margin: 8px 0 14px;
+    }
+
+    li { margin: 6px 0; }
+
+    .axes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .axis {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .jump-list {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0 22px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .jump-list a {
+      display: block;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .idea-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      margin-top: 16px;
+      background: #fff;
+    }
+
+    .idea-head {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .rank {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .idea-title {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .idea-title h3 { margin: 0; }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0 12px;
+    }
+
+    .badge {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: #33434c;
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+
+    .badge.good {
+      background: var(--good-soft);
+      border-color: #b7dcc7;
+      color: #1f543b;
+    }
+
+    .badge.warn {
+      background: var(--warn-soft);
+      border-color: #dbc8aa;
+      color: #6c4718;
+    }
+
+    .basis {
+      background: #f7fafb;
+      border: 1px solid #dde8ec;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 12px 0;
+    }
+
+    .basis-label {
+      font-weight: 800;
+      color: var(--accent);
+      margin-right: 6px;
+    }
+
+    .diagram {
+      margin: 14px 0;
+      overflow: auto;
+      background: #fbfcfd;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 14px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #35444d;
+      background: var(--soft);
+      font-weight: 800;
+    }
+
+    footer {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 24px;
+      padding: 16px 4px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 720px) {
+      .page { padding: 20px 14px 36px; }
+      header, section { padding: 18px; }
+      h1 { font-size: 28px; }
+      .summary-grid, .axes { grid-template-columns: 1fr; }
+      .idea-head { display: block; }
+      .idea-title { margin-bottom: 8px; }
+      table { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">Ideation Artifact</p>
+      <h1>Ideation: Cortx Agent Core 设计校准</h1>
+      <p>这份文档评估 <code>cortx</code> 当前核心是否足够优雅、简洁、可扩展，并提出让它成为未来所有 Agent 形态共用核心的方向。重点不是把所有能力塞进 core，而是把 core 必须承诺的契约讲清楚。</p>
+      <div class="meta">
+        <span class="chip">date: <time datetime="2026-06-29">2026-06-29</time></span>
+        <span class="chip">topic: cortx-agent-core</span>
+        <span class="chip">focus: 通用 Agent core 需求与设计优雅性</span>
+        <span class="chip">mode: repo-grounded</span>
+      </div>
+      <div class="summary-grid" aria-label="assessment summary">
+        <div class="metric"><strong>8.0/10</strong><span>当前作为轻量 Agent framework 的成熟度</span></div>
+        <div class="metric"><strong>7.2/10</strong><span>当前作为“所有 Agent 共用核心”的完成度</span></div>
+        <div class="metric"><strong>9.3-9.5/10</strong><span>补齐本文前四项和 conformance 后的合理目标</span></div>
+      </div>
+    </header>
+
+    <section id="grounding-context">
+      <h2>Grounding Context</h2>
+      <p><code>cortx</code> 已经有一个很好的最小核心：<code>agentLoop()</code> 是 async generator，<code>Cortx</code> 类能 headless 运行，<code>AgentEvent</code> 给 TUI/Web/Server 共享事件流，<code>Tool</code> 和 <code>CortxPlugin</code> 把工具与横切逻辑隔离出来，<code>agent</code> 工具把 sub-agent 作为普通工具挂进系统。这些方向本身是优雅的。</p>
+      <p>当前问题不在“设计错了”，而在“契约还不够硬”。<code>packages/core/src/loop.ts</code> 已经增长到 552 行，同时承担模型流解析、消息持久化、重试、overflow、auto-continue、tool hook、并发调度、steering、abort 等职责。它仍然可读，但未来要加 timeout、permission、capability registry、named agents、resume/replay 时，会继续向同一个函数里塞。</p>
+      <p><code>@cortx/sdk</code> 的公共契约目前很小：<code>Tool</code>、<code>ToolContext</code>、<code>ToolResult</code>、<code>SideEffects</code>、<code>CortxPlugin</code> 和 <code>AgentEvent</code>。这是好事，但也暴露了缺口：<code>inputSchema</code> 目前只声明不验证；<code>sideEffects</code> 能调度并发，但没有一等 permission/approval 语义；<code>ToolContext</code> 没有 <code>AbortSignal</code>、capability scope、message context、policy decision 等运行时事实。</p>
+      <p>文件工具说明了安全边界的现状：<code>read/write/edit/ls</code> 基本使用 <code>resolve(cwd, path)</code>，没有 workspace containment；<code>edit</code> 只检查 <code>includes(oldText)</code>，再替换首个匹配，没有唯一性保障。这些不是“代码工具的小 bug”那么简单，它们提示 core 需要定义能力、权限和作用域的统一语义。</p>
+      <p>外部基准也指向同一个方向。OpenAI Agents SDK 把 agent loop、tools、guardrails、handoffs/sessions、human-in-the-loop、tracing 作为运行时关键能力，且仍强调少量 primitives。LangGraph 把 durable execution、streaming、human-in-the-loop、persistence 定义为长运行 stateful agent 的底座。Vercel AI SDK 的 tool calling 文档把 schema validation、approval、multi-step、step hooks、abort signal 和 typed tool errors 做成常规工具生命周期能力。也就是说，现代 Agent core 的竞争点不是“是否能调用工具”，而是这些工具和步骤是否有稳定、可组合、可恢复的契约。</p>
+      <div class="callout">
+        <strong>总体判断：</strong>当前设计方向合理，甚至比很多大而重的 agent runtime 更有长期潜力。但它还不是“所有大/小 Agent 都能复用”的 9.5 分核心。要继续改 <code>cortx</code>，优先改 core contract，而不是优先堆更多工具或 UI。
+      </div>
+    </section>
+
+    <section id="topic-axes">
+      <h2>Topic Axes</h2>
+      <div class="axes">
+        <div class="axis"><strong>Core loop / kernel contract</strong><br>把一个大 loop 变成可插拔、可测试的阶段契约。</div>
+        <div class="axis"><strong>Tool runtime safety</strong><br>工具 schema、权限、审批、取消、作用域、错误和结果格式。</div>
+        <div class="axis"><strong>Agent composition</strong><br>从“prompt + tools”小 Agent 到 named agent / sub-agent team 的统一表达。</div>
+        <div class="axis"><strong>State and observability</strong><br>session、event log、checkpoint、replay、trace、恢复和调试。</div>
+        <div class="axis"><strong>Capability and skill ecosystem</strong><br>skill pack、tool aliases、capability registry、外部集成降级语义。</div>
+      </div>
+    </section>
+
+    <section id="ranked-ideas">
+      <h2>Ranked Ideas</h2>
+      <ul class="jump-list">
+        <li><a href="#idea-1">1. AgentKernel phase pipeline, with current API kept simple</a></li>
+        <li><a href="#idea-2">2. Runtime policy and capability layer</a></li>
+        <li><a href="#idea-3">3. Typed tool lifecycle protocol</a></li>
+        <li><a href="#idea-4">4. AgentSpec and named-agent registry</a></li>
+        <li><a href="#idea-5">5. Event-sourced session, checkpoint, and replay contract</a></li>
+        <li><a href="#idea-6">6. Core conformance suite across tiny and large agents</a></li>
+      </ul>
+
+      <article class="idea-card" id="idea-1">
+        <div class="idea-head">
+          <div class="idea-title"><span class="rank">1</span><h3>AgentKernel phase pipeline, with current API kept simple</h3></div>
+        </div>
+        <div class="badges">
+          <span class="badge">Axis: Core loop / kernel contract</span>
+          <span class="badge good">Confidence: 92%</span>
+          <span class="badge warn">Complexity: Medium</span>
+        </div>
+        <p><strong>Description:</strong> 保留现在好用的 <code>Cortx.run()</code> 和 <code>agentLoop()</code> facade，但内部把 loop 拆成稳定 phase：prepare turn、transform messages、invoke model、decode assistant output、decide continuation、authorize tools、execute tools、apply tool results、recover/finish。phase 不需要变成复杂 graph，只要是清晰的 pipeline contract。</p>
+        <div class="basis"><span class="basis-label">Basis: direct:</span><code>loop.ts</code> 当前同一函数覆盖 stream parsing、retry、overflow、auto-continue、tool hook、并发工具调度和 steering/abort；已有插件 hook 说明项目偏好可插拔横切逻辑，但 phase 级插入点还没有形成公共模型。</div>
+        <p><strong>Rationale:</strong> 这是从 8 分向 9.5 分靠拢的根改动。它不追求重写架构，而是把已经存在的隐式阶段显式化。这样 timeout、retry、circuit breaker、quota、trace、permission、human-in-the-loop、context compaction 都能挂在正确 phase，而不是继续侵入 <code>loop.ts</code>。</p>
+        <div class="diagram" aria-label="AgentKernel phase sketch">
+          <svg width="820" height="150" viewBox="0 0 820 150" role="img" aria-label="AgentKernel phase pipeline">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#246b73"></path>
+              </marker>
+            </defs>
+            <rect x="12" y="24" width="112" height="54" rx="7" fill="#dcecee" stroke="#8db9bf"></rect>
+            <text x="68" y="47" text-anchor="middle" font-size="13" font-weight="700" fill="#214c52">Prepare</text>
+            <text x="68" y="64" text-anchor="middle" font-size="12" fill="#214c52">messages</text>
+            <line x1="124" y1="51" x2="158" y2="51" stroke="#246b73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="160" y="24" width="112" height="54" rx="7" fill="#f3eadb" stroke="#d4b783"></rect>
+            <text x="216" y="47" text-anchor="middle" font-size="13" font-weight="700" fill="#5d3d16">Invoke</text>
+            <text x="216" y="64" text-anchor="middle" font-size="12" fill="#5d3d16">model</text>
+            <line x1="272" y1="51" x2="306" y2="51" stroke="#246b73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="308" y="24" width="112" height="54" rx="7" fill="#eef3f6" stroke="#c8d4dc"></rect>
+            <text x="364" y="47" text-anchor="middle" font-size="13" font-weight="700" fill="#33434c">Decode</text>
+            <text x="364" y="64" text-anchor="middle" font-size="12" fill="#33434c">events</text>
+            <line x1="420" y1="51" x2="454" y2="51" stroke="#246b73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="456" y="24" width="112" height="54" rx="7" fill="#dff1e7" stroke="#aad5bd"></rect>
+            <text x="512" y="47" text-anchor="middle" font-size="13" font-weight="700" fill="#1f543b">Authorize</text>
+            <text x="512" y="64" text-anchor="middle" font-size="12" fill="#1f543b">tools</text>
+            <line x1="568" y1="51" x2="602" y2="51" stroke="#246b73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="604" y="24" width="112" height="54" rx="7" fill="#eef3f6" stroke="#c8d4dc"></rect>
+            <text x="660" y="47" text-anchor="middle" font-size="13" font-weight="700" fill="#33434c">Execute</text>
+            <text x="660" y="64" text-anchor="middle" font-size="12" fill="#33434c">tools</text>
+            <line x1="660" y1="78" x2="660" y2="105" stroke="#246b73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="544" y="106" width="232" height="30" rx="7" fill="#fff" stroke="#d8dde3"></rect>
+            <text x="660" y="126" text-anchor="middle" font-size="12" fill="#33434c">Recover / checkpoint / continue / finish</text>
+          </svg>
+        </div>
+        <p><strong>Downsides:</strong> 需要小心避免“抽象比原来更重”。正确做法是先抽内部 phase 和 conformance，不急着公开一个庞大插件 API。</p>
+      </article>
+
+      <article class="idea-card" id="idea-2">
+        <div class="idea-head">
+          <div class="idea-title"><span class="rank">2</span><h3>Runtime policy and capability layer</h3></div>
+        </div>
+        <div class="badges">
+          <span class="badge">Axis: Tool runtime safety</span>
+          <span class="badge good">Confidence: 90%</span>
+          <span class="badge warn">Complexity: Medium</span>
+        </div>
+        <p><strong>Description:</strong> 在 core 层定义 <code>PolicyDecision</code> 和 <code>CapabilityScope</code>：allow、deny、ask、defer；workspace roots、read/write/destructive/network/shell/MCP/browser 等能力；headless 策略；审批事件和回答事件。UI 只负责呈现和收集答案，core 负责工具是否可执行的统一语义。</p>
+        <div class="basis"><span class="basis-label">Basis: direct:</span><code>SideEffects</code> 已经存在并用于并发调度，但 <code>tool.execute.before</code> 只能 skip，TUI <code>askUser</code> 仍默认 <code>yes</code>，代码工具没有 workspace containment。外部 AI SDK 已把 sensitive tool approval 作为工具执行常规流程。</div>
+        <p><strong>Rationale:</strong> 如果没有这一层，未来每个工具、skill、server、TUI 都会各写一套安全判断。小 Agent 需要“默认只读/无需打扰”的轻策略，大 coding agent 需要“写入前确认/危险命令阻断/指定 workspace”的强策略，它们应该共享一个 core policy contract。</p>
+        <p><strong>Downsides:</strong> 需要设计默认策略，避免开发时过度弹窗；同时要保证 headless/server 场景不会因为缺 UI 卡死。</p>
+      </article>
+
+      <article class="idea-card" id="idea-3">
+        <div class="idea-head">
+          <div class="idea-title"><span class="rank">3</span><h3>Typed tool lifecycle protocol</h3></div>
+        </div>
+        <div class="badges">
+          <span class="badge">Axis: Tool runtime safety</span>
+          <span class="badge good">Confidence: 88%</span>
+          <span class="badge warn">Complexity: Medium</span>
+        </div>
+        <p><strong>Description:</strong> 把工具生命周期从“JSON.parse 后 execute”提升成协议：schema validation、typed validation error、optional repair feedback、streaming/progress、abort signal、tool timeout、structured result、tool-error part、result budget/provenance。<code>ToolContext</code> 增加 <code>abortSignal</code>、messages/context、capability scope 和 policy facts。</p>
+        <div class="basis"><span class="basis-label">Basis: direct/external:</span><code>Tool.inputSchema</code> 当前存在但未验证；<code>runToolCall()</code> 中解析输入后直接执行；AI SDK 文档把 strict/inputSchema、InvalidToolInputError、tool-error、abort signal、onStepFinish 等作为工具调用基础设施。</div>
+        <p><strong>Rationale:</strong> 这个方向直接服务“小 Agent 复用 core”的诉求。一个只需要提示词和几个函数的小 Agent，不应该被迫写自己的校验、错误反馈、取消逻辑；大型 Agent 也需要同一套协议来支撑 shell、browser、MCP、sub-agent、workflow tool。</p>
+        <p><strong>Downsides:</strong> 需要选择验证库或抽象 schema adapter。也要处理旧工具兼容，不能一次性要求所有工具改写。</p>
+      </article>
+
+      <article class="idea-card" id="idea-4">
+        <div class="idea-head">
+          <div class="idea-title"><span class="rank">4</span><h3>AgentSpec and named-agent registry</h3></div>
+        </div>
+        <div class="badges">
+          <span class="badge">Axis: Agent composition</span>
+          <span class="badge good">Confidence: 87%</span>
+          <span class="badge warn">Complexity: Medium</span>
+        </div>
+        <p><strong>Description:</strong> 定义一个数据化的 <code>AgentSpec</code>：name、instructions/system、model preference、tools/capabilities、policy profile、memory/session adapter、maxIterations、background/concurrency、metadata。<code>Cortx</code> 可以从一个 <code>AgentSpec</code> 创建小 prompt agent，也可以从 named-agent registry 启动角色 agent。现有 sub-agent-as-tool 继续保留，只是能按名称加载角色定义。</p>
+        <div class="basis"><span class="basis-label">Basis: direct:</span>现有 <code>Cortx</code> 构造器接收 config/tools/plugins，<code>agent</code> 工具只能启动通用 sub-agent，Compound Engineering compatibility 文档已经明确需要 agent definitions、agent set、model inherit、tool scope 和 named dispatch。</div>
+        <p><strong>Rationale:</strong> 这是满足用户例子“很细小场景，只需要一份提示词并使用一些功能的 Agent 也能复用核心”的关键。小 Agent 是 <code>AgentSpec</code> 的最小实例；大 Agent team 是多个 <code>AgentSpec</code> 的组合。core 不需要知道 Compound Engineering，但需要知道 named agent 这种通用资产。</p>
+        <div class="diagram" aria-label="AgentSpec reuse sketch">
+          <svg width="820" height="150" viewBox="0 0 820 150" role="img" aria-label="AgentSpec scales from tiny agents to large workflows">
+            <rect x="20" y="26" width="170" height="92" rx="8" fill="#dcecee" stroke="#8db9bf"></rect>
+            <text x="105" y="54" text-anchor="middle" font-size="14" font-weight="700" fill="#214c52">Tiny Agent</text>
+            <text x="105" y="78" text-anchor="middle" font-size="12" fill="#214c52">prompt + 2 tools</text>
+            <text x="105" y="96" text-anchor="middle" font-size="12" fill="#214c52">same kernel</text>
+            <rect x="250" y="18" width="320" height="108" rx="8" fill="#fff" stroke="#d8dde3"></rect>
+            <text x="410" y="45" text-anchor="middle" font-size="15" font-weight="700" fill="#1e252b">AgentSpec</text>
+            <text x="410" y="70" text-anchor="middle" font-size="12" fill="#33434c">instructions · model · tools · policy · memory · limits</text>
+            <text x="410" y="92" text-anchor="middle" font-size="12" fill="#33434c">data contract, not a new runtime</text>
+            <rect x="630" y="26" width="170" height="92" rx="8" fill="#f3eadb" stroke="#d4b783"></rect>
+            <text x="715" y="54" text-anchor="middle" font-size="14" font-weight="700" fill="#5d3d16">Agent Team</text>
+            <text x="715" y="78" text-anchor="middle" font-size="12" fill="#5d3d16">named roles</text>
+            <text x="715" y="96" text-anchor="middle" font-size="12" fill="#5d3d16">same kernel</text>
+            <path d="M190 72 C215 72, 225 72, 250 72" fill="none" stroke="#246b73" stroke-width="2"></path>
+            <path d="M570 72 C595 72, 605 72, 630 72" fill="none" stroke="#246b73" stroke-width="2"></path>
+          </svg>
+        </div>
+        <p><strong>Downsides:</strong> 容易过度配置化。第一版应只覆盖真正已有需求：prompt/system、tools/capabilities、model preference、limits、background、named registry。</p>
+      </article>
+
+      <article class="idea-card" id="idea-5">
+        <div class="idea-head">
+          <div class="idea-title"><span class="rank">5</span><h3>Event-sourced session, checkpoint, and replay contract</h3></div>
+        </div>
+        <div class="badges">
+          <span class="badge">Axis: State and observability</span>
+          <span class="badge good">Confidence: 85%</span>
+          <span class="badge warn">Complexity: Medium</span>
+        </div>
+        <p><strong>Description:</strong> 把 <code>AgentEvent</code> 明确变成 core 的审计日志和恢复输入：每个 turn、tool call、policy decision、approval、checkpoint、error、usage 都能记录；session 可以从 checkpoint 恢复；TUI/Web/Server 共用同一套 replay/serialization 语义。当前 <code>AgentStore</code> 继续作为投影层，而不是事实源。</p>
+        <div class="basis"><span class="basis-label">Basis: direct/external:</span><code>CortxSession</code>、<code>AgentStore</code> 和 server SSE 已经围绕 <code>AgentEvent</code> 工作，但 TUI auto-save 只在 <code>done/error</code>；LangGraph 将 persistence、fault tolerance、interrupts/time travel 和 observability 作为长运行 agent 的核心能力。</div>
+        <p><strong>Rationale:</strong> 可恢复和可调试是大 Agent 的生命线，也是小 Agent 嵌入应用后的生产要求。事件流已经存在，下一步不是另起状态系统，而是把事件、checkpoint、session projection 的职责边界定清楚。</p>
+        <p><strong>Downsides:</strong> 事件 schema 一旦公开就需要版本化和兼容策略。需要区分“用户可见 transcript”和“运行时事实日志”，避免泄露敏感工具输入。</p>
+      </article>
+
+      <article class="idea-card" id="idea-6">
+        <div class="idea-head">
+          <div class="idea-title"><span class="rank">6</span><h3>Core conformance suite across tiny and large agents</h3></div>
+        </div>
+        <div class="badges">
+          <span class="badge">Axis: Capability and skill ecosystem</span>
+          <span class="badge good">Confidence: 84%</span>
+          <span class="badge">Complexity: Low-Medium</span>
+        </div>
+        <p><strong>Description:</strong> 建一个 core conformance suite，覆盖同一核心在不同规模下的行为：纯 prompt agent、prompt+single tool、multi-step tool agent、permission ask/deny、read-only parallel、write ordering、abort propagation、context overflow recovery、sub-agent/named-agent、server SSE session、resume/replay。</p>
+        <div class="basis"><span class="basis-label">Basis: direct:</span>当前仓库已有 <code>loop.test.ts</code>、<code>loop-parallel.test.ts</code>、<code>agent-background.test.ts</code>、server/session/TUI store 测试，但缺少跨 package 的“同一 core contract 必须成立”的测试矩阵。此前 Synax 的经验也说明，集成层没有断言时，协议正确性容易退化成人工看日志。</div>
+        <p><strong>Rationale:</strong> 这是重构安全网。没有 conformance，就不应该大拆 <code>loop.ts</code>；有了 conformance，后续改 kernel、policy、tool lifecycle、AgentSpec 都能知道是否破坏了小 Agent 或大 Agent 的共同语义。</p>
+        <p><strong>Downsides:</strong> 需要先定义“核心契约是什么”，否则测试会变成当前实现的快照。它应跟随前几项契约设计一起落地。</p>
+      </article>
+    </section>
+
+    <section id="rejection-summary">
+      <h2>Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>直接把 <code>cortx</code> 改成 LangGraph 风格 graph runtime</td><td>会牺牲当前最有价值的轻核心优势。<code>cortx</code> 应该学习 durable execution 和 state contract，不必复制 graph abstraction。</td></tr>
+          <tr><td>2</td><td>只继续小修 <code>loop.ts</code>，不改内部结构</td><td>短期省事，但 timeout、approval、capability、resume、trace 会继续堆在同一个函数里，长期不够 9.5 分。</td></tr>
+          <tr><td>3</td><td>把 memory、planning、browser、workflow 全部做进 core</td><td>方向太重。core 应定义 session/memory/capability 插槽和事件，不应该拥有所有具体策略。</td></tr>
+          <tr><td>4</td><td>把 Compound Engineering 做成特殊内置分支</td><td>违背通用 core 目标。正确抽象是 skill pack、named agents、capability mapping，而不是某个插件专用逻辑。</td></tr>
+          <tr><td>5</td><td>为小 Agent 单独做一套 mini runtime</td><td>会分裂生态。小 Agent 应是 <code>AgentSpec</code> 的最小配置，而不是第二套核心。</td></tr>
+          <tr><td>6</td><td>把 sub-agent 升级为 core 特权 primitive</td><td>现有 sub-agent-as-tool 方向是对的。需要补 named registry、policy、session，而不是让 sub-agent 脱离工具协议。</td></tr>
+          <tr><td>7</td><td>先做大型 UI/Web IDE 再回头整理 core</td><td>会把外层体验绑定到不稳定内核。先稳定 core contract，UI 才有可靠事件和能力语义可用。</td></tr>
+          <tr><td>8</td><td>直接采用 Vercel AI SDK 或其他 runtime 作为核心</td><td>可借鉴 schema、approval、abort、step hook 等模式，但 <code>cortx</code> 的目标是 provider-agnostic、skill/plugin-first、coding-agent-capable，不适合直接换核。</td></tr>
+          <tr><td>9</td><td>只扩充更多 plugin hooks</td><td>hook 数量不是核心问题。缺的是 phase、policy、tool lifecycle、session 这些 typed contracts；没有 typed contract 的 hook 很快会变成约定俗成的字符串 API。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="sources">
+      <h2>Sources and References</h2>
+      <ul>
+        <li><a href="https://github.com/nerax-ai/cortx/blob/main/packages/core/src/loop.ts">packages/core/src/loop.ts</a>：当前 agent loop 的职责聚合点。</li>
+        <li><a href="https://github.com/nerax-ai/cortx/blob/main/packages/sdk/src/index.ts">packages/sdk/src/index.ts</a>：Tool、ToolContext、CortxPlugin、AgentEvent 契约。</li>
+        <li><a href="https://github.com/nerax-ai/cortx/blob/main/packages/core/src/agent.ts">packages/core/src/agent.ts</a>：Cortx facade、sub-agent-as-tool、skill plugin 装配。</li>
+        <li><a href="https://github.com/nerax-ai/cortx/blob/main/packages/code/src/read.ts">packages/code/src/read.ts</a>、<a href="https://github.com/nerax-ai/cortx/blob/main/packages/code/src/write.ts">write.ts</a>、<a href="https://github.com/nerax-ai/cortx/blob/main/packages/code/src/edit.ts">edit.ts</a>：文件工具能力边界证据。</li>
+        <li><a href="https://github.com/nerax-ai/cortx/blob/main/docs/brainstorms/2026-05-23-compound-engineering-compatibility-requirements.md">docs/brainstorms/2026-05-23-compound-engineering-compatibility-requirements.md</a>：named agents、skill pack、capability mapping 需求。</li>
+        <li><a href="https://openai.github.io/openai-agents-python/">OpenAI Agents SDK docs</a>：少量 primitives、agent loop、tools、guardrails、handoffs/sessions、human-in-the-loop、tracing。</li>
+        <li><a href="https://docs.langchain.com/oss/javascript/langgraph/overview">LangGraph overview</a>：durable execution、streaming、human-in-the-loop、persistence、observability。</li>
+        <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling">Vercel AI SDK tool calling docs</a>：tool schema、approval、multi-step calls、abort signal、typed tool errors。</li>
+      </ul>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-06-29T00:00:00+08:00 by ce-ideate from the current <code>cortx</code> repository and official agent framework documentation.
+    </footer>
+  </main>
+</body>
+</html>

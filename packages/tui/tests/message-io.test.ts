@@ -44,6 +44,6 @@ describe('turnsToMessages', () => {
     const result = turnsToMessages(turns);
     expect(result).toHaveLength(2);
     expect((result[0] as any).role).toBe('user');
-    expect((result[0] as any).content).toBe('hello');
+    expect((result[0] as any).content).toEqual([{ type: 'text', text: 'hello' }]);
   });
 });

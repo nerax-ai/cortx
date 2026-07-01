@@ -1,8 +1,8 @@
 import { useSyncExternalStore, useCallback } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useWindowSize } from 'ink';
 import { formatToolSummary } from '@cortx/sdk';
 import type { TuiStore } from '../store.js';
-import type { TuiState } from '../types/tui-state.js';
+import type { AgentSessionSummary, TuiState, ToolCallEntry } from '../types/tui-state.js';
 import { colors } from '../theme.js';
 
 const selectToolCalls = (s: TuiState) => s.toolCalls;
@@ -30,7 +30,51 @@ function toolStatusIcon(entry: { status: string; isError?: boolean }): { icon: s
   return { icon: '✓', color: colors.toolSuccess };
 }
 
+export function toolStats(toolCalls: ReadonlyMap<string, ToolCallEntry>): {
+  total: number;
+  running: number;
+  failed: number;
+  completed: number;
+} {
+  let running = 0;
+  let failed = 0;
+  let completed = 0;
+  for (const entry of toolCalls.values()) {
+    if (entry.status === 'pending') running += 1;
+    else if (entry.isError) failed += 1;
+    else completed += 1;
+  }
+  return { total: toolCalls.size, running, failed, completed };
+}
+
+export function formatToolStats(stats: ReturnType<typeof toolStats>): string {
+  const parts: string[] = [];
+  if (stats.running > 0) parts.push(`${stats.running} running`);
+  if (stats.failed > 0) parts.push(`${stats.failed} failed`);
+  if (stats.completed > 0) parts.push(`${stats.completed} done`);
+  return parts.length > 0 ? parts.join(', ') : 'no tools';
+}
+
+export function visibleToolEntries<T>(entries: T[], maxEntries: number): { entries: T[]; hiddenCount: number } {
+  if (entries.length <= maxEntries) return { entries, hiddenCount: 0 };
+  return {
+    entries: entries.slice(entries.length - maxEntries),
+    hiddenCount: entries.length - maxEntries,
+  };
+}
+
+export function firstViewableAgentToolCallId(
+  toolCalls: ReadonlyMap<string, ToolCallEntry>,
+  agentSessions: ReadonlyMap<string, AgentSessionSummary>,
+): string | null {
+  for (const [id, entry] of toolCalls) {
+    if (entry.toolName === 'agent' && agentSessions.has(id)) return id;
+  }
+  return null;
+}
+
 export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionProps) {
+  const { rows } = useWindowSize();
   const toolCalls = useSyncExternalStore(
     useCallback(
       (listener) => store.select(selectToolCalls).subscribe(listener),
@@ -51,12 +95,8 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
 
   useInput((input, key) => {
     if (!key.return || !onViewAgent || collapsed || status !== 'idle') return;
-    for (const [id, entry] of toolCalls) {
-      if (entry.toolName === 'agent' && entry.status === 'complete' && agentSessions.has(id)) {
-        onViewAgent(id);
-        return;
-      }
-    }
+    const id = firstViewableAgentToolCallId(toolCalls, agentSessions);
+    if (id) onViewAgent(id);
   });
 
   if (toolCalls.size === 0) return null;
@@ -68,8 +108,7 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
     const [, latestEntry] = entries[entries.length - 1];
     const { icon: statusIcon, color: statusColor } = toolStatusIcon(latestEntry);
 
-    const pendingCount = entries.filter(([, e]) => e.status === 'pending').length;
-    const totalCount = entries.length;
+    const stats = toolStats(toolCalls);
 
     return (
       <Box paddingX={1} flexDirection="column">
@@ -83,10 +122,10 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
             const summary = formatToolSummary(latestEntry.toolName, latestEntry.input);
             return summary ? <Text dimColor>{': '}{summary}</Text> : null;
           })()}
-          {totalCount > 1 && (
+          {stats.total > 1 && (
             <Text dimColor>
               {' '}
-              ({pendingCount > 0 ? `${pendingCount}/${totalCount} running` : `${totalCount} tools`})
+              ({formatToolStats(stats)})
             </Text>
           )}
           <Text dimColor>{' [Shift+T] expand'}</Text>
@@ -95,16 +134,25 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
     );
   }
 
-  // Expanded: show all tool calls with details
+  const maxExpandedEntries = Math.max(2, Math.min(6, Math.floor(rows / 5)));
+  const expanded = visibleToolEntries(entries, maxExpandedEntries);
+
+  // Expanded: show recent tool calls with details
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box>
         <Text bold color="cyan">Tool Calls</Text>
+        <Text dimColor>{'  '}{formatToolStats(toolStats(toolCalls))}</Text>
         <Text dimColor>{' [Shift+T] collapse'}</Text>
       </Box>
-      {entries.map(([id, entry]) => {
+      {expanded.hiddenCount > 0 && (
+        <Box marginLeft={1}>
+          <Text dimColor>{`... ${expanded.hiddenCount} earlier tool call${expanded.hiddenCount === 1 ? '' : 's'} hidden`}</Text>
+        </Box>
+      )}
+      {expanded.entries.map(([id, entry]) => {
         const { icon: statusIcon, color: statusColor } = toolStatusIcon(entry);
-        const hasAgentSession = entry.toolName === 'agent' && agentSessions.has(id);
+        const agentSession = entry.toolName === 'agent' ? agentSessions.get(id) : undefined;
 
         return (
           <Box key={id} flexDirection="column" marginLeft={1}>
@@ -116,8 +164,8 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
                 const summary = formatToolSummary(entry.toolName, entry.input);
                 return summary ? <Text dimColor>{': '}{summary}</Text> : null;
               })()}
-              {hasAgentSession && entry.status === 'complete' && (
-                <Text color="cyan">{' [Enter] view'}</Text>
+              {agentSession && (
+                <Text color="cyan">{` [Enter] view ${agentSession.status}`}</Text>
               )}
             </Text>
             {entry.result !== undefined && (() => {

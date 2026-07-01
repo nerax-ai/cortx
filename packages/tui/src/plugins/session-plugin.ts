@@ -2,7 +2,7 @@
  * Session plugin — auto-save sessions to disk and provide /resume command.
  *
  * Features:
- *   - Auto-save session state on `done` and `error` events
+ *   - Auto-save session state on terminal events and durable-safe progress points
  *   - `/resume` command lists past sessions with summary info
  *   - Session picker overlay for arrow-key selection
  *   - Crash recovery: detect sessions without a terminal event on startup
@@ -23,6 +23,12 @@ import { createDefaultSessionStore, type SessionStore } from '../session-store.j
 // ---------------------------------------------------------------------------
 
 import type { TurnEntry } from '../types/tui-state.js';
+
+export interface MessageSnapshot {
+  turns: TurnEntry[];
+  currentText?: string;
+  currentThinking?: string;
+}
 
 /** Metadata persisted alongside the message history for each session. */
 export interface SessionMetadata {
@@ -126,6 +132,29 @@ export function buildSessionMetadata(
     messages,
     agentMessages,
   };
+}
+
+/**
+ * Convert the live message state into a persisted display history.
+ * In-progress text is copied into the snapshot without mutating the store.
+ */
+export function snapshotTurns(messages: MessageSnapshot, timestamp = Date.now()): TurnEntry[] {
+  const turns = [...messages.turns];
+  if (messages.currentThinking) {
+    turns.push({
+      role: 'assistant',
+      content: `Thinking:\n${messages.currentThinking}`,
+      timestamp,
+    });
+  }
+  if (messages.currentText) {
+    turns.push({
+      role: 'assistant',
+      content: messages.currentText,
+      timestamp,
+    });
+  }
+  return turns;
 }
 
 /**
@@ -313,7 +342,9 @@ export async function listSessions(
 // ---------------------------------------------------------------------------
 
 /**
- * Create an auto-save handler that persists sessions on done/error events.
+ * Create an auto-save handler that persists sessions on terminal events and
+ * on durable-safe progress points. Non-terminal saves are marked crashed so a
+ * later completed save can overwrite them.
  *
  * This is a standalone function that takes explicit dependencies — no plugin
  * instance is needed, avoiding the P1-14 issue of creating a second plugin
@@ -322,22 +353,23 @@ export async function listSessions(
 export function createAutoSaveHandler(deps: {
   getSessionId: () => string;
   getMessages: () => TurnEntry[];
+  getMessageSnapshot?: () => MessageSnapshot;
   getAgentMessages: () => unknown[];
   getModel: () => string;
   sessionsDir?: string;
   sessionStore?: SessionStore;
   startTime: string;
 }): (eventType: string) => Promise<void> {
-  const { getSessionId, getMessages, getAgentMessages, getModel, sessionsDir, sessionStore, startTime } = deps;
+  const { getSessionId, getMessages, getMessageSnapshot, getAgentMessages, getModel, sessionsDir, sessionStore, startTime } = deps;
 
   return async (eventType: string): Promise<void> => {
-    if (eventType !== 'done' && eventType !== 'error') return;
+    const status = autoSaveStatusForEvent(eventType);
+    if (!status) return;
 
     const sessionId = getSessionId();
-    const messages = getMessages();
+    const messages = getMessageSnapshot ? snapshotTurns(getMessageSnapshot()) : getMessages();
     const agentMsgs = getAgentMessages();
     const model = getModel();
-    const status = eventType === 'done' ? 'completed' as const : 'crashed' as const;
 
     const metadata = buildSessionMetadata(
       sessionId,
@@ -368,6 +400,15 @@ export function createAutoSaveHandler(deps: {
       // Silently ignore save failures — auto-save is best-effort
     }
   };
+}
+
+function autoSaveStatusForEvent(eventType: string): 'completed' | 'crashed' | null {
+  if (eventType === 'done') return 'completed';
+  if (eventType === 'error') return 'crashed';
+  if (eventType === 'turn_start' || eventType === 'turn_end' || eventType === 'tool_result') {
+    return 'crashed';
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

@@ -644,6 +644,20 @@ describe('TuiStore', () => {
     expect(store.getState().messages.currentText).toBe('');
   });
 
+  test('showNotice displays transient output without changing restored turns', () => {
+    const store = new TuiStore();
+    const restoredTurns = [
+      { role: 'assistant', content: 'restored history', timestamp: 1 },
+    ];
+    store.loadTurns(restoredTurns);
+
+    store.showNotice('Restored session sess_1.');
+
+    expect(store.getState().messages.turns).toEqual(restoredTurns);
+    expect(store.getState().messages.currentText).toBe('Restored session sess_1.');
+    expect(store.getState().messages.currentThinking).toBe('');
+  });
+
   // --- thinking_delta / thinking ---
 
   test('dispatch thinking_delta accumulates into currentThinking', () => {

@@ -458,27 +458,35 @@ describe('6. Auto-save integration with processEvent', () => {
     store.dispose();
   });
 
-  test('auto-save handler does not write file for non-terminal events', async () => {
+  test('auto-save ignores noisy streaming events but saves progress checkpoints', async () => {
     const store = new TuiStore();
+    const sessionId = store.getState().sessionId;
 
     const autoSave = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getMessageSnapshot: () => store.getState().messages,
       getAgentMessages: () => [],
       getModel: () => 'test-model',
       sessionsDir: tempDir,
       startTime: '2026-04-19T10:00:00Z',
     });
 
-    // Invoke auto-save with non-terminal event types
+    processEvent({ type: 'turn_start', iteration: 1 }, store);
+    processEvent({ type: 'text_delta', delta: 'Partial checkpoint' }, store);
+
     await autoSave('text_delta');
-    await autoSave('turn_start');
     await autoSave('tool_use');
 
-    // No session files should exist
     const { readdir } = await import('fs/promises');
-    const files = await readdir(tempDir);
-    expect(files.length).toBe(0);
+    expect(await readdir(tempDir)).toEqual([]);
+
+    await autoSave('turn_end');
+
+    const filePath = join(tempDir, sessionFilename(sessionId));
+    const data = JSON.parse(await readFile(filePath, 'utf8'));
+    expect(data.status).toBe('crashed');
+    expect(data.messages.at(-1).content).toBe('Partial checkpoint');
 
     store.dispose();
   });

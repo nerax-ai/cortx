@@ -134,20 +134,6 @@ export class TuiStore extends AgentStore {
   }
 
   /**
-   * Clear flushed turns from the messages to keep the Ink frame small.
-   * Turns should be written to the terminal via console.log before calling this.
-   */
-  clearFlushedTurns(): void {
-    const prev = this.state.messages;
-    if (prev.turns.length === 0) return;
-    this.state = {
-      ...this.state,
-      messages: { ...prev, turns: [] },
-    };
-    this.notifySelectors();
-  }
-
-  /**
    * Load persisted turns into the store (used during session restore).
    * Replaces the current turns array without affecting other state.
    */
@@ -155,6 +141,20 @@ export class TuiStore extends AgentStore {
     this.state = {
       ...this.state,
       messages: { turns, currentText: '', currentThinking: '' },
+    };
+    this.notifySelectors();
+  }
+
+  /**
+   * Show a transient assistant note in the active output region.
+   * Useful for restore/status feedback that should be visible immediately.
+   */
+  showNotice(message: string): void {
+    const prev = this.state.messages;
+    this.state = {
+      ...this.state,
+      messages: { ...prev, currentText: message, currentThinking: '' },
+      error: undefined,
     };
     this.notifySelectors();
   }

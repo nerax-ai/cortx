@@ -97,11 +97,16 @@ export default function App({ session, model, cwd, logger }: AppProps) {
             : turnsToMessages(meta.messages as TurnEntry[]);
           session.cortx.replaceMessages(agentMessages);
           if (meta.status === 'crashed') {
-            session.resume().catch(() => {});
+            store.showNotice(`Restored crashed session ${meta.sessionId}. Attempting checkpoint resume...`);
+            session.resume().catch((error) => {
+              store.dispatch({ type: 'error', error: new Error(`Failed to resume session: ${errorMessage(error)}`) });
+            });
+          } else {
+            store.showNotice(`Restored session ${meta.sessionId}.`);
           }
         }
-      } catch {
-        // Graceful error
+      } catch (error) {
+        store.dispatch({ type: 'error', error: new Error(`Failed to restore session: ${errorMessage(error)}`) });
       }
     },
     [store, session, sessionStore],
@@ -133,6 +138,7 @@ export default function App({ session, model, cwd, logger }: AppProps) {
       const command = commandPlugin({
         exit: () => exit(),
         clear: () => store.reset(),
+        steer: (message) => session.controller?.steer(message),
         getConfig: () => ({} as Record<string, unknown>),
         getCommands: () => registry.getCommands(),
       });
@@ -166,12 +172,13 @@ export default function App({ session, model, cwd, logger }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore, registry]);
+  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore, registry, session]);
 
   useEffect(() => {
     const autoSaveHandler = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
+      getMessageSnapshot: () => store.getState().messages,
       getAgentMessages: () => session.cortx.messages,
       getModel: () => model,
       sessionStore,
@@ -179,12 +186,8 @@ export default function App({ session, model, cwd, logger }: AppProps) {
     });
 
     const unsubscribe = session.subscribe((event) => {
-      // Auto-save BEFORE processEvent flushes turns to the terminal,
-      // so the session metadata captures the full conversation.
-      if (event.type === 'done' || event.type === 'error') {
-        autoSaveHandler(event.type).catch(() => {});
-      }
-      processEvent(event, store, registry, true);
+      processEvent(event, store, registry);
+      autoSaveHandler(event.type).catch(() => {});
     });
     return () => {
       unsubscribe();
@@ -198,6 +201,10 @@ export default function App({ session, model, cwd, logger }: AppProps) {
   const handleSubmit = useCallback((value: string) => {
     submitInput(value, { registryStatus, registryError, registry, session, store }).catch(() => {});
   }, [registryStatus, registryError, registry, session, store]);
+
+  const handleSteer = useCallback((value: string) => {
+    session.controller?.steer(value);
+  }, [session]);
 
   const handleAbort = useCallback(() => {
     session.controller?.abort('user interrupt');
@@ -218,6 +225,7 @@ export default function App({ session, model, cwd, logger }: AppProps) {
       skills={skills}
       agentSessionsStore={session.cortx.agentSessions}
       onSubmit={handleSubmit}
+      onSteer={handleSteer}
       onAbort={handleAbort}
       onForceExit={handleForceExit}
       sessionPickerOpen={sessionPickerOpen}

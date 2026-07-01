@@ -19,6 +19,7 @@ import {
   listSessions,
   sessionPlugin,
   createAutoSaveHandler,
+  snapshotTurns,
 } from '../plugins/session-plugin.js';
 import { createStorageSessionStore } from '../session-store.js';
 import {
@@ -426,6 +427,22 @@ describe('findCrashedSessions', () => {
 // ---------------------------------------------------------------------------
 
 describe('createAutoSaveHandler', () => {
+  test('snapshotTurns includes live streaming text without mutating turns', () => {
+    const turns = [{ role: 'user', content: 'hello', timestamp: 1 }];
+    const snapshot = snapshotTurns({
+      turns,
+      currentThinking: 'checking options',
+      currentText: 'partial response',
+    }, 2);
+
+    expect(turns).toHaveLength(1);
+    expect(snapshot).toEqual([
+      { role: 'user', content: 'hello', timestamp: 1 },
+      { role: 'assistant', content: 'Thinking:\nchecking options', timestamp: 2 },
+      { role: 'assistant', content: 'partial response', timestamp: 2 },
+    ]);
+  });
+
   test('writes session file on "done" event type', async () => {
     const sessionId = 'sess_autosave_done';
     const turns = [
@@ -477,7 +494,34 @@ describe('createAutoSaveHandler', () => {
     expect(data.model).toBe('gpt-4');
   });
 
-  test('ignores non-terminal event types', async () => {
+  test('writes crashed snapshot on durable-safe non-terminal events', async () => {
+    const sessionId = 'sess_autosave_checkpoint';
+    const turns = [{ role: 'user', content: 'start', timestamp: 1 }];
+    const handler = createAutoSaveHandler({
+      getSessionId: () => sessionId,
+      getMessages: () => turns,
+      getMessageSnapshot: () => ({
+        turns,
+        currentText: 'working...',
+      }),
+      getAgentMessages: () => [],
+      getModel: () => 'default',
+      sessionsDir: tempDir,
+      startTime: '2026-04-19T10:00:00Z',
+    });
+
+    await handler('tool_result');
+
+    const filePath = join(tempDir, sessionFilename(sessionId));
+    const data = JSON.parse(await readFile(filePath, 'utf8'));
+    expect(data.status).toBe('crashed');
+    expect(data.messages).toEqual([
+      { role: 'user', content: 'start', timestamp: 1 },
+      expect.objectContaining({ role: 'assistant', content: 'working...' }),
+    ]);
+  });
+
+  test('ignores noisy streaming event types', async () => {
     const sessionId = 'sess_autosave_skip';
     const handler = createAutoSaveHandler({
       getSessionId: () => sessionId,
@@ -489,7 +533,6 @@ describe('createAutoSaveHandler', () => {
     });
 
     await handler('text_delta');
-    await handler('turn_start');
     await handler('tool_use');
     await handler('thinking_delta');
 
@@ -599,13 +642,14 @@ describe('message restore parsing', () => {
 
   test('rejects malformed persisted agent messages', () => {
     const messages = parseAgentMessages([
-      { role: 'user', content: 'legacy string is invalid here' },
+      { role: 'user', content: 'legacy string is migrated here' },
       { role: 'assistant', content: [{ type: 'text', text: 'valid' }] },
       { role: 'tool', content: [{ type: 'text', text: 'wrong part' }] },
       { role: 'unknown', content: [] },
     ]);
 
     expect(messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'legacy string is migrated here' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'valid' }] },
     ]);
   });
