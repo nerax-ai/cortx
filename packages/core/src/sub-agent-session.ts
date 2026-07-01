@@ -1,6 +1,8 @@
 import type { AgentEvent } from '@cortx/sdk';
 
 export interface SubAgentSession {
+  readonly runId: string;
+  readonly parentSessionId: string;
   readonly toolCallId: string;
   readonly description: string;
   readonly isBackground: boolean;
@@ -27,8 +29,10 @@ export class SubAgentSessionStore {
     this.notify();
   }
 
-  create(toolCallId: string, description: string, isBackground: boolean): SubAgentSession {
+  create(toolCallId: string, description: string, isBackground: boolean, parentSessionId = 'unknown'): SubAgentSession {
     const session: SubAgentSession = {
+      runId: `${parentSessionId}:${toolCallId}`,
+      parentSessionId,
       toolCallId,
       description,
       isBackground,
@@ -68,7 +72,11 @@ export class SubAgentSessionStore {
 
   private notify(): void {
     for (const fn of this.changeListeners) {
-      try { fn(); } catch { /* swallow listener errors */ }
+      try {
+        fn();
+      } catch {
+        /* swallow listener errors */
+      }
     }
   }
 

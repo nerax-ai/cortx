@@ -218,4 +218,28 @@ describe('conformance: runtime extensions', () => {
     await expect(collectCortx(cortx)).rejects.toThrow('agent extension not found');
     expect(streamCalled).toBe(false);
   });
+
+  test('invalid contribution shape fails at resolver boundary before the model is called', async () => {
+    const registry = createRegistry('conformance-runtime-invalid-shape');
+    let streamCalled = false;
+    await registry.register(defineCortxPlugin({
+      manifest: { manifestVersion: 1, id: 'bad-plugin', name: 'bad-plugin', version: '0.0.0', runtime: { main: 'inline' } },
+      setup(ctx) {
+        ctx.register(AGENT_TOOL, 'bad-tool', () => ({
+          name: 'bad',
+          inputSchema: {},
+        } as any));
+      },
+    }));
+
+    const cortx = new Cortx(mockLanguage([textResponse('ok')], () => { streamCalled = true; }), {
+      appName: 'conformance-runtime-invalid-shape',
+      model: 'test',
+      registry,
+      plugins: [{ use: 'bad-tool' }],
+    });
+
+    await expect(collectCortx(cortx)).rejects.toThrow('returned an invalid contribution shape');
+    expect(streamCalled).toBe(false);
+  });
 });

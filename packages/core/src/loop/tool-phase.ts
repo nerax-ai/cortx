@@ -8,7 +8,9 @@ import type {
   ToolContext,
   ToolResult,
 } from '@cortx/sdk';
-import { AgentEventQueue, drainQueuedEvents, emit } from './events.js';
+import { AgentEventQueue, drainQueuedEvents } from './events.js';
+import { emitPhaseEvent, withTurnDeadline, type AgentLoopRuntime } from './pipeline.js';
+import { userAbortError } from './errors.js';
 
 export interface ToolExecOutput {
   progressMessages: string[];
@@ -27,6 +29,8 @@ export interface ToolPhaseBaseContext {
   sessionId: string;
   workingDirectory: string;
   logger: Logger;
+  signal?: AbortSignal;
+  toolTimeoutMs?: number;
   askUser?: (question: string, toolCallId: string) => Promise<string>;
 }
 
@@ -36,15 +40,15 @@ export function isReadOnlyTool(tool: Tool): boolean {
 }
 
 export function formatToolResultOutput(result: ToolResult): string {
-  const value = !result.success && result.output === undefined && result.error
-    ? result.error
-    : result.output;
+  const value = !result.success && result.output === undefined && result.error ? result.error : result.output;
   return typeof value === 'string' ? value : JSON.stringify(value ?? '');
 }
 
 export function parseToolInput(input: LanguageToolCallContent['input']): Record<string, unknown> {
   const parsed = typeof input === 'string' ? JSON.parse(input) : input;
-  return (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? parsed as Record<string, unknown> : {};
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
 }
 
 export function parseToolInputError(input: LanguageToolCallContent['input']): string | undefined {
@@ -68,31 +72,44 @@ export function makeToolResult(tc: LanguageToolCallContent, output: ToolExecOutp
     type: 'tool-result',
     toolCallId: tc.toolCallId,
     toolName: tc.toolName,
-    output: output.isError ? { type: 'error-text', value: output.finalOutput } : { type: 'text', value: output.finalOutput },
+    output: output.isError
+      ? { type: 'error-text', value: output.finalOutput }
+      : { type: 'text', value: output.finalOutput },
     isError: output.isError,
   };
 }
 
-export async function* emitToolOutput(tc: LanguageToolCallContent, output: ToolExecOutput, extensions: AgentRuntimeExtensions, logger: Logger): AsyncGenerator<AgentEvent> {
+export async function* emitToolPhaseOutput(
+  runtime: AgentLoopRuntime,
+  iteration: number,
+  tc: LanguageToolCallContent,
+  output: ToolExecOutput,
+): AsyncGenerator<AgentEvent> {
   for (const text of output.progressMessages) {
     const event: AgentEvent = { type: 'tool_progress', toolCallId: tc.toolCallId, text };
-    await emit(extensions, event, logger);
-    yield event;
+    yield await emitPhaseEvent(runtime, 'tool.execute', iteration, event);
   }
-  const event: AgentEvent = { type: 'tool_result', toolCallId: tc.toolCallId, result: output.finalOutput, isError: output.isError };
-  await emit(extensions, event, logger);
-  yield event;
+  const event: AgentEvent = {
+    type: 'tool_result',
+    toolCallId: tc.toolCallId,
+    result: output.finalOutput,
+    isError: output.isError,
+  };
+  yield await emitPhaseEvent(runtime, 'tool.execute', iteration, event);
 }
 
 export async function* executePendingOutput(
   item: PendingToolExecution,
   output: ToolExecOutput,
-  extensions: AgentRuntimeExtensions,
+  runtime: AgentLoopRuntime,
+  iteration: number,
   toolResults: LanguageToolResultContent[],
-  logger: Logger,
+  checkpointToolResults?: LanguageToolResultContent[],
 ): AsyncGenerator<AgentEvent> {
-  yield* emitToolOutput(item.tc, output, extensions, logger);
-  toolResults.push(makeToolResult(item.tc, output));
+  const toolResult = makeToolResult(item.tc, output);
+  toolResults.push(toolResult);
+  checkpointToolResults?.push(toolResult);
+  yield* emitToolPhaseOutput(runtime, iteration, item.tc, output);
 }
 
 export async function runToolCall(
@@ -103,21 +120,29 @@ export async function runToolCall(
   budget: number,
 ): Promise<ToolExecOutput> {
   const progressMessages: string[] = [];
+  const toolAbort = createChildAbortController(baseCtx.signal);
   const ctx: ToolContext = {
     sessionId: baseCtx.sessionId,
     toolCallId: tc.toolCallId,
     workingDirectory: baseCtx.workingDirectory,
     logger: baseCtx.logger.scope(tc.toolName),
+    signal: toolAbort.signal,
     reportProgress: (text) => progressMessages.push(text),
-    askUser: baseCtx.askUser ? (question: string) => {
-      baseCtx.emitEvent?.({ type: 'user_question', question, toolCallId: tc.toolCallId });
-      return baseCtx.askUser!(question, tc.toolCallId);
-    } : undefined,
+    askUser: baseCtx.askUser
+      ? (question: string) => {
+          baseCtx.emitEvent?.({ type: 'user_question', question, toolCallId: tc.toolCallId });
+          return withAbortSignal(baseCtx.askUser!(question, tc.toolCallId), toolAbort.signal);
+        }
+      : undefined,
   };
 
   try {
     const input = parseToolInput(tc.input);
-    let result = await tool.execute(input, ctx);
+    throwIfAborted(toolAbort.signal);
+    let result = await withTurnDeadline(
+      (baseCtx as { turnDeadline?: AgentLoopRuntime['turnDeadline'] }).turnDeadline,
+      withToolTimeout(tool.execute(input, ctx), baseCtx.toolTimeoutMs, tc.toolName, toolAbort),
+    );
 
     let output = formatToolResultOutput(result);
     if (output.length > budget) {
@@ -127,7 +152,11 @@ export async function runToolCall(
       result = { ...result, output };
     }
     for (const contribution of extensions.toolAfters) {
-      const afterResult = await contribution.afterToolExecute({ toolCall: tc, tool, result });
+      throwIfAborted(toolAbort.signal);
+      const afterResult = await withTurnDeadline(
+        (baseCtx as { turnDeadline?: AgentLoopRuntime['turnDeadline'] }).turnDeadline,
+        Promise.resolve(contribution.afterToolExecute({ toolCall: tc, tool, result })),
+      );
       result = afterResult.result;
     }
 
@@ -136,7 +165,90 @@ export async function runToolCall(
   } catch (error) {
     const finalOutput = error instanceof Error ? error.message : String(error);
     return { progressMessages, finalOutput, isError: true };
+  } finally {
+    toolAbort.cleanup();
   }
+}
+
+async function withToolTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  toolName: string,
+  abortController: { abort(reason?: unknown): void },
+): Promise<T> {
+  if (timeoutMs === undefined) return promise;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => {
+          const error = Object.assign(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`), {
+            code: 'timeout' as const,
+          });
+          abortController.abort(error);
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function withAbortSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        onAbort = () =>
+          reject(signal.reason instanceof Error ? signal.reason : userAbortError(String(signal.reason ?? 'aborted')));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : userAbortError(String(signal.reason ?? 'aborted'));
+}
+
+function createChildAbortController(parent: AbortSignal | undefined): {
+  signal: AbortSignal;
+  abort(reason?: unknown): void;
+  cleanup(): void;
+} {
+  const controller = new AbortController();
+  if (!parent) {
+    return {
+      signal: controller.signal,
+      abort: (reason?: unknown) => controller.abort(reason),
+      cleanup: () => {},
+    };
+  }
+
+  const abortFromParent = () => controller.abort(parent.reason);
+  if (parent.aborted) {
+    abortFromParent();
+    return {
+      signal: controller.signal,
+      abort: (reason?: unknown) => controller.abort(reason),
+      cleanup: () => {},
+    };
+  }
+
+  parent.addEventListener('abort', abortFromParent, { once: true });
+  return {
+    signal: controller.signal,
+    abort: (reason?: unknown) => controller.abort(reason),
+    cleanup: () => parent.removeEventListener('abort', abortFromParent),
+  };
 }
 
 export async function* runToolBatch(
@@ -145,28 +257,32 @@ export async function* runToolBatch(
   baseCtx: ToolPhaseBaseContext,
   budget: number,
   logger: Logger,
+  runtime?: AgentLoopRuntime,
 ): AsyncGenerator<AgentEvent, ToolExecOutput[]> {
   const queue = new AgentEventQueue();
   const settled = yield* drainQueuedEvents(
-    Promise.allSettled(items.map((item) => runToolCall(
-      item.tc,
-      item.tool!,
-      extensions,
-      { ...baseCtx, emitEvent: (event) => queue.push(event) },
-      budget,
-    ))),
+    Promise.allSettled(
+      items.map((item) =>
+        runToolCall(item.tc, item.tool!, extensions, { ...baseCtx, emitEvent: (event) => queue.push(event) }, budget),
+      ),
+    ),
     queue,
     extensions,
     logger,
+    runtime,
+    'tool.execute',
+    (baseCtx as { iteration?: number }).iteration ?? 0,
   );
 
-  return settled.map((output) => output.status === 'fulfilled'
-    ? output.value
-    : {
-        progressMessages: [],
-        finalOutput: output.reason instanceof Error ? output.reason.message : String(output.reason),
-        isError: true,
-      });
+  return settled.map((output) =>
+    output.status === 'fulfilled'
+      ? output.value
+      : {
+          progressMessages: [],
+          finalOutput: output.reason instanceof Error ? output.reason.message : String(output.reason),
+          isError: true,
+        },
+  );
 }
 
 export function toolDecisionOutput(
@@ -175,12 +291,13 @@ export function toolDecisionOutput(
   reason: string | undefined,
   isError: boolean | undefined,
 ): ToolExecOutput {
-  const result = typeof rawResult === 'object' && rawResult !== null
-    ? rawResult
-    : {
-        success: action === 'shortCircuit' && isError !== true,
-        output: rawResult ?? (action === 'deny' ? reason ?? 'Denied' : 'short-circuited'),
-      };
+  const result =
+    typeof rawResult === 'object' && rawResult !== null
+      ? rawResult
+      : {
+          success: action === 'shortCircuit' && isError !== true,
+          output: rawResult ?? (action === 'deny' ? (reason ?? 'Denied') : 'short-circuited'),
+        };
   return {
     progressMessages: [],
     finalOutput: formatToolResultOutput(result),

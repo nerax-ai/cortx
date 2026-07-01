@@ -2,12 +2,24 @@ import { describe, expect, test } from 'bun:test';
 import type { AgentEvent, Tool } from '@cortx/sdk';
 import { agentLoop } from '../../src/index.js';
 import { AgentLoopController } from '../../src/types.js';
-import { collectEvents, mockLanguage, multiToolResponse, runtimeExtensions, textResponse, toolResponse } from './helpers.js';
+import {
+  collectEvents,
+  mockLanguage,
+  multiToolResponse,
+  runtimeExtensions,
+  textResponse,
+  toolResponse,
+} from './helpers.js';
 
-async function nextEventOrTimeout(gen: AsyncGenerator<AgentEvent>, timeoutMs = 100): Promise<IteratorResult<AgentEvent>> {
+async function nextEventOrTimeout(
+  gen: AsyncGenerator<AgentEvent>,
+  timeoutMs = 100,
+): Promise<IteratorResult<AgentEvent>> {
   return Promise.race([
     gen.next(),
-    new Promise<IteratorResult<AgentEvent>>((resolve) => setTimeout(() => resolve({ done: true, value: undefined }), timeoutMs)),
+    new Promise<IteratorResult<AgentEvent>>((resolve) =>
+      setTimeout(() => resolve({ done: true, value: undefined }), timeoutMs),
+    ),
   ]);
 }
 
@@ -43,14 +55,17 @@ describe('conformance: tool pipeline', () => {
       },
     ];
     const extensions = runtimeExtensions({
-      toolBefores: [{
-        beforeToolExecute({ tool, input }) {
-          if (tool?.name === 'rewriteMe') return { action: 'rewrite', input: { ...input, value: 'rewritten' } };
-          if (tool?.name === 'denyMe') return { action: 'deny', reason: 'blocked by policy' };
-          if (tool?.name === 'cacheMe') return { action: 'shortCircuit', result: { success: true, output: 'cached result' } };
-          return { action: 'allow' };
+      toolBefores: [
+        {
+          beforeToolExecute({ tool, input }) {
+            if (tool?.name === 'rewriteMe') return { action: 'rewrite', input: { ...input, value: 'rewritten' } };
+            if (tool?.name === 'denyMe') return { action: 'deny', reason: 'blocked by policy' };
+            if (tool?.name === 'cacheMe')
+              return { action: 'shortCircuit', result: { success: true, output: 'cached result' } };
+            return { action: 'allow' };
+          },
         },
-      }],
+      ],
     });
 
     const events = await collectEvents({
@@ -70,8 +85,16 @@ describe('conformance: tool pipeline', () => {
 
     expect(executedTools).toEqual(['rewriteMe']);
     expect(receivedInputs).toEqual([{ value: 'rewritten' }]);
-    expect(events.filter((event) => event.type === 'tool_use').map((event) => event.toolCall.toolCallId)).toEqual(['c1', 'c2', 'c3']);
-    expect(events.filter((event) => event.type === 'tool_result').map((event) => ({ id: event.toolCallId, result: event.result, isError: event.isError }))).toEqual([
+    expect(events.filter((event) => event.type === 'tool_use').map((event) => event.toolCall.toolCallId)).toEqual([
+      'c1',
+      'c2',
+      'c3',
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === 'tool_result')
+        .map((event) => ({ id: event.toolCallId, result: event.result, isError: event.isError })),
+    ).toEqual([
       { id: 'c1', result: 'rewritten', isError: false },
       { id: 'c2', result: 'blocked by policy', isError: true },
       { id: 'c3', result: 'cached result', isError: false },
@@ -80,19 +103,18 @@ describe('conformance: tool pipeline', () => {
 
   test('before-hook progress is emitted before the final short-circuit result', async () => {
     const extensions = runtimeExtensions({
-      toolBefores: [{
-        beforeToolExecute({ toolContext }) {
-          toolContext.reportProgress?.('checking permission');
-          return { action: 'shortCircuit', result: { success: false, error: 'permission denied' } };
+      toolBefores: [
+        {
+          beforeToolExecute({ toolContext }) {
+            toolContext.reportProgress?.('checking permission');
+            return { action: 'shortCircuit', result: { success: false, error: 'permission denied' } };
+          },
         },
-      }],
+      ],
     });
 
     const events = await collectEvents({
-      language: mockLanguage([
-        toolResponse('c1', 'danger', '{}'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'danger', '{}'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'run' }],
       tools: [{ name: 'danger', inputSchema: {}, execute: async () => ({ success: true, output: 'nope' }) }],
@@ -118,10 +140,22 @@ describe('conformance: tool pipeline', () => {
       ]),
       model: 'test',
       messages: [{ role: 'user', content: 'run' }],
-      tools: [{ name: 'throwTool', inputSchema: {}, execute: async () => { throw new Error('tool exploded'); } }],
+      tools: [
+        {
+          name: 'throwTool',
+          inputSchema: {},
+          execute: async () => {
+            throw new Error('tool exploded');
+          },
+        },
+      ],
     });
 
-    expect(events.filter((event) => event.type === 'tool_result').map((event) => ({ id: event.toolCallId, result: event.result, isError: event.isError }))).toEqual([
+    expect(
+      events
+        .filter((event) => event.type === 'tool_result')
+        .map((event) => ({ id: event.toolCallId, result: event.result, isError: event.isError })),
+    ).toEqual([
       { id: 'c1', result: 'Unknown tool: missingTool', isError: true },
       { id: 'c2', result: 'tool exploded', isError: true },
     ]);
@@ -129,12 +163,14 @@ describe('conformance: tool pipeline', () => {
 
   test('every yielded tool_result pairs with exactly one prior tool_use in model order', async () => {
     const extensions = runtimeExtensions({
-      sessionPolicies: [{
-        beforeToolCall({ tool }) {
-          if (tool?.name === 'denied') return { action: 'deny', reason: 'blocked' };
-          return { action: 'allow' };
+      sessionPolicies: [
+        {
+          beforeToolCall({ tool }) {
+            if (tool?.name === 'denied') return { action: 'deny', reason: 'blocked' };
+            return { action: 'allow' };
+          },
         },
-      }],
+      ],
     });
 
     const events = await collectEvents({
@@ -159,27 +195,36 @@ describe('conformance: tool pipeline', () => {
     const results = events.filter((event) => event.type === 'tool_result').map((event) => event.toolCallId);
     expect(uses).toEqual(['c1', 'c2', 'c3']);
     expect(results).toEqual(uses);
-    expect(events.filter((event) => event.type === 'tool_result').map((event) => event.result)).toEqual(['ok', 'Unknown tool: missing', 'blocked']);
+    expect(events.filter((event) => event.type === 'tool_result').map((event) => event.result)).toEqual([
+      'ok',
+      'Unknown tool: missing',
+      'blocked',
+    ]);
   });
 
   test('toolAfter rewrites success and error results before events and model-visible messages', async () => {
     const capturedMessages: unknown[] = [];
     const extensions = runtimeExtensions({
-      toolAfters: [{
-        afterToolExecute({ result }) {
-          return { result: { ...result, output: `normalized:${String(result.output ?? result.error ?? '')}` } };
+      toolAfters: [
+        {
+          afterToolExecute({ result }) {
+            return { result: { ...result, output: `normalized:${String(result.output ?? result.error ?? '')}` } };
+          },
         },
-      }],
+      ],
     });
 
     const events = await collectEvents({
-      language: mockLanguage([
-        multiToolResponse([
-          { id: 'c1', name: 'okTool', input: '{}' },
-          { id: 'c2', name: 'badTool', input: '{}' },
-        ]),
-        textResponse('done'),
-      ], (opts) => capturedMessages.push(opts.messages)),
+      language: mockLanguage(
+        [
+          multiToolResponse([
+            { id: 'c1', name: 'okTool', input: '{}' },
+            { id: 'c2', name: 'badTool', input: '{}' },
+          ]),
+          textResponse('done'),
+        ],
+        (opts) => capturedMessages.push(opts.messages),
+      ),
       model: 'test',
       messages: [{ role: 'user', content: 'run' }],
       tools: [
@@ -189,7 +234,11 @@ describe('conformance: tool pipeline', () => {
       extensions,
     });
 
-    expect(events.filter((event) => event.type === 'tool_result').map((event) => ({ result: event.result, isError: event.isError }))).toEqual([
+    expect(
+      events
+        .filter((event) => event.type === 'tool_result')
+        .map((event) => ({ result: event.result, isError: event.isError })),
+    ).toEqual([
       { result: 'normalized:ok', isError: false },
       { result: 'normalized:bad', isError: true },
     ]);
@@ -200,44 +249,49 @@ describe('conformance: tool pipeline', () => {
   test('invalid tool input becomes structured tool error unless repaired before execution', async () => {
     let repairedInput: Record<string, unknown> | undefined;
     const repairExtensions = runtimeExtensions({
-      toolBefores: [{
-        beforeToolExecute() {
-          return { action: 'rewrite', input: { repaired: true } };
+      toolBefores: [
+        {
+          beforeToolExecute() {
+            return { action: 'rewrite', input: { repaired: true } };
+          },
         },
-      }],
+      ],
     });
 
     const unrepaired = await collectEvents({
-      language: mockLanguage([
-        toolResponse('c1', 'echo', '{"broken":'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'echo', '{"broken":'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'bad' }],
       tools: [{ name: 'echo', inputSchema: {}, execute: async () => ({ success: true, output: 'should not run' }) }],
     });
 
     const repaired = await collectEvents({
-      language: mockLanguage([
-        toolResponse('c1', 'echo', '{"broken":'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'echo', '{"broken":'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'bad' }],
-      tools: [{
-        name: 'echo',
-        inputSchema: {},
-        execute: async (input) => {
-          repairedInput = input;
-          return { success: true, output: 'repaired' };
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {},
+          execute: async (input) => {
+            repairedInput = input;
+            return { success: true, output: 'repaired' };
+          },
         },
-      }],
+      ],
       extensions: repairExtensions,
     });
 
-    expect(unrepaired.find((event) => event.type === 'tool_result')).toMatchObject({ type: 'tool_result', isError: true });
+    expect(unrepaired.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      isError: true,
+    });
     expect(repairedInput).toEqual({ repaired: true });
-    expect(repaired.find((event) => event.type === 'tool_result')).toMatchObject({ type: 'tool_result', result: 'repaired', isError: false });
+    expect(repaired.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      result: 'repaired',
+      isError: false,
+    });
   });
 
   test('read-only spans execute concurrently but never cross an earlier write boundary', async () => {
@@ -296,7 +350,11 @@ describe('conformance: tool pipeline', () => {
     expect(order.indexOf('readA:start')).toBeGreaterThan(order.indexOf('write'));
     expect(order.indexOf('readB:start')).toBeGreaterThan(order.indexOf('write'));
     expect(order.indexOf('readB:end')).toBeLessThan(order.indexOf('readA:end'));
-    expect(events.filter((event) => event.type === 'tool_result').map((event) => event.result)).toEqual(['written', 'new', 'new']);
+    expect(events.filter((event) => event.type === 'tool_result').map((event) => event.result)).toEqual([
+      'written',
+      'new',
+      'new',
+    ]);
   });
 
   test('write tools execute serially in model order', async () => {
@@ -344,21 +402,20 @@ describe('conformance: tool pipeline', () => {
     const controller = new AgentLoopController();
     let asked = false;
     const gen = agentLoop({
-      language: mockLanguage([
-        toolResponse('c1', 'approvalTool', '{}'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'approvalTool', '{}'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'ask' }],
-      tools: [{
-        name: 'approvalTool',
-        inputSchema: {},
-        execute: async (_input, ctx) => {
-          asked = true;
-          const answer = await ctx.askUser?.('Allow tool?');
-          return { success: true, output: `answer:${answer}` };
+      tools: [
+        {
+          name: 'approvalTool',
+          inputSchema: {},
+          execute: async (_input, ctx) => {
+            asked = true;
+            const answer = await ctx.askUser?.('Allow tool?');
+            return { success: true, output: `answer:${answer}` };
+          },
         },
-      }],
+      ],
       controller,
     });
 
@@ -388,26 +445,27 @@ describe('conformance: tool pipeline', () => {
     const controller = new AgentLoopController();
     let beforeAsked = false;
     const extensions = runtimeExtensions({
-      toolBefores: [{
-        async beforeToolExecute({ input, toolContext }) {
-          beforeAsked = true;
-          const answer = await toolContext.askUser?.('Rewrite with approval?');
-          return { action: 'rewrite', input: { ...input, answer } };
+      toolBefores: [
+        {
+          async beforeToolExecute({ input, toolContext }) {
+            beforeAsked = true;
+            const answer = await toolContext.askUser?.('Rewrite with approval?');
+            return { action: 'rewrite', input: { ...input, answer } };
+          },
         },
-      }],
+      ],
     });
     const gen = agentLoop({
-      language: mockLanguage([
-        toolResponse('c1', 'approvalTool', '{}'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'approvalTool', '{}'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'ask before' }],
-      tools: [{
-        name: 'approvalTool',
-        inputSchema: {},
-        execute: async (input) => ({ success: true, output: `before:${input.answer}` }),
-      }],
+      tools: [
+        {
+          name: 'approvalTool',
+          inputSchema: {},
+          execute: async (input) => ({ success: true, output: `before:${input.answer}` }),
+        },
+      ],
       extensions,
       controller,
     });
@@ -420,32 +478,39 @@ describe('conformance: tool pipeline', () => {
     }
 
     expect(beforeAsked).toBe(true);
-    expect(events.at(-1)).toMatchObject({ type: 'user_question', question: 'Rewrite with approval?', toolCallId: 'c1' });
+    expect(events.at(-1)).toMatchObject({
+      type: 'user_question',
+      question: 'Rewrite with approval?',
+      toolCallId: 'c1',
+    });
     expect(events.some((event) => event.type === 'tool_result')).toBe(false);
 
     controller.answerUser('c1', 'yes');
     for await (const event of gen) events.push(event);
 
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({ type: 'tool_result', result: 'before:yes', isError: false });
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      result: 'before:yes',
+      isError: false,
+    });
   });
 
   test('custom askUser callback still produces a replayable user_question event', async () => {
     const askedQuestions: string[] = [];
     const events = await collectEvents({
-      language: mockLanguage([
-        toolResponse('c1', 'approvalTool', '{}'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'approvalTool', '{}'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'custom ask' }],
-      tools: [{
-        name: 'approvalTool',
-        inputSchema: {},
-        execute: async (_input, ctx) => {
-          const answer = await ctx.askUser?.('Use callback?');
-          return { success: true, output: `custom:${answer}` };
+      tools: [
+        {
+          name: 'approvalTool',
+          inputSchema: {},
+          execute: async (_input, ctx) => {
+            const answer = await ctx.askUser?.('Use callback?');
+            return { success: true, output: `custom:${answer}` };
+          },
         },
-      }],
+      ],
       askUser: async (question) => {
         askedQuestions.push(question);
         return 'yes';
@@ -453,26 +518,33 @@ describe('conformance: tool pipeline', () => {
     });
 
     expect(askedQuestions).toEqual(['Use callback?']);
-    expect(events.find((event) => event.type === 'user_question')).toMatchObject({ type: 'user_question', question: 'Use callback?', toolCallId: 'c1' });
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({ type: 'tool_result', result: 'custom:yes', isError: false });
+    expect(events.find((event) => event.type === 'user_question')).toMatchObject({
+      type: 'user_question',
+      question: 'Use callback?',
+      toolCallId: 'c1',
+    });
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      result: 'custom:yes',
+      isError: false,
+    });
   });
 
   test('oversized tool output is budgeted before toolAfter sees it', async () => {
     let afterSawOutput = '';
     const extensions = runtimeExtensions({
-      toolAfters: [{
-        afterToolExecute({ result }) {
-          afterSawOutput = String(result.output);
-          return { result };
+      toolAfters: [
+        {
+          afterToolExecute({ result }) {
+            afterSawOutput = String(result.output);
+            return { result };
+          },
         },
-      }],
+      ],
     });
 
     const events = await collectEvents({
-      language: mockLanguage([
-        toolResponse('c1', 'large', '{}'),
-        textResponse('done'),
-      ]),
+      language: mockLanguage([toolResponse('c1', 'large', '{}'), textResponse('done')]),
       model: 'test',
       messages: [{ role: 'user', content: 'large' }],
       tools: [{ name: 'large', inputSchema: {}, execute: async () => ({ success: true, output: 'x'.repeat(100) }) }],
@@ -482,6 +554,121 @@ describe('conformance: tool pipeline', () => {
 
     expect(afterSawOutput.length).toBeLessThanOrEqual(100);
     expect(afterSawOutput).toContain('truncated');
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({ type: 'tool_result', result: afterSawOutput });
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      result: afterSawOutput,
+    });
+  });
+
+  test('tool timeout becomes a structured tool_result and preserves the loop', async () => {
+    let toolSettled = false;
+    let signalSeen = false;
+    const events = await collectEvents({
+      language: mockLanguage([toolResponse('c1', 'slowTool', '{}'), textResponse('done')]),
+      model: 'test',
+      messages: [{ role: 'user', content: 'slow' }],
+      tools: [
+        {
+          name: 'slowTool',
+          inputSchema: {},
+          execute: async (_input, ctx) => {
+            signalSeen = Boolean(ctx.signal);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            toolSettled = true;
+            return { success: true, output: 'late success' };
+          },
+        },
+      ],
+      limits: { toolTimeoutMs: 5 },
+    });
+
+    const result = events.find((event) => event.type === 'tool_result');
+    expect(result).toMatchObject({ type: 'tool_result', toolCallId: 'c1', isError: true });
+    expect(String((result as Extract<AgentEvent, { type: 'tool_result' }>).result)).toContain('timed out after 5ms');
+    expect(events.at(-1)).toMatchObject({ type: 'done' });
+    expect(signalSeen).toBe(true);
+    expect(toolSettled).toBe(false);
+  });
+
+  test('tool timeout aborts the tool context signal for cooperative tools', async () => {
+    let aborted = false;
+    const events = await collectEvents({
+      language: mockLanguage([toolResponse('c1', 'cooperativeSlowTool', '{}'), textResponse('done')]),
+      model: 'test',
+      messages: [{ role: 'user', content: 'slow' }],
+      tools: [
+        {
+          name: 'cooperativeSlowTool',
+          inputSchema: {},
+          execute: async (_input, ctx) => {
+            await new Promise<void>((resolve) => {
+              ctx.signal?.addEventListener(
+                'abort',
+                () => {
+                  aborted = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            return { success: false, error: 'aborted cooperatively' };
+          },
+        },
+      ],
+      limits: { toolTimeoutMs: 5 },
+    });
+
+    expect(aborted).toBe(true);
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      toolCallId: 'c1',
+      isError: true,
+    });
+    expect(events.at(-1)).toMatchObject({ type: 'done' });
+  });
+
+  test('recorder observes tool prepare, question, progress, and result phases', async () => {
+    const recorded: Array<{ type: string; phase?: string; iteration: number }> = [];
+    const controller = new AgentLoopController();
+    const gen = agentLoop({
+      language: mockLanguage([toolResponse('c1', 'interactiveTool', '{}'), textResponse('done')]),
+      model: 'test',
+      messages: [{ role: 'user', content: 'record tools' }],
+      tools: [
+        {
+          name: 'interactiveTool',
+          inputSchema: {},
+          execute: async (_input, ctx) => {
+            ctx.reportProgress?.('working');
+            const answer = await ctx.askUser?.('Approve?');
+            return { success: true, output: `answer:${answer}` };
+          },
+        },
+      ],
+      controller,
+      recorder: {
+        recordEvent(event, context) {
+          recorded.push({ type: event.type, phase: context.phase, iteration: context.iteration });
+        },
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    while (!events.some((event) => event.type === 'user_question')) {
+      const next = await nextEventOrTimeout(gen);
+      expect(next.done).toBe(false);
+      events.push(next.value);
+    }
+    controller.answerUser('c1', 'yes');
+    for await (const event of gen) events.push(event);
+
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      result: 'answer:yes',
+    });
+    expect(recorded).toContainEqual({ type: 'tool_use', phase: 'tool.prepare', iteration: 1 });
+    expect(recorded).toContainEqual({ type: 'user_question', phase: 'tool.execute', iteration: 1 });
+    expect(recorded).toContainEqual({ type: 'tool_progress', phase: 'tool.execute', iteration: 1 });
+    expect(recorded).toContainEqual({ type: 'tool_result', phase: 'tool.execute', iteration: 1 });
   });
 });

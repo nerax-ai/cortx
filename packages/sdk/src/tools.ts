@@ -1,0 +1,31 @@
+import type { Logger } from '@nerax-ai/logger';
+
+export interface ToolResult {
+  success: boolean;
+  output?: unknown;
+  error?: string;
+}
+
+export interface ToolContext {
+  sessionId: string;
+  toolCallId: string;
+  workingDirectory: string;
+  logger: Logger;
+  signal?: AbortSignal;
+  reportProgress?: (text: string) => void;
+  askUser?: (question: string) => Promise<string>;
+}
+
+export type SideEffects = 'none' | 'read' | 'write' | 'destructive';
+
+export interface Tool {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+  sideEffects?: SideEffects;
+  execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
+}
+
+export function defineTool<T extends Tool>(tool: T): T {
+  return tool;
+}

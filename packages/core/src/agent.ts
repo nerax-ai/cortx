@@ -1,7 +1,12 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentController, CortxConfig, CortxRegistry } from './types.js';
-import type { LanguageMessage, Tool, ToolResult } from '@cortx/sdk';
-import { formatToolSummary, mergeAgentRuntimeExtensions, type AgentRuntimeExtensions } from '@cortx/sdk';
+import type { AgentRunCheckpoint, LanguageMessage, Tool, ToolResult } from '@cortx/sdk';
+import {
+  AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
+  formatToolSummary,
+  mergeAgentRuntimeExtensions,
+  type AgentRuntimeExtensions,
+} from '@cortx/sdk';
 import { AgentLoopController } from './types.js';
 import { agentLoop } from './loop.js';
 import { discoverSkills } from './skill/discover.js';
@@ -41,6 +46,7 @@ export class Cortx {
   private readonly registry: CortxRegistry;
   private readonly tools = new Map<string, Tool>();
   private _messages: LanguageMessage[] = [];
+  private readonly _sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   private _controller = new AgentLoopController();
   private _skillExtensions: AgentRuntimeExtensions | null = null;
   readonly agentSessions = new SubAgentSessionStore();
@@ -54,14 +60,26 @@ export class Cortx {
     this.tools.set('agent', this.createAgentTool());
   }
 
-  get messages(): LanguageMessage[] { return [...this._messages]; }
-  get controller(): AgentController { return this._controller; }
+  get messages(): LanguageMessage[] {
+    return [...this._messages];
+  }
+  get controller(): AgentController {
+    return this._controller;
+  }
 
-  registerTool(tool: Tool): void { this.tools.set(tool.name, tool); }
+  registerTool(tool: Tool): void {
+    this.tools.set(tool.name, tool);
+  }
 
-  steer(message: string | LanguageMessage): void { this._controller.steer(message); }
-  followUp(message: string | LanguageMessage): void { this._controller.followUp(message); }
-  abort(reason?: string): void { this._controller.abort(reason); }
+  steer(message: string | LanguageMessage): void {
+    this._controller.steer(message);
+  }
+  followUp(message: string | LanguageMessage): void {
+    this._controller.followUp(message);
+  }
+  abort(reason?: string): void {
+    this._controller.abort(reason);
+  }
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
     const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -73,7 +91,11 @@ export class Cortx {
 
     const extensions = mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions);
     const messages = [...this._messages];
-    messages.push(typeof userMessage === 'string' ? { role: 'user' as const, content: [{ type: 'text' as const, text: userMessage }] } : userMessage);
+    messages.push(
+      typeof userMessage === 'string'
+        ? { role: 'user' as const, content: [{ type: 'text' as const, text: userMessage }] }
+        : userMessage,
+    );
 
     for await (const event of agentLoop({
       ...this.config,
@@ -82,6 +104,7 @@ export class Cortx {
       tools: [...this.tools.values()],
       messages,
       controller: this._controller,
+      sessionId: this._sessionId,
     })) {
       yield event;
       if (event.type === 'done' || event.type === 'error') this._messages = messages;
@@ -92,7 +115,8 @@ export class Cortx {
     const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
     const extensions = mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions);
-    const messages = [...this._messages];
+    const checkpoint = await this.loadResumeCheckpoint();
+    const messages = checkpoint?.state.messages?.map((message) => ({ ...message })) ?? [...this._messages];
     for await (const event of agentLoop({
       ...this.config,
       extensions,
@@ -100,7 +124,9 @@ export class Cortx {
       tools: [...this.tools.values()],
       messages,
       controller: this._controller,
-      skipInitialLlm: true,
+      sessionId: this._sessionId,
+      resumeCheckpoint: checkpoint,
+      skipInitialLlm: !checkpoint,
     })) {
       yield event;
       if (event.type === 'done' || event.type === 'error') this._messages = messages;
@@ -115,8 +141,21 @@ export class Cortx {
     return text;
   }
 
-  clearHistory(): void { this._messages = []; }
-  replaceMessages(messages: LanguageMessage[]): void { this._messages = messages.slice(); }
+  clearHistory(): void {
+    this._messages = [];
+  }
+  replaceMessages(messages: LanguageMessage[]): void {
+    this._messages = messages.slice();
+  }
+
+  private async loadResumeCheckpoint(): Promise<AgentRunCheckpoint | undefined> {
+    const checkpoint = await this.config.durableStore?.loadCheckpoint(this._sessionId);
+    if (!checkpoint) return undefined;
+    if (checkpoint.schemaVersion !== AGENT_RUN_CHECKPOINT_SCHEMA_VERSION) return undefined;
+    if (checkpoint.state.terminal) return undefined;
+    if (!checkpoint.state.messages?.length) return undefined;
+    return checkpoint;
+  }
 
   private async applySubAgentPolicies(input: {
     sessionId: string;
@@ -149,18 +188,22 @@ export class Cortx {
     const language = this.language;
     const config = this.config;
     const cortx = this;
-    const getTools = () => [...this.tools.values()].filter(t => t.name !== 'agent');
+    const getTools = () => [...this.tools.values()].filter((t) => t.name !== 'agent');
 
     return {
       name: 'agent',
-      description: 'Launch a sub-agent to handle a complex sub-task that requires multiple tool calls in isolation. ONLY use this when the task is too complex for a single tool call and you need an autonomous loop. For simple questions, code explanations, and straightforward tasks, respond directly without using this tool.',
+      description:
+        'Launch a sub-agent to handle a complex sub-task that requires multiple tool calls in isolation. ONLY use this when the task is too complex for a single tool call and you need an autonomous loop. For simple questions, code explanations, and straightforward tasks, respond directly without using this tool.',
       sideEffects: 'write',
       inputSchema: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'The task description for the sub-agent' },
           description: { type: 'string', description: 'Short description (3-5 words) of the task' },
-          run_in_background: { type: 'boolean', description: 'Start the agent in the background and return immediately. The agent will run asynchronously.' },
+          run_in_background: {
+            type: 'boolean',
+            description: 'Start the agent in the background and return immediately. The agent will run asynchronously.',
+          },
         },
         required: ['prompt'],
       },
@@ -185,12 +228,16 @@ export class Cortx {
         });
         if (policyResult) return policyResult;
 
-        const session = cortx.agentSessions.create(toolCallId, desc, isBackground);
+        const session = cortx.agentSessions.create(toolCallId, desc, isBackground, ctx.sessionId);
 
         ctx.reportProgress?.(`⏳ ${desc}: starting...`);
         cortx.onAgentEvent?.({ type: 'agent_started', toolCallId, description: desc, isBackground });
 
         const subSystem = `You are a sub-agent. Complete the task using available tools.`;
+        const childController = new AgentLoopController();
+        const abortChild = () => childController.abort('parent aborted');
+        if (ctx.signal?.aborted) abortChild();
+        ctx.signal?.addEventListener('abort', abortChild, { once: true });
         const loopOpts = {
           language,
           model: config.model,
@@ -202,6 +249,8 @@ export class Cortx {
           logger: ctx.logger,
           maxIterations: 10,
           maxOutputTokens: config.maxOutputTokens,
+          controller: childController,
+          limits: config.limits,
         };
 
         if (isBackground) {
@@ -209,11 +258,26 @@ export class Cortx {
             try {
               await runSubAgentLoop(loopOpts, session, toolCallId, undefined, cortx.onAgentEvent?.bind(cortx));
               cortx.agentSessions.complete(toolCallId, false);
-              cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: session.output, iterations: session.iterations, toolCallCount: session.toolCallCount });
+              cortx.onAgentEvent?.({
+                type: 'agent_completed',
+                toolCallId,
+                output: session.output,
+                iterations: session.iterations,
+                toolCallCount: session.toolCallCount,
+              });
             } catch (e) {
               ctx.logger.error(`Background agent "${desc}" failed: ${e instanceof Error ? e.message : String(e)}`);
               cortx.agentSessions.complete(toolCallId, true);
-              cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: '', iterations: session.iterations, toolCallCount: session.toolCallCount, isError: true });
+              cortx.onAgentEvent?.({
+                type: 'agent_completed',
+                toolCallId,
+                output: '',
+                iterations: session.iterations,
+                toolCallCount: session.toolCallCount,
+                isError: true,
+              });
+            } finally {
+              ctx.signal?.removeEventListener('abort', abortChild);
             }
           })();
 
@@ -224,17 +288,37 @@ export class Cortx {
           const turnProgress = (text: string) => ctx.reportProgress?.(text);
           await runSubAgentLoop(loopOpts, session, toolCallId, turnProgress, cortx.onAgentEvent?.bind(cortx));
 
-          ctx.reportProgress?.(`✓ ${desc}: done (${session.iterations} iterations, ${session.toolCallCount} tool calls)`);
+          ctx.reportProgress?.(
+            `✓ ${desc}: done (${session.iterations} iterations, ${session.toolCallCount} tool calls)`,
+          );
           cortx.agentSessions.complete(toolCallId, false);
-          cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: session.output, iterations: session.iterations, toolCallCount: session.toolCallCount });
+          cortx.onAgentEvent?.({
+            type: 'agent_completed',
+            toolCallId,
+            output: session.output,
+            iterations: session.iterations,
+            toolCallCount: session.toolCallCount,
+          });
 
-          const preview = session.output.length > 800 ? session.output.slice(0, 800) + `\n... (${session.output.length} chars total)` : session.output;
+          const preview =
+            session.output.length > 800
+              ? session.output.slice(0, 800) + `\n... (${session.output.length} chars total)`
+              : session.output;
           return { success: true, output: preview || '(sub-agent produced no text output)' };
         } catch (e) {
           cortx.agentSessions.complete(toolCallId, true);
-          cortx.onAgentEvent?.({ type: 'agent_completed', toolCallId, output: '', iterations: session.iterations, toolCallCount: session.toolCallCount, isError: true });
+          cortx.onAgentEvent?.({
+            type: 'agent_completed',
+            toolCallId,
+            output: '',
+            iterations: session.iterations,
+            toolCallCount: session.toolCallCount,
+            isError: true,
+          });
           ctx.reportProgress?.(`✗ ${desc}: failed`);
           return { success: false, error: `Sub-agent failed: ${e instanceof Error ? e.message : String(e)}` };
+        } finally {
+          ctx.signal?.removeEventListener('abort', abortChild);
         }
       },
     };

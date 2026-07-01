@@ -1,21 +1,14 @@
-import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import type { AgentEvent, AgentRuntimeExtensions, LanguageMessage, LanguageToolCallContent, Logger, Tool } from '@cortx/sdk';
-import { emit } from './events.js';
+import type { AgentEvent, LanguageMessage, LanguageToolCallContent, Tool } from '@cortx/sdk';
 import { applyModelRequestPolicies } from './policy.js';
 import { classifyError, streamModel } from './stream.js';
+import { emitPhaseEvent, withTurnDeadline, type AgentLoopPhaseInput } from './pipeline.js';
+import { normalizeAgentError, toError } from './errors.js';
 
-export interface ModelPhaseInput {
-  language: LanguageClient;
-  model: string;
+export interface ModelPhaseInput extends AgentLoopPhaseInput {
   systemMessages: LanguageMessage[];
   messages: LanguageMessage[];
   tools: Tool[];
-  maxOutputTokens?: number;
-  temperature?: number;
-  extensions: AgentRuntimeExtensions;
-  logger: Logger;
-  sessionId: string;
   iteration: number;
   retryCount: number;
   maxRetries: number;
@@ -39,38 +32,31 @@ export type ModelPhaseOutcome =
   | { action: 'terminal'; event: AgentEvent; retryCount: number; overflowRecoveryCount: number };
 
 export async function* runModelPhase(input: ModelPhaseInput): AsyncGenerator<AgentEvent, ModelPhaseOutcome> {
-  const {
-    language,
-    model,
-    systemMessages,
-    messages,
-    tools,
-    maxOutputTokens,
-    temperature,
-    extensions,
-    logger,
-    sessionId,
-    iteration,
-    maxRetries,
-    maxOverflowRecoveries,
-  } = input;
+  const { runtime, systemMessages, messages, tools, iteration, maxRetries, maxOverflowRecoveries } = input;
+  const { language, model, maxOutputTokens, temperature, extensions, logger, sessionId } = runtime;
 
   let retryCount = input.retryCount;
   let overflowRecoveryCount = input.overflowRecoveryCount;
   let transformedMessages: LanguageMessage[] = [...systemMessages, ...messages];
   for (const contribution of extensions.messagesTransforms) {
-    const result = await contribution.transformMessages({ messages: transformedMessages });
+    const result = await withTurnDeadline(
+      runtime.turnDeadline,
+      Promise.resolve(contribution.transformMessages({ messages: transformedMessages })),
+    );
     transformedMessages = result.messages;
   }
 
   persistTransformedMessages(messages, transformedMessages, systemMessages.length);
 
-  const modelPolicy = await applyModelRequestPolicies(extensions, {
-    sessionId,
-    iteration,
-    messages: transformedMessages,
-    tools,
-  });
+  const modelPolicy = await withTurnDeadline(
+    runtime.turnDeadline,
+    applyModelRequestPolicies(extensions, {
+      sessionId,
+      iteration,
+      messages: transformedMessages,
+      tools,
+    }),
+  );
   if (modelPolicy.action === 'deny') {
     return {
       action: 'terminal',
@@ -83,25 +69,23 @@ export async function* runModelPhase(input: ModelPhaseInput): AsyncGenerator<Age
 
   try {
     const streamResult = yield* streamModel({
+      runtime,
       language,
       model,
       messages: transformedMessages,
       maxOutputTokens,
       temperature,
       tools: modelPolicy.tools,
-      extensions,
-      logger,
+      iteration,
     });
 
     if (streamResult.thinkingBuffer) {
       const event: AgentEvent = { type: 'thinking', content: streamResult.thinkingBuffer };
-      await emit(extensions, event, logger);
-      yield event;
+      yield await emitPhaseEvent(runtime, 'model', iteration, event);
     }
     if (streamResult.textBuffer) {
       const event: AgentEvent = { type: 'text', content: streamResult.textBuffer };
-      await emit(extensions, event, logger);
-      yield event;
+      yield await emitPhaseEvent(runtime, 'model', iteration, event);
     }
 
     return {
@@ -115,18 +99,20 @@ export async function* runModelPhase(input: ModelPhaseInput): AsyncGenerator<Age
       overflowRecoveryCount,
     };
   } catch (caught) {
-    const error = caught instanceof Error ? caught : new Error(String(caught));
+    const error = toError(caught);
     const code = classifyError(caught);
 
     if (code === 'context_overflow') {
       overflowRecoveryCount++;
       const overflowEvent: AgentEvent = { type: 'context_overflow', messages: [...messages] };
-      await emit(extensions, overflowEvent, logger);
-      yield overflowEvent;
+      yield await emitPhaseEvent(runtime, 'model', iteration, overflowEvent);
 
       if (extensions.contextOverflows.length && overflowRecoveryCount <= maxOverflowRecoveries) {
         for (const contribution of extensions.contextOverflows) {
-          const result = await contribution.handleContextOverflow({ messages: [...messages] });
+          const result = await withTurnDeadline(
+            runtime.turnDeadline,
+            Promise.resolve(contribution.handleContextOverflow({ messages: [...messages] })),
+          );
           if (result.action === 'recover') {
             messages.length = 0;
             for (const message of result.messages) messages.push(message);
@@ -146,9 +132,12 @@ export async function* runModelPhase(input: ModelPhaseInput): AsyncGenerator<Age
     let shouldRetry = false;
     let retryDelay = 1000;
     if (extensions.errorRecovers.length) {
-      const errorEvent: AgentEvent & { type: 'error' } = { type: 'error', error, code };
+      const errorEvent = normalizeAgentError(error, code);
       for (const contribution of extensions.errorRecovers) {
-        const result = await contribution.recoverError({ event: errorEvent, error, code });
+        const result = await withTurnDeadline(
+          runtime.turnDeadline,
+          Promise.resolve(contribution.recoverError({ event: errorEvent, error, code })),
+        );
         if (result.action === 'retry' && retryCount < maxRetries) {
           shouldRetry = true;
           retryDelay = result.delayMs ?? 1000;

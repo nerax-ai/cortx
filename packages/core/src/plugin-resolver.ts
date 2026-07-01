@@ -10,8 +10,11 @@ import {
   AGENT_TOOL,
   AGENT_TOOL_AFTER,
   AGENT_TOOL_BEFORE,
+  appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
   noopLogger,
+  type AgentExtensionType,
+  type AgentRuntimeExtensionValue,
   type AgentRuntimeExtensions,
   type CortxExtensionType,
   type CortxFactoryMap,
@@ -19,6 +22,30 @@ import {
 import type { CortxConfig, CortxRegistry, PluginConfig } from './types.js';
 
 type RegistryExtension = ReturnType<CortxRegistry['listExtensions']>[number];
+type ExtensionValidatorMap = {
+  [T in AgentExtensionType]: (value: unknown) => value is AgentRuntimeExtensionValue<T>;
+};
+
+const extensionValidators = {
+  [AGENT_TOOL]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_TOOL> =>
+    hasString(value, 'name') && hasFunction(value, 'execute') && isRecord((value as { inputSchema?: unknown }).inputSchema),
+  [AGENT_SYSTEM_TRANSFORM]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_SYSTEM_TRANSFORM> =>
+    hasFunction(value, 'transformSystem'),
+  [AGENT_MESSAGES_TRANSFORM]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_MESSAGES_TRANSFORM> =>
+    hasFunction(value, 'transformMessages'),
+  [AGENT_TOOL_BEFORE]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_TOOL_BEFORE> =>
+    hasFunction(value, 'beforeToolExecute'),
+  [AGENT_TOOL_AFTER]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_TOOL_AFTER> =>
+    hasFunction(value, 'afterToolExecute'),
+  [AGENT_ERROR_RECOVER]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_ERROR_RECOVER> =>
+    hasFunction(value, 'recoverError'),
+  [AGENT_CONTEXT_OVERFLOW]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_CONTEXT_OVERFLOW> =>
+    hasFunction(value, 'handleContextOverflow'),
+  [AGENT_EVENT_OBSERVER]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_EVENT_OBSERVER> =>
+    hasFunction(value, 'onAgentEvent'),
+  [AGENT_SESSION_POLICY]: (value: unknown): value is AgentRuntimeExtensionValue<typeof AGENT_SESSION_POLICY> =>
+    isRecord(value),
+} satisfies ExtensionValidatorMap;
 
 export function getRegistry(config: CortxConfig): CortxRegistry {
   if (config.registry) return config.registry;
@@ -48,19 +75,27 @@ export async function resolveExtensions(
         entry.options,
         namespace,
       );
-      if (ext.type === AGENT_TOOL) resolved.tools.push(value as AgentRuntimeExtensions['tools'][number]);
-      else if (ext.type === AGENT_SYSTEM_TRANSFORM) resolved.systemTransforms.push(value as AgentRuntimeExtensions['systemTransforms'][number]);
-      else if (ext.type === AGENT_MESSAGES_TRANSFORM) resolved.messagesTransforms.push(value as AgentRuntimeExtensions['messagesTransforms'][number]);
-      else if (ext.type === AGENT_TOOL_BEFORE) resolved.toolBefores.push(value as AgentRuntimeExtensions['toolBefores'][number]);
-      else if (ext.type === AGENT_TOOL_AFTER) resolved.toolAfters.push(value as AgentRuntimeExtensions['toolAfters'][number]);
-      else if (ext.type === AGENT_ERROR_RECOVER) resolved.errorRecovers.push(value as AgentRuntimeExtensions['errorRecovers'][number]);
-      else if (ext.type === AGENT_CONTEXT_OVERFLOW) resolved.contextOverflows.push(value as AgentRuntimeExtensions['contextOverflows'][number]);
-      else if (ext.type === AGENT_EVENT_OBSERVER) resolved.eventObservers.push(value as AgentRuntimeExtensions['eventObservers'][number]);
-      else if (ext.type === AGENT_SESSION_POLICY) resolved.sessionPolicies.push(value as AgentRuntimeExtensions['sessionPolicies'][number]);
+      appendResolvedExtension(resolved, ext.type, assertExtensionValue(ext, value));
     }
   }
 
   return resolved;
+}
+
+function appendResolvedExtension<T extends AgentExtensionType>(
+  resolved: AgentRuntimeExtensions,
+  type: T,
+  value: AgentRuntimeExtensionValue<T>,
+): void {
+  appendAgentRuntimeExtension(resolved, type, value);
+}
+
+function assertExtensionValue<T extends AgentExtensionType>(
+  ext: RegistryExtension & { type: T },
+  value: unknown,
+): AgentRuntimeExtensionValue<T> {
+  if (extensionValidators[ext.type](value)) return value;
+  throw new Error(`agent extension "${ext.fullId}" (${ext.type}) returned an invalid contribution shape`);
 }
 
 function findConfiguredExtensions(registry: CortxRegistry, entry: PluginConfig): RegistryExtension[] {
@@ -73,4 +108,16 @@ function findConfiguredExtensions(registry: CortxRegistry, entry: PluginConfig):
 
 function matchesConfiguredUse(ext: RegistryExtension, use: string): boolean {
   return ext.id === use || ext.fullId === use || ext.packageName === use;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasFunction(value: unknown, key: string): boolean {
+  return isRecord(value) && typeof value[key] === 'function';
+}
+
+function hasString(value: unknown, key: string): boolean {
+  return isRecord(value) && typeof value[key] === 'string';
 }

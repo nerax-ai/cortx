@@ -1,13 +1,11 @@
 import type {
   AgentEvent,
-  AgentRuntimeExtensions,
   LanguageToolCallContent,
   Logger,
   Tool,
   ToolContext,
 } from '@cortx/sdk';
-import type { AgentController } from '../types.js';
-import { AgentEventQueue, drainQueuedEvents, emit } from './events.js';
+import { AgentEventQueue, drainQueuedEvents } from './events.js';
 import { checkControlInterruption, type ControlInterruption } from './control.js';
 import { applyToolPolicies } from './policy.js';
 import {
@@ -16,24 +14,22 @@ import {
   toolDecisionOutput,
   type PendingToolExecution,
 } from './tool-phase.js';
+import { emitPhaseEvent, withTurnDeadline, type AgentLoopPhaseInput } from './pipeline.js';
 
 export type ToolPrepareOutcome =
   | { action: 'prepared'; pendingTools: PendingToolExecution[] }
   | { action: 'interrupted'; interruption: Exclude<ControlInterruption, { action: 'none' }>; pendingTools: PendingToolExecution[] };
 
-export interface ToolPreparePhaseInput {
+export interface ToolPreparePhaseInput extends AgentLoopPhaseInput {
   toolCalls: LanguageToolCallContent[];
   toolMap: Map<string, Tool>;
-  sessionId: string;
-  workingDirectory: string;
-  logger: Logger;
-  extensions: AgentRuntimeExtensions;
-  controller?: AgentController;
-  askUser?: (question: string, toolCallId: string) => Promise<string>;
+  iteration: number;
 }
 
 export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGenerator<AgentEvent, ToolPrepareOutcome> {
-  const { toolCalls, toolMap, sessionId, workingDirectory, logger, extensions, controller, askUser } = input;
+  const { toolCalls, toolMap, runtime, iteration } = input;
+  const { sessionId, workingDirectory = process.cwd(), logger, extensions, controller } = runtime;
+  const askUser = runtime.askUserForTool;
   const pendingTools: PendingToolExecution[] = [];
 
   for (const toolCall of toolCalls) {
@@ -43,8 +39,7 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
     }
 
     const toolUseEvent: AgentEvent = { type: 'tool_use', toolCall };
-    await emit(extensions, toolUseEvent, logger);
-    yield toolUseEvent;
+    yield await emitPhaseEvent(runtime, 'tool.prepare', iteration, toolUseEvent);
 
     const tool = toolMap.get(toolCall.toolName);
     if (!tool) {
@@ -63,13 +58,16 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
     let parsedInput = inputError ? {} : parseToolInput(toolCall.input);
 
     if (!inputError) {
-      const policyResult = await applyToolPolicies(extensions, {
-        sessionId,
-        toolCall: { ...toolCall },
-        tool,
-        input: parsedInput,
-        toolContext,
-      });
+      const policyResult = await withTurnDeadline(
+        runtime.turnDeadline,
+        applyToolPolicies(extensions, {
+          sessionId,
+          toolCall: { ...toolCall },
+          tool,
+          input: parsedInput,
+          toolContext,
+        }),
+      );
       if (policyResult.action === 'readyOutput') {
         pendingTools.push({
           tc: toolCall,
@@ -108,15 +106,21 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
           } : undefined,
         };
         result = yield* drainQueuedEvents(
-          Promise.resolve().then(() => contribution.beforeToolExecute({
-            toolCall: { ...toolCall },
-            tool,
-            input: parsedInput,
-            toolContext: hookContext,
-          })),
+          withTurnDeadline(
+            runtime.turnDeadline,
+            Promise.resolve().then(() => contribution.beforeToolExecute({
+              toolCall: { ...toolCall },
+              tool,
+              input: parsedInput,
+              toolContext: hookContext,
+            })),
+          ),
           queue,
           extensions,
           logger,
+          runtime,
+          'tool.prepare',
+          iteration,
         );
       } catch (error) {
         pendingTools.push({

@@ -1,10 +1,7 @@
 import type {
   AgentEvent,
-  AgentRuntimeExtensions,
   LanguageToolResultContent,
-  Logger,
 } from '@cortx/sdk';
-import type { AgentController } from '../types.js';
 import { checkControlInterruption, type ControlInterruption } from './control.js';
 import {
   executePendingOutput,
@@ -14,33 +11,35 @@ import {
   type PendingToolExecution,
   type ToolPhaseBaseContext,
 } from './tool-phase.js';
+import type { AgentLoopPhaseInput } from './pipeline.js';
 
 export type ToolExecuteOutcome =
   | { action: 'completed'; toolResults: LanguageToolResultContent[] }
   | { action: 'interrupted'; interruption: Exclude<ControlInterruption, { action: 'none' }>; toolResults: LanguageToolResultContent[] };
 
-export interface ToolExecutePhaseInput {
+export interface ToolExecutePhaseInput extends AgentLoopPhaseInput {
   pendingTools: PendingToolExecution[];
-  extensions: AgentRuntimeExtensions;
   baseContext: ToolPhaseBaseContext;
+  checkpointToolResults?: LanguageToolResultContent[];
   budget: number;
   maxConcurrentTools: number;
   maxConcurrentAgents: number;
-  logger: Logger;
-  controller?: AgentController;
+  iteration: number;
 }
 
 export async function* executeToolPhase(input: ToolExecutePhaseInput): AsyncGenerator<AgentEvent, ToolExecuteOutcome> {
   const {
     pendingTools,
-    extensions,
+    runtime,
     baseContext,
+    checkpointToolResults,
     budget,
     maxConcurrentTools,
     maxConcurrentAgents,
-    logger,
-    controller,
+    iteration,
   } = input;
+  const { extensions, logger, controller } = runtime;
+  const context = { ...baseContext, turnDeadline: runtime.turnDeadline, iteration };
   const toolResults: LanguageToolResultContent[] = [];
   let pendingIdx = 0;
 
@@ -53,7 +52,7 @@ export async function* executeToolPhase(input: ToolExecutePhaseInput): AsyncGene
     const item = pendingTools[pendingIdx];
     if (item.readyOutput) {
       pendingIdx++;
-      yield* executePendingOutput(item, item.readyOutput, extensions, toolResults, logger);
+      yield* executePendingOutput(item, item.readyOutput, runtime, iteration, toolResults, checkpointToolResults);
       continue;
     }
 
@@ -75,9 +74,9 @@ export async function* executeToolPhase(input: ToolExecutePhaseInput): AsyncGene
         pendingIdx++;
       }
 
-      const outputs = yield* runToolBatch(readBatch, extensions, baseContext, budget, logger);
+      const outputs = yield* runToolBatch(readBatch, extensions, context, budget, logger, runtime);
       for (let i = 0; i < readBatch.length; i++) {
-        yield* executePendingOutput(readBatch[i], withBeforeProgress(readBatch[i], outputs[i]), extensions, toolResults, logger);
+        yield* executePendingOutput(readBatch[i], withBeforeProgress(readBatch[i], outputs[i]), runtime, iteration, toolResults, checkpointToolResults);
       }
       continue;
     }
@@ -98,17 +97,17 @@ export async function* executeToolPhase(input: ToolExecutePhaseInput): AsyncGene
 
       if (agentBatch.length > 1) {
         pendingIdx = agentIdx;
-        const outputs = yield* runToolBatch(agentBatch, extensions, baseContext, budget, logger);
+        const outputs = yield* runToolBatch(agentBatch, extensions, context, budget, logger, runtime);
         for (let i = 0; i < agentBatch.length; i++) {
-          yield* executePendingOutput(agentBatch[i], withBeforeProgress(agentBatch[i], outputs[i]), extensions, toolResults, logger);
+          yield* executePendingOutput(agentBatch[i], withBeforeProgress(agentBatch[i], outputs[i]), runtime, iteration, toolResults, checkpointToolResults);
         }
         continue;
       }
     }
 
     pendingIdx++;
-    const [output] = yield* runToolBatch([item], extensions, baseContext, budget, logger);
-    yield* executePendingOutput(item, withBeforeProgress(item, output), extensions, toolResults, logger);
+    const [output] = yield* runToolBatch([item], extensions, context, budget, logger, runtime);
+    yield* executePendingOutput(item, withBeforeProgress(item, output), runtime, iteration, toolResults, checkpointToolResults);
   }
 
   return { action: 'completed', toolResults };

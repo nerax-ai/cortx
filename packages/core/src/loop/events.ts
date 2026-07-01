@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentRuntimeExtensions, Logger } from '@cortx/sdk';
+import { emitPhaseEvent, type AgentLoopPhaseName, type AgentLoopRuntime } from './pipeline.js';
 
 export class AgentEventQueue {
   private readonly events: AgentEvent[] = [];
@@ -47,6 +48,9 @@ export async function* drainQueuedEvents<T>(
   queue: AgentEventQueue,
   extensions: AgentRuntimeExtensions,
   logger: Logger,
+  runtime?: AgentLoopRuntime,
+  phase?: AgentLoopPhaseName,
+  iteration = 0,
 ): AsyncGenerator<AgentEvent, T> {
   let settled: { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown } | undefined;
   operation.then(
@@ -63,8 +67,9 @@ export async function* drainQueuedEvents<T>(
   while (true) {
     const next = await queue.next();
     if (next.done) break;
-    await emit(extensions, next.value, logger);
-    yield next.value;
+    yield runtime && phase
+      ? await emitPhaseEvent(runtime, phase, iteration, next.value)
+      : await emitQueuedEvent(extensions, logger, next.value);
   }
 
   if (!settled) {
@@ -75,4 +80,13 @@ export async function* drainQueuedEvents<T>(
   }
   if (settled.status === 'rejected') throw settled.reason;
   return settled.value;
+}
+
+async function emitQueuedEvent(
+  extensions: AgentRuntimeExtensions,
+  logger: Logger,
+  event: AgentEvent,
+): Promise<AgentEvent> {
+  await emit(extensions, event, logger);
+  return event;
 }
