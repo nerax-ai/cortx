@@ -14,6 +14,7 @@ import { createSkillExtensions } from './skill/plugin.js';
 import { SubAgentSessionStore } from './sub-agent-session.js';
 import { createUserMessage } from './message-helpers.js';
 import { getRegistry, resolveExtensions } from './plugin-resolver.js';
+import { createDefaultSafetyExtensions } from './safety-policy.js';
 
 async function runSubAgentLoop(
   loopOpts: Parameters<typeof agentLoop>[0],
@@ -82,6 +83,7 @@ export class Cortx {
   }
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
+    this.resetControllerIfAborted();
     const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
 
@@ -89,7 +91,9 @@ export class Cortx {
     const skills = await discoverSkills(cwd, this.config);
     this._skillExtensions = skills.length ? createSkillExtensions(skills) : null;
 
-    const extensions = mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions);
+    const extensions = this.withDefaultSafetyExtensions(
+      mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions),
+    );
     const messages = [...this._messages];
     messages.push(
       typeof userMessage === 'string'
@@ -112,9 +116,12 @@ export class Cortx {
   }
 
   async *continue(): AsyncGenerator<AgentEvent> {
+    this.resetControllerIfAborted();
     const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
-    const extensions = mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions);
+    const extensions = this.withDefaultSafetyExtensions(
+      mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions),
+    );
     const checkpoint = await this.loadResumeCheckpoint();
     const messages = checkpoint?.state.messages?.map((message) => ({ ...message })) ?? [...this._messages];
     for await (const event of agentLoop({
@@ -155,6 +162,15 @@ export class Cortx {
     if (checkpoint.state.terminal) return undefined;
     if (!checkpoint.state.messages?.length) return undefined;
     return checkpoint;
+  }
+
+  private resetControllerIfAborted(): void {
+    if (this._controller.isAborted) this._controller = new AgentLoopController();
+  }
+
+  private withDefaultSafetyExtensions(extensions: AgentRuntimeExtensions): AgentRuntimeExtensions {
+    if (this.config.safety?.toolApproval === 'disabled') return extensions;
+    return mergeAgentRuntimeExtensions(extensions, createDefaultSafetyExtensions());
   }
 
   private async applySubAgentPolicies(input: {
@@ -217,7 +233,9 @@ export class Cortx {
         const isBackground = input.run_in_background === true;
         const toolCallId = ctx.toolCallId;
         const inheritedExtensions = await resolveExtensions(config.plugins, cortx.registry, `agent-${toolCallId}`);
-        const childExtensions = mergeAgentRuntimeExtensions(cortx._skillExtensions, inheritedExtensions);
+        const childExtensions = cortx.withDefaultSafetyExtensions(
+          mergeAgentRuntimeExtensions(cortx._skillExtensions, inheritedExtensions),
+        );
         const policyResult = await cortx.applySubAgentPolicies({
           sessionId: ctx.sessionId,
           parentToolCallId: toolCallId,

@@ -128,6 +128,7 @@ describe('core agent.* extensions', () => {
       setup(ctx) {
         ctx.register(AGENT_TOOL, 'echo-tool', () => ({
           name: 'echo',
+          sideEffects: 'read',
           inputSchema: {},
           execute: async (input) => ({ success: true, output: input.msg }),
         }));
@@ -176,6 +177,7 @@ describe('core agent.* extensions', () => {
       model: 'test',
       tools: [{
         name: 'echo',
+        sideEffects: 'read',
         inputSchema: {},
         execute: async (input) => {
           receivedInput = input;
@@ -213,6 +215,7 @@ describe('core agent.* extensions', () => {
       model: 'test',
       tools: [{
         name: 'echo',
+        sideEffects: 'read',
         inputSchema: {},
         execute: async (input) => {
           receivedInput = input;
@@ -250,6 +253,7 @@ describe('core agent.* extensions', () => {
       model: 'test',
       tools: [{
         name: 'echo',
+        sideEffects: 'read',
         inputSchema: {},
         execute: async () => {
           executed = true;
@@ -286,6 +290,7 @@ describe('core agent.* extensions', () => {
       model: 'test',
       tools: [{
         name: 'echo',
+        sideEffects: 'read',
         inputSchema: {},
         execute: async () => ({ success: true, output: 'real' }),
       }],

@@ -8,6 +8,7 @@ export interface ServerConfig {
   host?: string;
   corsOrigin?: string;
   maxSessions?: number;
+  maxEventsPerSession?: number;
   idleTimeoutMs?: number;
   language: LanguageClient;
   model: string;

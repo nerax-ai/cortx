@@ -22,15 +22,6 @@ async function main() {
   }) as ProjectPluginRegistry;
   const language = await createLanguageClient(config, log, registry);
 
-  // askUser callback: for tool permission prompts, we use a simple readline fallback
-  // since Ink hasn't taken over stdin yet at this point
-  const askUser = (question: string): Promise<string> => {
-    // Will be wired into Ink's input system in future units
-    // For now, return a default allow response
-    log.info(`askUser: ${question}`);
-    return Promise.resolve('yes');
-  };
-
   const agent = new Cortx(language, {
     appName: 'cortx',
     model: config.model,
@@ -40,7 +31,6 @@ async function main() {
     tools: createAllTools(cwd),
     registry,
     plugins: config.agentPlugins,
-    askUser,
     logger: log,
   });
 

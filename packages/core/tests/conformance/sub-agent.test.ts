@@ -21,6 +21,7 @@ describe('conformance: sub-agent', () => {
     ]), {
       model: 'test',
       workingDirectory: process.cwd(),
+      askUser: async () => 'yes',
     });
     cortx.onAgentEvent = (event) => lifecycleEvents.push(event);
 
@@ -66,6 +67,7 @@ describe('conformance: sub-agent', () => {
     ]), {
       model: 'test',
       workingDirectory: process.cwd(),
+      askUser: async () => 'yes',
     });
     cortx.onAgentEvent = (event) => lifecycleEvents.push(event);
 

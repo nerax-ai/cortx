@@ -172,4 +172,7 @@ export interface CortxConfig {
   maxConcurrentTools?: number;
   maxConcurrentAgents?: number;
   skillPaths?: string[];
+  safety?: {
+    toolApproval?: 'enabled' | 'disabled';
+  };
 }

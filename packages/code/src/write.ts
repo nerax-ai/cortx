@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from 'fs/promises';
-import { dirname, resolve } from 'path';
+import { writeFile } from 'fs/promises';
 import type { Tool } from '@cortx/sdk';
+import { isWorkspacePathError, resolveWritableWorkspacePath } from './path-safety.js';
 
 export function createWriteTool(cwd: string): Tool {
   return {
@@ -18,8 +18,13 @@ export function createWriteTool(cwd: string): Tool {
     execute: async ({ path, content }) => {
       if (typeof path !== 'string' || typeof content !== 'string')
         return { success: false, error: 'path and content must be strings' };
-      const abs = resolve(cwd, path);
-      await mkdir(dirname(abs), { recursive: true });
+      let abs: string;
+      try {
+        abs = await resolveWritableWorkspacePath(cwd, path);
+      } catch (error) {
+        if (isWorkspacePathError(error)) return { success: false, error: error.message };
+        throw error;
+      }
       await writeFile(abs, content, 'utf-8');
       return { success: true, output: `Wrote ${content.length} bytes to ${path}` };
     },

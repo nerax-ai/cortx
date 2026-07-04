@@ -199,6 +199,12 @@ export default function App({ session, model, cwd, logger }: AppProps) {
   }, [store]);
 
   const handleSubmit = useCallback((value: string) => {
+    const pending = store.getState().pendingQuestion;
+    if (pending) {
+      session.controller?.answerUser(pending.toolCallId, value);
+      store.dispatch({ type: 'user_answer', toolCallId: pending.toolCallId, response: value });
+      return;
+    }
     submitInput(value, { registryStatus, registryError, registry, session, store }).catch(() => {});
   }, [registryStatus, registryError, registry, session, store]);
 

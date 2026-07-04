@@ -24,6 +24,7 @@ export function createServer(config: ServerConfig): Hono {
 
   const manager = new SessionManager({
     maxSessions: config.maxSessions,
+    maxEventsPerSession: config.maxEventsPerSession,
     idleTimeoutMs: config.idleTimeoutMs,
     language: config.language,
     model: config.model,

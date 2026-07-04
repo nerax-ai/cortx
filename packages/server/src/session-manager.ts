@@ -14,11 +14,13 @@ interface ManagedSession {
   subscribers: Set<(event: AgentEvent) => void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   isRunning: boolean;
+  runId: number;
 }
 
 export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
   private readonly maxSessions: number;
+  private readonly maxEventsPerSession: number;
   private readonly idleTimeoutMs: number;
   private readonly language: LanguageClient;
   private readonly model: string;
@@ -29,6 +31,7 @@ export class SessionManager {
 
   constructor(opts: {
     maxSessions?: number;
+    maxEventsPerSession?: number;
     idleTimeoutMs?: number;
     language: LanguageClient;
     model: string;
@@ -38,6 +41,7 @@ export class SessionManager {
     logger: Logger;
   }) {
     this.maxSessions = opts.maxSessions ?? 10;
+    this.maxEventsPerSession = opts.maxEventsPerSession ?? 2_000;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60 * 1000;
     this.language = opts.language;
     this.model = opts.model;
@@ -71,6 +75,7 @@ export class SessionManager {
       subscribers: new Set(),
       idleTimer: undefined,
       isRunning: false,
+      runId: 0,
     };
 
     cortx.onAgentEvent = (event: AgentEvent) => {
@@ -104,15 +109,16 @@ export class SessionManager {
     session.lastActivityAt = Date.now();
     this.resetIdleTimer(session);
     session.isRunning = true;
+    const runId = ++session.runId;
 
     (async () => {
       try {
         for await (const event of session.cortx.run(message)) {
-          if (!this.sessions.has(session.id)) break;
+          if (!this.sessions.has(session.id) || session.runId !== runId) break;
           this.broadcast(session, event);
         }
       } catch (e) {
-        if (!this.sessions.has(session.id)) return;
+        if (!this.sessions.has(session.id) || session.runId !== runId) return;
         const error = e instanceof Error ? e : new Error(String(e));
         const errEvent: AgentEvent = {
           type: 'error',
@@ -121,7 +127,7 @@ export class SessionManager {
         };
         this.broadcast(session, errEvent);
       } finally {
-        session.isRunning = false;
+        if (session.runId === runId) session.isRunning = false;
       }
     })();
 
@@ -133,6 +139,8 @@ export class SessionManager {
     if (!session) return { error: 'Session not found', status: 404 };
     session.cortx.abort('User aborted via API');
     session.cortx.controller.rejectPendingQuestions('Session aborted');
+    session.runId++;
+    session.isRunning = false;
     return null;
   }
 
@@ -163,6 +171,9 @@ export class SessionManager {
   private broadcast(session: ManagedSession, event: AgentEvent): void {
     if (!this.sessions.has(session.id)) return;
     session.events.push(event);
+    if (session.events.length > this.maxEventsPerSession) {
+      session.events.splice(0, session.events.length - this.maxEventsPerSession);
+    }
     for (const sub of session.subscribers) {
       try { sub(event); } catch { /* subscriber error, ignore */ }
     }

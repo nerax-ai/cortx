@@ -99,6 +99,7 @@ describe('conformance: runtime extensions', () => {
       setup(ctx) {
         ctx.register(AGENT_TOOL, 'duplicate-tool', () => ({
           name: 'firstTool',
+          sideEffects: 'read',
           inputSchema: {},
           execute: async () => ({ success: true, output: 'first' }),
         }));
@@ -109,6 +110,7 @@ describe('conformance: runtime extensions', () => {
       setup(ctx) {
         ctx.register(AGENT_TOOL, 'duplicate-tool', () => ({
           name: 'secondTool',
+          sideEffects: 'read',
           inputSchema: {},
           execute: async () => ({ success: true, output: 'second' }),
         }));

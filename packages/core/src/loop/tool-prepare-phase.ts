@@ -58,15 +58,31 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
     let parsedInput = inputError ? {} : parseToolInput(toolCall.input);
 
     if (!inputError) {
-      const policyResult = await withTurnDeadline(
-        runtime.turnDeadline,
-        applyToolPolicies(extensions, {
-          sessionId,
-          toolCall: { ...toolCall },
-          tool,
-          input: parsedInput,
-          toolContext,
-        }),
+      const queue = new AgentEventQueue();
+      const policyToolContext: ToolContext = {
+        ...toolContext,
+        askUser: askUser ? (question: string) => {
+          queue.push({ type: 'user_question', question, toolCallId: toolCall.toolCallId });
+          return askUser(question, toolCall.toolCallId);
+        } : undefined,
+      };
+      const policyResult = yield* drainQueuedEvents(
+        withTurnDeadline(
+          runtime.turnDeadline,
+          applyToolPolicies(extensions, {
+            sessionId,
+            toolCall: { ...toolCall },
+            tool,
+            input: parsedInput,
+            toolContext: policyToolContext,
+          }),
+        ),
+        queue,
+        extensions,
+        logger,
+        runtime,
+        'tool.prepare',
+        iteration,
       );
       if (policyResult.action === 'readyOutput') {
         pendingTools.push({

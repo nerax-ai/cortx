@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
-import { resolve } from 'path';
 import type { Tool } from '@cortx/sdk';
+import { isWorkspacePathError, resolveWorkspacePath } from './path-safety.js';
 
 const MAX_LINES = 2000;
 
@@ -20,7 +20,13 @@ export function createReadTool(cwd: string): Tool {
     },
     execute: async ({ path, offset, limit }) => {
       if (!path) return { success: false, output: 'path is required' };
-      const abs = resolve(cwd, path as string);
+      let abs: string;
+      try {
+        abs = await resolveWorkspacePath(cwd, path as string);
+      } catch (error) {
+        if (isWorkspacePathError(error)) return { success: false, error: error.message };
+        throw error;
+      }
       const text = await readFile(abs, 'utf-8');
       const lines = text.split('\n');
       const start = offset ? Math.max(0, Number(offset) - 1) : 0;

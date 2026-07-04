@@ -265,6 +265,7 @@ describe('conformance: session policy', () => {
       model: 'test',
       registry,
       plugins: [{ use: 'no-subagents' }],
+      askUser: async () => 'yes',
     });
 
     const events = await collectCortx(cortx, 'delegate');
@@ -275,6 +276,73 @@ describe('conformance: session policy', () => {
       toolCallId: 'agent-call',
       result: 'sub-agents disabled',
       isError: true,
+    });
+  });
+
+  test('Cortx default safety policy asks before write tools and denies unapproved calls', async () => {
+    let executed = false;
+    const cortx = new Cortx(mockLanguage([
+      toolResponse('write-call', 'writeFile', '{"path":"a.txt"}'),
+      textResponse('done'),
+    ]), {
+      model: 'test',
+      askUser: async () => 'no',
+      tools: [{
+        name: 'writeFile',
+        sideEffects: 'write',
+        inputSchema: {},
+        execute: async () => {
+          executed = true;
+          return { success: true, output: 'written' };
+        },
+      }],
+    });
+
+    const events = await collectCortx(cortx, 'write');
+
+    expect(executed).toBe(false);
+    expect(events.find((event) => event.type === 'user_question')).toMatchObject({
+      type: 'user_question',
+      toolCallId: 'write-call',
+    });
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      toolCallId: 'write-call',
+      isError: true,
+    });
+  });
+
+  test('Cortx default safety policy allows approved write tools', async () => {
+    let executed = false;
+    const cortx = new Cortx(mockLanguage([
+      toolResponse('write-call', 'writeFile', '{"path":"a.txt"}'),
+      textResponse('done'),
+    ]), {
+      model: 'test',
+      askUser: async () => 'yes',
+      tools: [{
+        name: 'writeFile',
+        sideEffects: 'write',
+        inputSchema: {},
+        execute: async () => {
+          executed = true;
+          return { success: true, output: 'written' };
+        },
+      }],
+    });
+
+    const events = await collectCortx(cortx, 'write');
+
+    expect(executed).toBe(true);
+    expect(events.find((event) => event.type === 'user_question')).toMatchObject({
+      type: 'user_question',
+      toolCallId: 'write-call',
+    });
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      type: 'tool_result',
+      toolCallId: 'write-call',
+      result: 'written',
+      isError: false,
     });
   });
 });

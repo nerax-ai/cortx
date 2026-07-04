@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createReadTool } from '../src/read';
@@ -11,13 +11,16 @@ import { createFindTool } from '../src/find';
 import { createLsTool } from '../src/ls';
 
 let tmpDir: string;
+let outsideDir: string;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'cortx-code-test-'));
+  outsideDir = mkdtempSync(join(tmpdir(), 'cortx-code-outside-'));
 });
 
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
+  rmSync(outsideDir, { recursive: true, force: true });
 });
 
 describe('createReadTool', () => {
@@ -57,6 +60,23 @@ describe('createReadTool', () => {
     expect(result.success).toBe(true);
     expect(result.output).toBe('absolute');
   });
+
+  test('rejects paths outside the workspace', async () => {
+    const tool = createReadTool(tmpDir);
+    writeFileSync(join(outsideDir, 'secret.txt'), 'secret');
+    const result = await tool.execute({ path: join(outsideDir, 'secret.txt') }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
+  });
+
+  test('rejects symlinks that escape the workspace', async () => {
+    const tool = createReadTool(tmpDir);
+    writeFileSync(join(outsideDir, 'secret.txt'), 'secret');
+    symlinkSync(join(outsideDir, 'secret.txt'), join(tmpDir, 'secret-link.txt'));
+    const result = await tool.execute({ path: 'secret-link.txt' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
+  });
 });
 
 describe('createWriteTool', () => {
@@ -79,6 +99,24 @@ describe('createWriteTool', () => {
     await tool.execute({ path: 'overwrite.txt', content: 'original' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
     await tool.execute({ path: 'overwrite.txt', content: 'replaced' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
     expect(readFileSync(join(tmpDir, 'overwrite.txt'), 'utf-8')).toBe('replaced');
+  });
+
+  test('rejects writes outside the workspace', async () => {
+    const tool = createWriteTool(tmpDir);
+    const target = join(outsideDir, 'owned.txt');
+    const result = await tool.execute({ path: target, content: 'owned' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
+    expect(existsSync(target)).toBe(false);
+  });
+
+  test('rejects writes through symlinked parent directories', async () => {
+    const tool = createWriteTool(tmpDir);
+    symlinkSync(outsideDir, join(tmpDir, 'outside-link'));
+    const result = await tool.execute({ path: 'outside-link/owned.txt', content: 'owned' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
+    expect(existsSync(join(outsideDir, 'owned.txt'))).toBe(false);
   });
 });
 
@@ -109,11 +147,23 @@ describe('createEditTool', () => {
     }
   });
 
-  test('replaces only first occurrence', async () => {
+  test('rejects ambiguous text matches', async () => {
     const tool = createEditTool(tmpDir);
     writeFileSync(join(tmpDir, 'multi.txt'), 'foo foo foo');
-    await tool.execute({ path: 'multi.txt', oldText: 'foo', newText: 'bar' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
-    expect(readFileSync(join(tmpDir, 'multi.txt'), 'utf-8')).toBe('bar foo foo');
+    const result = await tool.execute({ path: 'multi.txt', oldText: 'foo', newText: 'bar' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not unique');
+    expect(readFileSync(join(tmpDir, 'multi.txt'), 'utf-8')).toBe('foo foo foo');
+  });
+
+  test('rejects edits outside the workspace', async () => {
+    const tool = createEditTool(tmpDir);
+    const target = join(outsideDir, 'secret.txt');
+    writeFileSync(target, 'secret');
+    const result = await tool.execute({ path: target, oldText: 'secret', newText: 'changed' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
+    expect(readFileSync(target, 'utf-8')).toBe('secret');
   });
 });
 
@@ -205,6 +255,14 @@ describe('createGrepTool', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('found me');
   });
+
+  test('rejects searches outside the workspace', async () => {
+    const tool = createGrepTool(tmpDir);
+    writeFileSync(join(outsideDir, 'secret.txt'), 'secret');
+    const result = await tool.execute({ pattern: 'secret', path: outsideDir }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
+  });
 });
 
 describe('createFindTool', () => {
@@ -244,6 +302,14 @@ describe('createFindTool', () => {
     const result = await tool.execute({ pattern: '*.ts', path: 'search' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
     expect(result.success).toBe(true);
     expect(result.output).toContain('target.ts');
+  });
+
+  test('rejects find paths outside the workspace', async () => {
+    const tool = createFindTool(tmpDir);
+    writeFileSync(join(outsideDir, 'secret.txt'), 'secret');
+    const result = await tool.execute({ pattern: '*.txt', path: outsideDir }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
   });
 });
 
@@ -294,5 +360,12 @@ describe('createLsTool', () => {
     } catch (e) {
       expect((e as any).code).toBe('ENOENT');
     }
+  });
+
+  test('rejects listing outside the workspace', async () => {
+    const tool = createLsTool(tmpDir);
+    const result = await tool.execute({ path: outsideDir }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workspace');
   });
 });

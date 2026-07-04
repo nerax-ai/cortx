@@ -255,4 +255,55 @@ describe('SessionManager', () => {
     manager.dispose();
     PluginRegistry.reset();
   });
+
+  test('caps retained event history per session', async () => {
+    PluginRegistry.reset();
+    const manager = new SessionManager({
+      maxEventsPerSession: 3,
+      language: {
+        stream: async function* () {
+          yield { type: 'text-delta', delta: 'a' };
+          yield { type: 'text-delta', delta: 'b' };
+          yield { type: 'text-delta', delta: 'c' };
+          yield { type: 'text-delta', delta: 'd' };
+          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+        },
+      } as any,
+      model: 'test-model',
+      logger: createLogger({ appName: 'session-manager-history-test', console: false }),
+    });
+    const created = await manager.create();
+    if ('error' in created) throw new Error(created.error);
+
+    expect(await manager.prompt(created.id, 'hello')).toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const session = manager.get(created.id);
+    expect(session?.events.length).toBeLessThanOrEqual(3);
+    expect(session?.events.at(-1)?.type).toBe('done');
+    manager.dispose();
+    PluginRegistry.reset();
+  });
+
+  test('abort clears the running gate and ignores the aborted run', async () => {
+    PluginRegistry.reset();
+    const manager = new SessionManager({
+      language: {
+        stream: async function* () {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+        },
+      } as any,
+      model: 'test-model',
+      logger: createLogger({ appName: 'session-manager-abort-test', console: false }),
+    });
+    const created = await manager.create();
+    if ('error' in created) throw new Error(created.error);
+
+    expect(await manager.prompt(created.id, 'first')).toBeNull();
+    expect(manager.abort(created.id)).toBeNull();
+    expect(await manager.prompt(created.id, 'second')).toBeNull();
+    manager.dispose();
+    PluginRegistry.reset();
+  });
 });

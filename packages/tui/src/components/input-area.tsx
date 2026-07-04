@@ -127,6 +127,7 @@ export function resolveCtrlCAction(
 
 export function helpText(isRunning: boolean, paletteOpen: boolean, width = 80): string {
   if (paletteOpen) return 'Enter select | Esc close | type to filter';
+  if (isRunning && width < 88) return 'Enter answer/follow-up  ·  Ctrl+S steer  ·  Ctrl+C interrupt';
   if (isRunning) return 'Enter follow-up  ·  Ctrl+S steer  ·  Ctrl+C interrupt';
   if (width < 88) return 'Enter send  ·  Ctrl+S steer  ·  / commands  ·  Ctrl+C exit';
   return 'Enter send  ·  Shift+Enter newline  ·  Ctrl+S steer  ·  Ctrl+E editor  ·  / commands';
@@ -482,7 +483,7 @@ export function InputArea({
   const effectiveStatus = status === 'interrupting' ? 'interrupting' : storeStatus;
   const activity = deriveActivity(effectiveStatus, toolCalls);
 
-  const prompt = inputMode === 'steer' ? 'steer' : isRunning ? 'follow-up' : 'cortx';
+  const prompt = inputMode === 'steer' ? 'steer' : storeStatus === 'awaiting_user' ? 'answer' : isRunning ? 'follow-up' : 'cortx';
   const { lines, hiddenCount } = visibleInputLines(value, 4);
   const statusSummary = statusBadge(effectiveStatus, registryReady);
   const activitySummary = effectiveStatus === 'running'
