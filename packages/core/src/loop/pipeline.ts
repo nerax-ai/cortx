@@ -34,6 +34,7 @@ export interface AgentLoopRuntime extends Pick<
   recorder?: AgentRunRecorder;
   durableStore?: AgentDurableRunStore;
   sessionId: string;
+  runId?: number;
   abortController: AbortController;
   controller?: AgentController;
   askUser?: (question: string) => Promise<string>;
@@ -220,6 +221,7 @@ async function recordEventCheckpoint(
   const checkpoint = {
     schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     sessionId: runtime.sessionId,
+    runId: runtime.runId,
     iteration,
     kind,
     state: {

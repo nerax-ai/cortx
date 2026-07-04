@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Cortx } from '../src/index.js';
+import { Cortx, createEmptyAgentRuntimeExtensions } from '../src/index.js';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageMessage } from '@cortx/sdk';
 import { PluginRegistry } from '@nerax-ai/plugin';
@@ -44,40 +44,51 @@ function capturingLanguage(captured: { messages?: LanguageMessage[] }): Language
   } as unknown as LanguageClient;
 }
 
-describe('Cortx capability mounting', () => {
-  test('sub-agent tool can be disabled by configuration', () => {
-    const cortx = new Cortx(capturingLanguage({}), {
-      model: 'test',
-      capabilities: { subAgents: 'disabled' },
-    });
+describe('Cortx kernel inputs', () => {
+  test('does not mount a sub-agent tool by default', () => {
+    const cortx = new Cortx(capturingLanguage({}), { model: 'test' });
 
     expect((cortx as unknown as { tools: Map<string, unknown> }).tools.has('agent')).toBe(false);
   });
 
-  test('skill bridge is enabled by default and can be disabled', async () => {
+  test('does not discover or expand skill assets by default', async () => {
     await writeSkill('commit', 'Expanded commit body: $ARGUMENTS');
 
-    const enabledCapture: { messages?: LanguageMessage[] } = {};
-    const enabled = new Cortx(capturingLanguage(enabledCapture), {
+    const captured: { messages?: LanguageMessage[] } = {};
+    const cortx = new Cortx(capturingLanguage(captured), {
       model: 'test',
       workingDirectory: testDir,
-      capabilities: { subAgents: 'disabled' },
     });
-    for await (const event of enabled.run('/commit fix: typo')) {
+    for await (const event of cortx.run('/commit fix: typo')) {
       if (event.type === 'done') break;
     }
 
-    const disabledCapture: { messages?: LanguageMessage[] } = {};
-    const disabled = new Cortx(capturingLanguage(disabledCapture), {
-      model: 'test',
-      workingDirectory: testDir,
-      capabilities: { skills: 'disabled', subAgents: 'disabled' },
+    expect(messageText(captured.messages?.at(-1))).toBe('/commit fix: typo');
+  });
+
+  test('keeps explicit tools and extensions as kernel inputs', async () => {
+    const captured: { messages?: LanguageMessage[] } = {};
+    const extensions = createEmptyAgentRuntimeExtensions();
+    extensions.systemTransforms.push({
+      transformSystem(input) {
+        return { system: `${input.system}\nexplicit system extension` };
+      },
     });
-    for await (const event of disabled.run('/commit fix: typo')) {
+    const cortx = new Cortx(capturingLanguage(captured), {
+      model: 'test',
+      extensions,
+      tools: [{
+        name: 'readSomething',
+        inputSchema: {},
+        execute: async () => ({ success: true, output: 'ok' }),
+      }],
+    });
+    expect((cortx as unknown as { tools: Map<string, unknown> }).tools.has('readSomething')).toBe(true);
+
+    for await (const event of cortx.run('hello')) {
       if (event.type === 'done') break;
     }
 
-    expect(messageText(enabledCapture.messages?.at(-1))).toContain('Expanded commit body: fix: typo');
-    expect(messageText(disabledCapture.messages?.at(-1))).toBe('/commit fix: typo');
+    expect(messageText(captured.messages?.[0])).toContain('explicit system extension');
   });
 });

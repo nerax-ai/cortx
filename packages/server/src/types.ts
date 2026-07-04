@@ -1,6 +1,6 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { Logger } from '@cortx/sdk';
-import type { CortxRegistry, PluginConfig } from '@cortx/core';
+import type { CortxRegistry, PluginConfig } from '@cortx/runtime';
 import type { WorkspaceToolMode } from '@cortx/runtime';
 
 export interface ServerConfig {

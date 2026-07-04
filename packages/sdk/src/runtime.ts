@@ -38,6 +38,7 @@ export type AgentRunCheckpointKind = 'turn_start' | 'turn_end' | 'tool_result' |
 export interface AgentRunCheckpoint {
   schemaVersion: typeof AGENT_RUN_CHECKPOINT_SCHEMA_VERSION;
   sessionId: string;
+  runId?: number;
   iteration: number;
   kind: AgentRunCheckpointKind;
   state: AgentRunCheckpointState;

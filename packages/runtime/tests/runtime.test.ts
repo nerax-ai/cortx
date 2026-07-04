@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { CortxRuntime, RuntimeError, toCoreCapabilities } from '../src/index';
-import type { AgentEvent, LanguageMessage } from '@cortx/sdk';
+import { DEFAULT_RUNTIME_CAPABILITIES, CortxRuntime, RuntimeError } from '../src/index';
+import type { AgentEvent, LanguageMessage, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 
@@ -56,13 +56,23 @@ async function waitForEvent(events: AgentEvent[], type: AgentEvent['type'], time
   throw new Error(`Timed out waiting for ${type}`);
 }
 
+async function waitForEnvelope(
+  events: RuntimeAgentEventEnvelope[],
+  type: AgentEvent['type'],
+  timeoutMs = 1_000,
+): Promise<RuntimeAgentEventEnvelope> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const found = events.find((event) => event.event.type === type);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${type}`);
+}
+
 describe('CortxRuntime sessions', () => {
-  test('maps runtime default capabilities into core capability flags', () => {
-    expect(toCoreCapabilities()).toEqual({ skills: 'enabled', subAgents: 'enabled' });
-    expect(toCoreCapabilities({ skills: false, subAgents: false })).toEqual({
-      skills: 'disabled',
-      subAgents: 'disabled',
-    });
+  test('defines runtime-owned default capabilities', () => {
+    expect(DEFAULT_RUNTIME_CAPABILITIES).toEqual({ skills: true, subAgents: true, approval: true });
   });
 
   test('can disable runtime-mounted skill bridge for a hosted session', async () => {
@@ -154,6 +164,41 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
+  test('records runtime event envelopes with stable identity and bounded history', async () => {
+    const runtime = new CortxRuntime({
+      language: mockLanguage([textParts('enveloped')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      maxEventsPerSession: 3,
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'envelope-session' });
+    const live: RuntimeAgentEventEnvelope[] = [];
+    runtime.subscribeEnvelopes(session.id, (event) => live.push(event));
+
+    await runtime.prompt(session.id, 'hello');
+    await waitForEnvelope(live, 'done');
+
+    const history = runtime.getEventEnvelopeHistory(session.id);
+    expect(history.length).toBeLessThanOrEqual(3);
+    expect(history.at(-1)).toMatchObject({
+      sessionId: 'envelope-session',
+      runId: 1,
+      event: { type: 'done' },
+    });
+    expect(history.every((event) => typeof event.timestamp === 'number' && event.timestamp > 0)).toBe(true);
+    expect(history.map((event) => event.sequence)).toEqual(
+      [...history].map((event) => event.sequence).sort((a, b) => a - b),
+    );
+
+    const replayed: RuntimeAgentEventEnvelope[] = [];
+    runtime.subscribeEnvelopes(session.id, (event) => replayed.push(event));
+    expect(replayed.map((event) => event.sequence)).toEqual(history.map((event) => event.sequence));
+    runtime.dispose();
+  });
+
   test('enforces max sessions', async () => {
     const runtime = new CortxRuntime({
       language: mockLanguage([textParts('ok')]),
@@ -223,6 +268,26 @@ describe('CortxRuntime sessions', () => {
     expect(() => runtime.getSession('missing')).toThrow(RuntimeError);
     const session = await runtime.createSession();
     await expect(runtime.prompt(session.id, '')).rejects.toMatchObject({ kind: 'invalid_request' });
+    runtime.dispose();
+  });
+
+  test('rejects invalid session tool and approval modes before mounting capabilities', async () => {
+    const runtime = new CortxRuntime({
+      language: mockLanguage([textParts('ok')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+    });
+
+    await expect(runtime.createSession({ toolMode: 'everything' as never })).rejects.toMatchObject({
+      kind: 'invalid_request',
+      details: { toolMode: 'everything' },
+    });
+    await expect(runtime.createSession({ approvalMode: 'ask' as never })).rejects.toMatchObject({
+      kind: 'invalid_request',
+      details: { approvalMode: 'ask' },
+    });
     runtime.dispose();
   });
 });

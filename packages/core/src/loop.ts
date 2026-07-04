@@ -91,6 +91,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
     recorder: opts.recorder,
     durableStore: opts.durableStore,
     limits: opts.limits,
+    runId: opts.runId,
   };
   const removeAbortListener = controller?.onAbort?.((reason) => {
     if (!abortController.signal.aborted) abortController.abort(userAbortError(reason));

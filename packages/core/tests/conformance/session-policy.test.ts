@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { AGENT_SESSION_POLICY, Cortx, defineCortxPlugin, type AgentEvent, type CortxFactoryMap, type CortxExtensionType, type CortxRegistry } from '../../src/index.js';
 import { collectEvents, mockLanguage, runtimeExtensions, textResponse, toolResponse } from './helpers.js';
@@ -14,6 +14,10 @@ async function collectCortx(cortx: Cortx, message = 'hello'): Promise<AgentEvent
 }
 
 describe('conformance: session policy', () => {
+  beforeEach(() => {
+    PluginRegistry.reset();
+  });
+
   afterEach(() => {
     PluginRegistry.reset();
   });
@@ -244,105 +248,4 @@ describe('conformance: session policy', () => {
     expect(events.at(-1)).toMatchObject({ type: 'error', code: 'client_error' });
   });
 
-  test('beforeSubAgent can deny child agents before a session is created', async () => {
-    const registry = createRegistry('conformance-session-policy-subagent');
-    await registry.register(defineCortxPlugin({
-      manifest: { manifestVersion: 1, id: 'policy-plugin', name: 'policy-plugin', version: '0.0.0', runtime: { main: 'inline' } },
-      setup(ctx) {
-        ctx.register(AGENT_SESSION_POLICY, 'no-subagents', () => ({
-          beforeSubAgent() {
-            return { action: 'deny', reason: 'sub-agents disabled' };
-          },
-        }));
-      },
-    }));
-
-    const cortx = new Cortx(mockLanguage([
-      toolResponse('agent-call', 'agent', '{"prompt":"delegate","description":"child"}'),
-      textResponse('done'),
-    ]), {
-      appName: 'conformance-session-policy-subagent',
-      model: 'test',
-      registry,
-      plugins: [{ use: 'no-subagents' }],
-      askUser: async () => 'yes',
-    });
-
-    const events = await collectCortx(cortx, 'delegate');
-
-    expect(cortx.agentSessions.get('agent-call')).toBeUndefined();
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
-      type: 'tool_result',
-      toolCallId: 'agent-call',
-      result: 'sub-agents disabled',
-      isError: true,
-    });
-  });
-
-  test('Cortx default safety policy asks before write tools and denies unapproved calls', async () => {
-    let executed = false;
-    const cortx = new Cortx(mockLanguage([
-      toolResponse('write-call', 'writeFile', '{"path":"a.txt"}'),
-      textResponse('done'),
-    ]), {
-      model: 'test',
-      askUser: async () => 'no',
-      tools: [{
-        name: 'writeFile',
-        sideEffects: 'write',
-        inputSchema: {},
-        execute: async () => {
-          executed = true;
-          return { success: true, output: 'written' };
-        },
-      }],
-    });
-
-    const events = await collectCortx(cortx, 'write');
-
-    expect(executed).toBe(false);
-    expect(events.find((event) => event.type === 'user_question')).toMatchObject({
-      type: 'user_question',
-      toolCallId: 'write-call',
-    });
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
-      type: 'tool_result',
-      toolCallId: 'write-call',
-      isError: true,
-    });
-  });
-
-  test('Cortx default safety policy allows approved write tools', async () => {
-    let executed = false;
-    const cortx = new Cortx(mockLanguage([
-      toolResponse('write-call', 'writeFile', '{"path":"a.txt"}'),
-      textResponse('done'),
-    ]), {
-      model: 'test',
-      askUser: async () => 'yes',
-      tools: [{
-        name: 'writeFile',
-        sideEffects: 'write',
-        inputSchema: {},
-        execute: async () => {
-          executed = true;
-          return { success: true, output: 'written' };
-        },
-      }],
-    });
-
-    const events = await collectCortx(cortx, 'write');
-
-    expect(executed).toBe(true);
-    expect(events.find((event) => event.type === 'user_question')).toMatchObject({
-      type: 'user_question',
-      toolCallId: 'write-call',
-    });
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
-      type: 'tool_result',
-      toolCallId: 'write-call',
-      result: 'written',
-      isError: false,
-    });
-  });
 });

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { discoverSkills } from '../../src/skill/discover.js';
-import { createSkillExtensions } from '../../src/skill/plugin.js';
-import { parseInvocation, substituteArgs } from '../../src/skill/substitute.js';
-import { textOfMessage } from './helpers.js';
+import { discoverSkills } from '../src/capabilities/skills/discover.js';
+import { createSkillExtensions } from '../src/capabilities/skills/extension.js';
+import { parseInvocation, substituteArgs } from '../src/capabilities/skills/substitute.js';
+import type { LanguageMessage } from '@cortx/sdk';
 
 let testDir: string;
 
@@ -23,6 +23,11 @@ async function writeSkill(baseDir: string, name: string, description: string, bo
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n${body}`);
   return dir;
+}
+
+function textOfMessage(message: LanguageMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  return message.content.find((part) => part.type === 'text')?.text ?? '';
 }
 
 describe('conformance: assets', () => {

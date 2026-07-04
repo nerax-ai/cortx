@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { parseInvocation, substituteArgs } from '../../src/skill/substitute.js';
+import { parseInvocation, substituteArgs } from '../../src/capabilities/skills/substitute.js';
 
 describe('parseInvocation', () => {
   test('parses /commit fix: typo', () => {

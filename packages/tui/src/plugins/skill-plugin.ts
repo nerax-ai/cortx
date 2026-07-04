@@ -4,12 +4,12 @@
  * Discovers SKILL.md files and returns them as display-only items for the
  * command palette. When the user selects a skill from the palette, the text
  * `/skill-name ` is injected into the input field (not executed as a command).
- * On submit, `handleSubmit` sends it to the agent, where the core skill
+ * On submit, `handleSubmit` sends it to the agent, where the runtime skill
  * asset bridge expands it through `agent.messagesTransform`.
  */
 
 import type { SkillInfo } from '@cortx/sdk';
-import { discoverSkills } from '@cortx/core';
+import { discoverSkills } from '@cortx/runtime';
 
 export interface SkillItem {
   name: string;

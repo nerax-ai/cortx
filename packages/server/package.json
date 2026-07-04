@@ -18,7 +18,6 @@
     "start": "bun src/bin.ts"
   },
   "dependencies": {
-    "@cortx/core": "workspace:*",
     "@cortx/runtime": "workspace:*",
     "@cortx/sdk": "workspace:*",
     "@cortx/store": "workspace:*",

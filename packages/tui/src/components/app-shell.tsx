@@ -11,7 +11,7 @@ import type { TuiState } from '../types/tui-state.js';
 import type { TuiRegistry } from '../tui-registry.js';
 import type { SessionSummary } from '../plugins/session-plugin.js';
 import type { SkillItem } from '../plugins/skill-plugin.js';
-import type { SubAgentSessionStore } from '@cortx/core';
+import type { SubAgentSessionStore } from '@cortx/runtime';
 
 const selectStatus = (s: TuiState) => s.status;
 const selectActiveAgentView = (s: TuiState) => s.activeAgentView;

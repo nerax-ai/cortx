@@ -1,7 +1,7 @@
 import { render } from 'ink';
 import { createLogger } from '@nerax-ai/logger';
 import { PluginRegistry } from '@nerax-ai/plugin';
-import type { CortxFactoryMap, CortxExtensionType } from '@cortx/core';
+import type { CortxFactoryMap, CortxExtensionType } from '@cortx/runtime';
 import { ensureConfig, type CortxConfig } from './config.js';
 import { createLanguageClient, type ProjectPluginRegistry } from './language.js';
 import { RemoteRuntimeClient } from './remote-client.js';

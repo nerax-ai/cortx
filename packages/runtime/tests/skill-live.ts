@@ -2,10 +2,10 @@
  * Live skill system test — exercises discovery, parsing, runtime extensions, and tool execution
  * against real CE skills copied into .cortx/skills/
  */
-import { discoverSkills } from '../src/skill/discover.js';
-import { createSkillExtensions } from '../src/skill/plugin.js';
-import { parseInvocation, substituteArgs } from '../src/skill/substitute.js';
-import { renderSkillSummary } from '../src/skill/render.js';
+import { discoverSkills } from '../src/capabilities/skills/discover.js';
+import { createSkillExtensions } from '../src/capabilities/skills/extension.js';
+import { parseInvocation, substituteArgs } from '../src/capabilities/skills/substitute.js';
+import { renderSkillSummary } from '../src/capabilities/skills/render.js';
 
 const cwd = process.cwd();
 

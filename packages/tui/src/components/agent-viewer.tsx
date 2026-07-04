@@ -2,7 +2,7 @@ import { useSyncExternalStore, useCallback, useEffect, useState, useRef } from '
 import { Box, Text, useInput } from 'ink';
 import type { TuiStore } from '../store.js';
 import type { TuiState, AgentSessionSummary } from '../types/tui-state.js';
-import type { SubAgentSession } from '@cortx/core';
+import type { SubAgentSession } from '@cortx/runtime';
 import { colors } from '../theme.js';
 
 const selectActiveAgentView = (s: TuiState) => s.activeAgentView;

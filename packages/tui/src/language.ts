@@ -2,7 +2,7 @@ import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import type { Logger } from '@nerax-ai/logger';
 import type { CortxConfig } from './config.js';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/core';
+import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/runtime';
 
 export type ProjectPluginRegistry = CortxRegistry & SynaxRegistry;
 

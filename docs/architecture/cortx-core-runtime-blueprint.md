@@ -128,6 +128,12 @@ interface CortxRuntimeHost {
     listener: (event: AgentEvent) => void,
     options?: { replay?: boolean },
   ): () => void;
+
+  subscribeEnvelopes(
+    sessionId: string,
+    listener: (event: RuntimeAgentEventEnvelope) => void,
+    options?: { replay?: boolean },
+  ): () => void;
 }
 ```
 
@@ -142,6 +148,44 @@ runtime session 至少包含：
 - `usage`
 - `lastActiveAt`
 - bounded event history
+- bounded event envelope history
+
+## Runtime Event Envelope
+
+`AgentEvent` 仍然是 core 发出的事实事件，例如 `text_delta`、`tool_use`、`tool_result`、`done`。
+Runtime 在事实事件外包一层 `RuntimeAgentEventEnvelope`，供 server、TUI、Web、未来 Desktop 使用：
+
+- `sequence`：session 内单调递增序号。
+- `timestamp`：runtime 接收/广播事件的时间。
+- `sessionId`：runtime session 身份。
+- `runId`：当前 run generation，用于区分 abort/resume 后的旧事件。
+- `event`：原始 `AgentEvent`。
+- `parent`：当事件属于 child run lifecycle（例如 `agent_started`、`agent_progress`、`agent_completed`）时，携带 parent session/run/toolCall attribution。
+
+Server SSE 默认仍可输出 plain `AgentEvent`，但 `GET /sessions/:id/events?format=envelope` 输出 envelope，并使用 envelope `sequence` 作为 SSE id。
+
+## Durable Identity 与 Resume
+
+Runtime 使用 `sessionId + runId` 作为 durable 语义的基础：
+
+- `sessionId` 跨进程稳定，绑定 runtime session。
+- `runId` 每次 `prompt` / `resume` 递增，用于防止 abort 后的旧 run 继续污染当前状态。
+- Core checkpoint 仍只保存 agent loop 的安全恢复状态：messages、pending tool results、phase、last event、terminal 状态。
+- Runtime 注入 durable store，Core 在 `turn_start`、`tool_result`、`turn_end`、terminal event 写 checkpoint。
+- Resume 从最新 non-terminal checkpoint 继续；unsupported checkpoint schema 会产生 typed `client_error` event，而不是静默退化成普通错误。
+
+这套语义不承诺重放不安全的外部副作用，只承诺从 checkpoint 中保存的安全 agent loop 状态恢复。
+
+## AgentSpec 与 Skill Pack
+
+上层 asset 不应该要求普通作者写 JavaScript 插件。
+Runtime 当前提供 v1 资产路径：
+
+- `AgentSpec`：以数据描述小 agent，包括 `prompt`、`system`、`model`、`workingDirectory`、`toolMode`、`approvalMode`、`capabilities`、`skillPaths`、`skillPacks` 和 metadata。
+- `SkillPack`：本地 asset bundle，可包含 `skills/`、`.cortx/skills/`、`agents/` 等目录。
+- `launchAgentSpec()`：把 AgentSpec 映射成普通 runtime session，再按 session capability 装配 tools、skills、approval、sub-agent。
+
+这意味着 prompt-only 小 agent、skill-pack-backed agent、完整 coding agent 都走同一套 runtime/core 执行路径。
 
 ## Session 生命周期
 
@@ -392,11 +436,10 @@ await runtime.prompt(session.sessionId, {
 建议顺序：
 
 1. 保持 runtime/server/TUI/Web 的 contract 稳定，先补真实交互 smoke。
-2. 把 skills bridge 从 core 内部特殊路径进一步迁为 runtime-mounted official capability。
-3. 把 sub-agent tool 从 core 默认能力进一步迁为官方 capability module。
-4. 完善 approval UX，让 TUI/Web 都能接入同一套 policy decision。
-5. 继续扩充 conformance tests，覆盖多 session、取消、恢复、审批、事件回放、工具边界。
-6. 再考虑 AgentSpec、skill marketplace、desktop shell、分布式调度、多用户权限等更上层产品能力。
+2. 完善 approval UX，让 TUI/Web 都能更清楚地渲染同一套 structured user request。
+3. 为 durable store 增加 file-backed adapter 或外部存储 adapter，并明确 migration 策略。
+4. 继续扩充 conformance tests，覆盖多 session、取消、恢复、审批、事件回放、工具边界。
+5. 在 AgentSpec/SkillPack v1 稳定后，再考虑 skill marketplace、desktop shell、分布式调度、多用户权限等更上层产品能力。
 
 ## 与现有文档的关系
 

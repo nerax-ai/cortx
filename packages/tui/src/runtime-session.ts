@@ -1,8 +1,7 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageMessage, Logger } from '@cortx/sdk';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, PluginConfig } from '@cortx/core';
-import { SubAgentSessionStore } from '@cortx/core';
-import { CortxRuntime, type RuntimeSessionCreateRequest, type RuntimeSessionInfo } from '@cortx/runtime';
+import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, PluginConfig } from '@cortx/runtime';
+import { CortxRuntime, SubAgentSessionStore, type RuntimeSessionCreateRequest, type RuntimeSessionInfo } from '@cortx/runtime';
 import type { ProjectPluginRegistry } from './language.js';
 import { RemoteRuntimeClient } from './remote-client.js';
 

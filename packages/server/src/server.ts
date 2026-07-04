@@ -3,7 +3,7 @@ import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { noopLogger, type AgentEvent } from '@cortx/sdk';
+import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import { CortxRuntime, isRuntimeError, RuntimeError, type RuntimeSessionCreateRequest } from '@cortx/runtime';
 import type { ServerConfig } from './types.js';
 import { createAuthHandlers } from './auth.js';
@@ -19,6 +19,19 @@ function serializeEvent(event: AgentEvent): string {
     return JSON.stringify({ ...event, error: { message: event.error.message, name: event.error.name } });
   }
   return JSON.stringify(event);
+}
+
+function serializeEnvelope(envelope: RuntimeAgentEventEnvelope): string {
+  if (envelope.event.type === 'error' && envelope.event.error instanceof Error) {
+    return JSON.stringify({
+      ...envelope,
+      event: {
+        ...envelope.event,
+        error: { message: envelope.event.error.message, name: envelope.event.error.name },
+      },
+    });
+  }
+  return JSON.stringify(envelope);
 }
 
 function errorResponse(error: unknown): {
@@ -214,31 +227,50 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     }
 
     return streamSSE(c, async (stream) => {
+      const useEnvelope = c.req.query('format') === 'envelope';
       // Replay prior events (snapshot to avoid concurrent mutation)
-      const snapshot = runtime.getEventHistory(id);
+      const snapshot = useEnvelope ? runtime.getEventEnvelopeHistory(id) : runtime.getEventHistory(id);
       let sequence = 0;
       for (const event of snapshot) {
+        const envelope = event as RuntimeAgentEventEnvelope;
         await stream.writeSSE({
-          data: serializeEvent(event),
-          id: String(++sequence),
+          data: useEnvelope
+            ? serializeEnvelope(envelope)
+            : serializeEvent(event as AgentEvent),
+          id: useEnvelope ? String(envelope.sequence) : String(++sequence),
         });
       }
 
       // Subscribe to new events
-      const unsub = runtime.subscribe(
-        id,
-        async (event: AgentEvent) => {
-          try {
-            await stream.writeSSE({
-              data: serializeEvent(event),
-              id: String(++sequence),
-            });
-          } catch {
-            // Stream closed
-          }
-        },
-        { replay: false },
-      );
+      const unsub = useEnvelope
+        ? runtime.subscribeEnvelopes(
+            id,
+            async (event: RuntimeAgentEventEnvelope) => {
+              try {
+                await stream.writeSSE({
+                  data: serializeEnvelope(event),
+                  id: String(event.sequence),
+                });
+              } catch {
+                // Stream closed
+              }
+            },
+            { replay: false },
+          )
+        : runtime.subscribe(
+            id,
+            async (event: AgentEvent) => {
+              try {
+                await stream.writeSSE({
+                  data: serializeEvent(event),
+                  id: String(++sequence),
+                });
+              } catch {
+                // Stream closed
+              }
+            },
+            { replay: false },
+          );
 
       // Wait for close
       stream.onAbort(() => {

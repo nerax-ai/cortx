@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { createSkillExtensions } from '../../src/skill/plugin.js';
+import { createSkillExtensions } from '../../src/capabilities/skills/extension.js';
 import type { AgentRuntimeExtensions, SkillInfo } from '@cortx/sdk';
 import type { LanguageMessage } from '@synax-ai/sdk';
 

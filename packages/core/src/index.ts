@@ -3,6 +3,7 @@ export { CortxSession } from './session.js';
 export type { CortxState } from './session.js';
 export { agentLoop } from './loop.js';
 export { AgentLoopController } from './types.js';
+export { getRegistry, resolveExtensions } from './plugin-resolver.js';
 export type { CortxConfig, AgentEvent, AgentController, DeliveryMode, PluginConfig, CortxRegistry, CortxExtensionType, CortxFactoryMap } from './types.js';
 export type {
   AgentRuntimeExtensions,
@@ -34,12 +35,4 @@ export {
   defineCortxPlugin,
   mergeAgentRuntimeExtensions,
 } from '@cortx/sdk';
-export { discoverSkills } from './skill/discover.js';
-export { createSkillExtensions } from './skill/plugin.js';
-export { parseInvocation, substituteArgs } from './skill/substitute.js';
-export { parseSkillFile, parseFrontmatter, SkillParseError } from './skill/parse.js';
-export { renderSkillSummary } from './skill/render.js';
-export { createDefaultSafetyExtensions, createDefaultToolApprovalPolicy } from './safety-policy.js';
 export type { SkillInfo } from '@cortx/sdk';
-export { SubAgentSessionStore } from './sub-agent-session.js';
-export type { SubAgentSession } from './sub-agent-session.js';

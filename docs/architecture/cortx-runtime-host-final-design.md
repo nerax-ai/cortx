@@ -195,6 +195,12 @@ interface CortxRuntimeHost {
     listener: (event: AgentEvent) => void,
     options?: { replay?: boolean },
   ): () => void;
+
+  subscribeEnvelopes(
+    sessionId: string,
+    listener: (event: RuntimeAgentEventEnvelope) => void,
+    options?: { replay?: boolean },
+  ): () => void;
 }
 ```
 
@@ -209,6 +215,41 @@ runtime session 至少包含：
 - `usage`
 - `lastActiveAt`
 - bounded event history
+- bounded event envelope history
+
+## Event Envelope Contract
+
+Core 继续只产生 `AgentEvent` 事实，runtime 负责补齐 host metadata。
+`RuntimeAgentEventEnvelope` 是所有远程/多前端场景推荐消费的事件形态：
+
+- `sequence`：session 内单调递增。
+- `timestamp`：runtime 广播时间。
+- `sessionId`：session 稳定身份。
+- `runId`：当前 run generation。
+- `event`：原始 `AgentEvent`。
+- `parent`：child lifecycle event 的 parent session/run/toolCall attribution。
+
+Server SSE 支持 `GET /sessions/:id/events?format=envelope`，并使用 envelope sequence 作为 SSE id。
+TUI/Web/store 仍可按需 unwrap 成 plain event，但 replay、断线重连、child run attribution 应优先基于 envelope。
+
+## Durable Runtime Contract
+
+Runtime durable 语义以 `sessionId + runId` 为中心：
+
+- `sessionId` 稳定绑定 session。
+- `runId` 在每次 `prompt` / `resume` 时递增，abort 时也推进 generation，避免旧 run completion 覆盖新状态。
+- Core 写 checkpoint primitive，runtime 注入 durable store。
+- Resume 只从 non-terminal checkpoint 恢复。
+- unsupported checkpoint schema 会发出 typed `client_error` event。
+- bounded in-memory event history 只服务近期 replay；更深恢复依赖 durable checkpoint/event store。
+
+## AgentSpec 与 Skill Pack
+
+Runtime v1 支持把小 agent 和能力包作为数据资产启动：
+
+- `AgentSpec` 描述 prompt、system、model、workingDirectory、toolMode、approvalMode、capabilities、skillPaths、skillPacks 和 metadata。
+- `SkillPack` 解析本地 bundle 中的 `skills/`、`.cortx/skills/` 和 `agents/`。
+- `launchAgentSpec()` 将数据资产映射为普通 runtime session，不引入第二条 runner，也不要求 asset 作者写 JavaScript plugin。
 
 ## Session 状态机
 
@@ -402,7 +443,9 @@ TUI、Web、Desktop 应该共享同一套 session/action/event 语义。
 - TUI local/remote 通过同一抽象操控 session。
 - Web remote-only，不导入本地 agent 执行包。
 - workspace tools 由 runtime 内部 workspace-tools capability 挂载，不由 UI 复制。
-- core 支持 capability toggles，宿主能力可以由 runtime 控制。
+- core 不再包含 skills/sub-agent/default approval 产品默认能力，宿主能力由 runtime official capabilities 控制。
+- runtime event envelope 提供 sequence、timestamp、sessionId、runId 和 child lifecycle parent attribution。
+- AgentSpec/SkillPack v1 可作为数据资产启动 session。
 - 全量 lint/build/test 通过。
 - HTTP/SSE smoke 通过。
 - Web dev proxy smoke 通过。
@@ -411,11 +454,10 @@ TUI、Web、Desktop 应该共享同一套 session/action/event 语义。
 
 达到 100% 时，额外需要：
 
-- skill bridge 完全迁出 core，成为 runtime-mounted official capability。
-- sub-agent tool 完全迁出 core，成为 runtime-mounted official capability。
-- durable resume 做到真实进程崩溃后恢复完整 agent loop。
-- background agent 有稳定 parent-child run、checkpoint、取消、事件归属模型。
-- frontend approval UX、server approval transport、runtime policy 形成完整闭环。
+- durable resume 增加 file-backed / external-backed adapter，并完成真实进程崩溃恢复 smoke。
+- background agent 的 checkpoint、取消、恢复和事件归属模型继续加深。
+- frontend approval UX 更完整地展示 structured user request。
+- AgentSpec/SkillPack 增加版本化、migration 和本地安装/发现策略。
 
 ## 后续开发原则
 

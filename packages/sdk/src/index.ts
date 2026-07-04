@@ -7,7 +7,14 @@ export type { SideEffects, Tool, ToolContext, ToolResult } from './tools.js';
 
 export { defineTool } from './tools.js';
 
-export type { AgentEvent, ErrorCode } from './events.js';
+export type {
+  AgentEvent,
+  ErrorCode,
+  RuntimeAgentEventEnvelope,
+  RuntimeUserRequest,
+  RuntimeUserRequestContext,
+  RuntimeUserRequestKind,
+} from './events.js';
 
 export { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION } from './runtime.js';
 

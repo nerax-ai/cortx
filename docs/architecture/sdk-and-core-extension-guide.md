@@ -92,6 +92,7 @@ const runtime = new CortxRuntime({
   capabilities: {
     skills: true,
     subAgents: true,
+    approval: true,
   },
 });
 
@@ -103,7 +104,7 @@ const session = await runtime.createSession({
 await runtime.prompt(session.id, 'review this repository');
 ```
 
-禁用默认能力时，runtime 会把它们映射成 core capability flags：
+禁用默认能力时，runtime 会在 host 层不挂载对应 official capability：
 
 ```ts
 const session = await runtime.createSession({
@@ -112,11 +113,12 @@ const session = await runtime.createSession({
   capabilities: {
     skills: false,
     subAgents: false,
+    approval: false,
   },
 });
 ```
 
-这不会删除 core 的底层执行能力；它只是让宿主明确声明“这个 session 不挂载这些产品能力”。
+这不会删除 core 的底层执行能力；它只是让宿主明确声明“这个 session 不挂载这些 runtime 官方能力”。Core 不再接收 skills/sub-agent/default approval 的产品级开关，也不会自行发现或默认创建这些能力。
 
 ### Server 嵌入生命周期
 
@@ -141,11 +143,13 @@ process.on('SIGTERM', () => {
 });
 ```
 
-### Skills 与 Sub-Agent 的当前状态
+### Skills、Sub-Agent 与 Approval 的当前状态
 
-Skills 仍然是 `SKILL.md` 文件系统资产，不要求 skill 作者写 JavaScript 插件。当前实现中，skill discovery 和 bridge 仍位于 core 代码内，但已经可以通过 runtime/core capability flags 禁用。
+Skills 仍然是 `SKILL.md` 文件系统资产，不要求 skill 作者写 JavaScript 插件。当前实现中，skill discovery、summary injection、slash invocation expansion、`skill` tool 和 companion file listing 都位于 `@cortx/runtime` 的 official skills capability 内。
 
-Sub-agent tool 也仍由 core 创建，但已可以通过 `capabilities.subAgents` 禁用。下一步如果继续追求更干净的边界，应把“默认挂载 skill bridge / sub-agent tool”迁到官方 runtime capability module；core 保留底层 hook、事件和执行 primitive。
+Sub-agent 的模型可见 `agent` tool、foreground/background child run、child session store 和生命周期事件也由 `@cortx/runtime` 的 official sub-agent capability 挂载。Core 保留 agent loop、controller、tool pipeline、policy hook 和 checkpoint primitive，但不再默认创建产品级 `agent` tool。
+
+Default approval policy 也位于 runtime official approval capability。Runtime 在 `approvalMode: 'interactive'` 时通过统一 `user_request` / `user_response` 事件传输结构化审批；在 `approvalMode: 'deny'` 或没有可用审批通道时，write/destructive 工具默认拒绝。
 
 这是一条迁移边界，不是对 skill 作者或插件作者的新负担。
 
@@ -253,7 +257,7 @@ export const durableStore: AgentDurableRunStore = {
 - terminal checkpoint 不会自动恢复，避免重复提交已经结束的 run。
 - `tool_result` checkpoint 会先把 `pendingToolResults` 转成 model-visible tool message，再进入下一次 model request。
 - `turn_end` checkpoint 会直接从已保存的 messages 继续下一轮。
-- schema version 不匹配时不会恢复，Core 会把它视为不可用 checkpoint。
+- schema version 不匹配时不会继续恢复，Core 会发出 `client_error` 事件，避免把 schema 问题静默降级成普通 continue 错误。
 
 这套设计把“可恢复状态”限制在 checkpoint schema 内，避免 storage、server、UI 侵入 agent loop。
 

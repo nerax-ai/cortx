@@ -1,15 +1,28 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentEvent, LanguageMessage, Logger, Tool } from '@cortx/sdk';
-import { noopLogger } from '@cortx/sdk';
+import type {
+  AgentDurableRunStore,
+  AgentEvent,
+  AgentRuntimeExtensions,
+  LanguageMessage,
+  Logger,
+  RuntimeAgentEventEnvelope,
+  Tool,
+} from '@cortx/sdk';
+import { createEmptyAgentRuntimeExtensions, mergeAgentRuntimeExtensions, noopLogger } from '@cortx/sdk';
 import { Cortx, type CortxRegistry, type PluginConfig } from '@cortx/core';
 import { RuntimeError, toRuntimeError } from './errors.js';
-import {
-  DEFAULT_RUNTIME_CAPABILITIES,
-  toCoreCapabilities,
-  type RuntimeDefaultCapabilities,
-} from './default-capabilities.js';
-import { createWorkspaceTools, type WorkspaceToolMode } from './tool-mount.js';
+import { DEFAULT_RUNTIME_CAPABILITIES, type RuntimeDefaultCapabilities } from './default-capabilities.js';
+import { createWorkspaceTools, parseWorkspaceToolMode, type WorkspaceToolMode } from './tool-mount.js';
 import { resolveWorkspace } from './workspace.js';
+import {
+  SubAgentSessionStore,
+  createDefaultSafetyExtensions,
+  createSkillExtensions,
+  createSubAgentTool,
+  discoverSkills,
+} from './capabilities/index.js';
+import { parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
+import { resolveSkillPack } from './assets/skill-pack.js';
 import type {
   ManagedRuntimeSession,
   RuntimeSessionCreateRequest,
@@ -35,14 +48,27 @@ export interface CortxRuntimeOptions {
   maxEventsPerSession?: number;
   idleTimeoutMs?: number;
   logger?: Logger;
+  durableStore?: AgentDurableRunStore;
 }
 
 export interface SubscribeOptions {
   replay?: boolean;
 }
 
+export interface SubscribeEnvelopeOptions {
+  replay?: boolean;
+}
+
 function createSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parseApprovalMode(value: unknown, fallback: 'deny' | 'interactive'): 'deny' | 'interactive' {
+  if (value === undefined) return fallback;
+  if (value === 'deny' || value === 'interactive') return value;
+  throw new RuntimeError('invalid_request', 'approvalMode must be one of: deny, interactive', {
+    approvalMode: value,
+  });
 }
 
 function eventError(error: unknown): AgentEvent {
@@ -51,6 +77,17 @@ function eventError(error: unknown): AgentEvent {
     error: error instanceof Error ? error : new Error(String(error)),
     code: 'stream_error',
   };
+}
+
+function parentAttributionFor(session: ManagedRuntimeSession, event: AgentEvent): RuntimeAgentEventEnvelope['parent'] {
+  switch (event.type) {
+    case 'agent_started':
+    case 'agent_progress':
+    case 'agent_completed':
+      return { sessionId: session.id, runId: session.runId, toolCallId: event.toolCallId };
+    default:
+      return undefined;
+  }
 }
 
 export class CortxRuntime {
@@ -72,6 +109,7 @@ export class CortxRuntime {
   private readonly maxEventsPerSession: number;
   private readonly idleTimeoutMs: number;
   private readonly logger: Logger;
+  private readonly durableStore?: AgentDurableRunStore;
 
   constructor(options: CortxRuntimeOptions) {
     this.appName = options.appName ?? 'cortx';
@@ -91,6 +129,7 @@ export class CortxRuntime {
     this.maxEventsPerSession = options.maxEventsPerSession ?? 2_000;
     this.idleTimeoutMs = options.idleTimeoutMs ?? 30 * 60 * 1000;
     this.logger = options.logger ?? noopLogger;
+    this.durableStore = options.durableStore;
   }
 
   async createSession(request: RuntimeSessionCreateRequest = {}): Promise<RuntimeSessionInfo> {
@@ -108,9 +147,35 @@ export class CortxRuntime {
 
     const model = request.model ?? this.model;
     const maxIterations = request.maxIterations ?? this.maxIterations;
-    const toolMode = request.toolMode ?? this.toolMode;
-    const approvalMode = request.approvalMode ?? this.approvalMode;
-    const mountedTools = createWorkspaceTools(workspace.workingDirectory, toolMode);
+    const toolMode = parseWorkspaceToolMode(request.toolMode, this.toolMode);
+    const approvalMode = parseApprovalMode(request.approvalMode, this.approvalMode);
+    const capabilities = request.capabilities ?? this.capabilities;
+    const agentSessions = new SubAgentSessionStore();
+    const mountedTools = [
+      ...this.tools,
+      ...createWorkspaceTools(workspace.workingDirectory, toolMode),
+      ...(request.tools ?? []),
+    ];
+    const officialExtensions = await this.createOfficialExtensions({
+      workingDirectory: workspace.workingDirectory,
+      capabilities,
+      skillPaths: request.skillPaths,
+    });
+    let session: ManagedRuntimeSession;
+    if (capabilities.subAgents !== false) {
+      mountedTools.push(
+        createSubAgentTool({
+          language: this.language,
+          model,
+          registry: request.registry ?? this.registry,
+          plugins: request.plugins ?? this.plugins,
+          agentSessions,
+          getTools: () => mountedTools,
+          getExtensions: () => officialExtensions,
+          onAgentEvent: (event) => this.broadcast(session, event),
+        }),
+      );
+    }
     const cortx = new Cortx(this.language, {
       appName: this.appName,
       model,
@@ -118,15 +183,17 @@ export class CortxRuntime {
       maxIterations,
       registry: request.registry ?? this.registry,
       plugins: request.plugins ?? this.plugins,
-      tools: [...this.tools, ...mountedTools, ...(request.tools ?? [])],
+      tools: mountedTools,
+      extensions: officialExtensions,
       workingDirectory: workspace.workingDirectory,
-      capabilities: toCoreCapabilities(request.capabilities ?? this.capabilities),
+      sessionId: id,
+      durableStore: this.durableStore,
       askUser: approvalMode === 'deny' ? async () => 'no' : undefined,
       logger: this.logger,
     });
 
     const now = Date.now();
-    const session: ManagedRuntimeSession = {
+    session = {
       id,
       cortx,
       createdAt: now,
@@ -137,10 +204,14 @@ export class CortxRuntime {
       toolMode,
       approvalMode,
       events: [],
+      eventEnvelopes: [],
       subscribers: new Set(),
+      envelopeSubscribers: new Set(),
       idleTimer: undefined,
       isRunning: false,
       runId: 0,
+      nextEventSequence: 0,
+      agentSessions,
       metadata: request.metadata,
     };
 
@@ -158,6 +229,28 @@ export class CortxRuntime {
     return Array.from(this.sessions.values()).map((session) => this.info(session));
   }
 
+  async launchAgentSpec(value: unknown): Promise<RuntimeSessionInfo> {
+    const spec = parseAgentSpec(value);
+    const skillPaths = [...(spec.skillPaths ?? [])];
+    for (const packPath of spec.skillPacks ?? []) {
+      const pack = await resolveSkillPack(packPath);
+      skillPaths.push(...pack.skillPaths);
+    }
+    const session = await this.createSession({
+      workingDirectory: spec.workingDirectory,
+      model: spec.model,
+      system: spec.system,
+      tools: spec.tools,
+      toolMode: spec.toolMode,
+      approvalMode: spec.approvalMode,
+      capabilities: spec.capabilities,
+      skillPaths,
+      metadata: { ...spec.metadata, agentSpec: spec.name ?? 'inline' },
+    });
+    await this.prompt(session.id, spec.prompt);
+    return session;
+  }
+
   getSession(sessionId: string): RuntimeSessionInfo {
     return this.info(this.requireSession(sessionId));
   }
@@ -166,10 +259,14 @@ export class CortxRuntime {
     return [...this.requireSession(sessionId).events];
   }
 
+  getEventEnvelopeHistory(sessionId: string): RuntimeAgentEventEnvelope[] {
+    return [...this.requireSession(sessionId).eventEnvelopes];
+  }
+
   getLocalState(sessionId: string): RuntimeSessionLocalState {
     const session = this.requireSession(sessionId);
     return {
-      agentSessions: session.cortx.agentSessions,
+      agentSessions: session.agentSessions,
       getMessages: () => session.cortx.messages,
       replaceMessages: (messages: LanguageMessage[]) => session.cortx.replaceMessages(messages),
     };
@@ -205,6 +302,7 @@ export class CortxRuntime {
   answer(sessionId: string, toolCallId: string, response: string): void {
     const session = this.requireSession(sessionId);
     session.cortx.controller.answerUser(toolCallId, response);
+    this.broadcast(session, { type: 'user_response', requestId: toolCallId, response });
     this.broadcast(session, { type: 'user_answer', toolCallId, response });
   }
 
@@ -233,6 +331,19 @@ export class CortxRuntime {
     return () => session.subscribers.delete(callback);
   }
 
+  subscribeEnvelopes(
+    sessionId: string,
+    callback: (event: RuntimeAgentEventEnvelope) => void,
+    options: SubscribeEnvelopeOptions = {},
+  ): () => void {
+    const session = this.requireSession(sessionId);
+    if (options.replay ?? true) {
+      for (const event of [...session.eventEnvelopes]) callback(event);
+    }
+    session.envelopeSubscribers.add(callback);
+    return () => session.envelopeSubscribers.delete(callback);
+  }
+
   dispose(): void {
     for (const session of [...this.sessions.values()]) this.destroy(session);
   }
@@ -247,6 +358,7 @@ export class CortxRuntime {
     this.resetIdleTimer(session);
     session.isRunning = true;
     const runId = ++session.runId;
+    session.cortx.setRunId(runId);
 
     (async () => {
       try {
@@ -266,13 +378,32 @@ export class CortxRuntime {
   private broadcast(session: ManagedRuntimeSession, event: AgentEvent): void {
     if (!this.sessions.has(session.id)) return;
     session.lastActivityAt = Date.now();
+    const envelope: RuntimeAgentEventEnvelope = {
+      sequence: ++session.nextEventSequence,
+      timestamp: session.lastActivityAt,
+      sessionId: session.id,
+      runId: session.runId,
+      event,
+      parent: parentAttributionFor(session, event),
+    };
     session.events.push(event);
+    session.eventEnvelopes.push(envelope);
     if (session.events.length > this.maxEventsPerSession) {
       session.events.splice(0, session.events.length - this.maxEventsPerSession);
+    }
+    if (session.eventEnvelopes.length > this.maxEventsPerSession) {
+      session.eventEnvelopes.splice(0, session.eventEnvelopes.length - this.maxEventsPerSession);
     }
     for (const subscriber of session.subscribers) {
       try {
         subscriber(event);
+      } catch {
+        /* subscriber errors should not break the runtime */
+      }
+    }
+    for (const subscriber of session.envelopeSubscribers) {
+      try {
+        subscriber(envelope);
       } catch {
         /* subscriber errors should not break the runtime */
       }
@@ -294,6 +425,7 @@ export class CortxRuntime {
     session.cortx.abort('Session cleaned up');
     session.cortx.controller.rejectPendingQuestions('Session destroyed');
     session.subscribers.clear();
+    session.envelopeSubscribers.clear();
     session.isRunning = false;
     this.sessions.delete(session.id);
   }
@@ -318,5 +450,21 @@ export class CortxRuntime {
       eventCount: session.events.length,
       metadata: session.metadata,
     };
+  }
+
+  private async createOfficialExtensions(input: {
+    workingDirectory: string;
+    capabilities: RuntimeDefaultCapabilities;
+    skillPaths?: string[];
+  }): Promise<AgentRuntimeExtensions> {
+    const sets: AgentRuntimeExtensions[] = [createEmptyAgentRuntimeExtensions()];
+    if (input.capabilities.skills !== false) {
+      const skills = await discoverSkills(input.workingDirectory, { skillPaths: input.skillPaths }, this.logger);
+      if (skills.length) sets.push(createSkillExtensions(skills));
+    }
+    if (input.capabilities.approval !== false) {
+      sets.push(createDefaultSafetyExtensions());
+    }
+    return mergeAgentRuntimeExtensions(...sets);
   }
 }

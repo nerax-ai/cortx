@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ServerConfig } from '../src/types';
+import type { AgentEvent, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 
 // Mock language client that yields a simple response
 function mockLanguageClient() {
@@ -22,9 +23,56 @@ const config: ServerConfig = {
   host: 'localhost',
   language: mockLanguageClient(),
   model: 'test-model',
+  maxSessions: 100,
 };
 
 const BASE = `http://localhost:${config.port}`;
+
+async function waitForRuntimeEnvelope(
+  handle: ServerRuntimeHandle,
+  sessionId: string,
+  type: AgentEvent['type'],
+  timeoutMs = 1_000,
+): Promise<RuntimeAgentEventEnvelope> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const found = handle.runtime.getEventEnvelopeHistory(sessionId).find((event) => event.event.type === type);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${type}`);
+}
+
+async function readFirstSseJson(
+  url: string,
+  headers: HeadersInit,
+): Promise<{ id: string | undefined; data: RuntimeAgentEventEnvelope }> {
+  const ctrl = new AbortController();
+  const res = await fetch(url, { headers, signal: ctrl.signal });
+  expect(res.status).toBe(200);
+  expect(res.headers.get('content-type')).toContain('text/event-stream');
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('SSE response has no body');
+
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (!text.includes('\n\n')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    ctrl.abort();
+    reader.releaseLock();
+  }
+
+  const id = text.match(/(?:^|\n)id: ([^\n]+)/)?.[1];
+  const data = text.match(/(?:^|\n)data: ([^\n]+)/)?.[1];
+  if (!data) throw new Error(`No SSE data found in ${JSON.stringify(text)}`);
+  return { id, data: JSON.parse(data) as RuntimeAgentEventEnvelope };
+}
 
 describe('server routes', () => {
   let server: ReturnType<typeof Bun.serve> | undefined;
@@ -83,6 +131,20 @@ describe('server routes', () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.kind).toBe('invalid_request');
+  });
+
+  test('create session rejects invalid runtime modes', async () => {
+    const res = await fetch(`${BASE}/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolMode: 'everything' }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      kind: 'invalid_request',
+      details: { toolMode: 'everything' },
+    });
   });
 
   test('create session rejects workspaces outside allowed roots', async () => {
@@ -176,22 +238,44 @@ describe('server routes', () => {
   test('SSE stream returns event-stream content type', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
     const { sessionId } = (await createRes.json()) as { sessionId: string };
+    await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
 
-    // Abort after getting headers to prevent hanging on infinite stream
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 2000);
+    const eventRes = await fetch(`${BASE}/sessions/${sessionId}/events`, {
+      headers,
+      signal: ctrl.signal,
+    });
+    expect(eventRes.status).toBe(200);
+    expect(eventRes.headers.get('content-type')).toContain('text/event-stream');
+    ctrl.abort();
+  });
 
-    try {
-      const eventRes = await fetch(`${BASE}/sessions/${sessionId}/events`, {
-        headers,
-        signal: ctrl.signal,
-      });
-      expect(eventRes.status).toBe(200);
-      expect(eventRes.headers.get('content-type')).toContain('text/event-stream');
-    } catch (e) {
-      // AbortError is expected — the stream was intentionally cut
-      expect((e as Error).name).toBe('AbortError');
-    }
+  test('SSE envelope stream replays runtime envelope ids and metadata', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    const promptRes = await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    expect(promptRes.status).toBe(200);
+
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
+    const firstEnvelope = handle!.runtime.getEventEnvelopeHistory(sessionId)[0]!;
+    const replayed = await readFirstSseJson(`${BASE}/sessions/${sessionId}/events?format=envelope`, headers);
+
+    expect(replayed.id).toBe(String(firstEnvelope.sequence));
+    expect(replayed.data).toMatchObject({
+      sequence: firstEnvelope.sequence,
+      sessionId,
+      runId: 1,
+      event: { type: firstEnvelope.event.type },
+    });
   });
 
   test('delete session', async () => {
@@ -269,19 +353,20 @@ describe('server routes', () => {
     const { token } = (await tokenRes.json()) as { token: string };
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
     const { sessionId } = (await createRes.json()) as { sessionId: string };
+    await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
 
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 2000);
-
-    try {
-      const eventRes = await fetch(`${BASE}/sessions/${sessionId}/events?token=${token}`, {
-        signal: ctrl.signal,
-      });
-      expect(eventRes.status).toBe(200);
-      expect(eventRes.headers.get('content-type')).toContain('text/event-stream');
-    } catch (e) {
-      expect((e as Error).name).toBe('AbortError');
-    }
+    const eventRes = await fetch(`${BASE}/sessions/${sessionId}/events?token=${token}`, {
+      signal: ctrl.signal,
+    });
+    expect(eventRes.status).toBe(200);
+    expect(eventRes.headers.get('content-type')).toContain('text/event-stream');
+    ctrl.abort();
   });
 });
 

@@ -33,11 +33,15 @@ describe('architecture boundaries', () => {
   test('core source does not import host/runtime/frontend packages', async () => {
     const coreSrc = join(import.meta.dir, '..', '..', 'core', 'src');
     const forbidden = ['@cortx/runtime', '@cortx/server', '@cortx/tui', '@cortx/web'];
+    const forbiddenProductPaths = ['./skill/', './skill', 'sub-agent-session', 'safety-policy'];
 
     for (const file of await walk(coreSrc)) {
       const source = await readFile(file, 'utf8');
       for (const specifier of forbidden) {
         expect(source, `${file} must not import ${specifier}`).not.toContain(specifier);
+      }
+      for (const specifier of forbiddenProductPaths) {
+        expect(source, `${file} must not import product capability ${specifier}`).not.toContain(specifier);
       }
     }
   });
@@ -64,9 +68,13 @@ describe('architecture boundaries', () => {
 
   test('server delegates agent hosting to runtime instead of recreating session management', async () => {
     const serverSrc = join(import.meta.dir, '..', '..', 'server', 'src');
+    const serverPkg = JSON.parse(await readFile(join(import.meta.dir, '..', '..', 'server', 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
     const files = await walk(serverSrc);
 
     expect(await pathExists(join(serverSrc, 'session-manager.ts'))).toBe(false);
+    expect(serverPkg.dependencies?.['@cortx/core']).toBeUndefined();
 
     let importsRuntime = false;
     for (const file of files) {
@@ -79,6 +87,18 @@ describe('architecture boundaries', () => {
     }
 
     expect(importsRuntime).toBe(true);
+  });
+
+  test('tui uses runtime as the local host boundary instead of core', async () => {
+    const tuiPkg = JSON.parse(await readFile(join(import.meta.dir, '..', '..', 'tui', 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(tuiPkg.dependencies?.['@cortx/core']).toBeUndefined();
+    const tuiSrc = join(import.meta.dir, '..', '..', 'tui', 'src');
+    for (const file of await walk(tuiSrc)) {
+      const source = await readFile(file, 'utf8');
+      expect(source, `${file} must not import @cortx/core directly`).not.toContain('@cortx/core');
+    }
   });
 
   test('web source remains a remote-only client', async () => {

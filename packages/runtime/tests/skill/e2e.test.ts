@@ -2,8 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { discoverSkills } from '../../src/skill/discover.js';
-import { createSkillExtensions } from '../../src/skill/plugin.js';
+import { discoverSkills } from '../../src/capabilities/skills/discover.js';
+import { createSkillExtensions } from '../../src/capabilities/skills/extension.js';
 import type { LanguageMessage } from '@synax-ai/sdk';
 
 let testDir: string;

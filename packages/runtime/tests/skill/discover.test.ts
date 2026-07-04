@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { discoverSkills } from '../../src/skill/discover.js';
+import { discoverSkills } from '../../src/capabilities/skills/discover.js';
 
 let testDir: string;
 

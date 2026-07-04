@@ -62,6 +62,7 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
       const policyToolContext: ToolContext = {
         ...toolContext,
         askUser: askUser ? (question: string) => {
+          queue.push(createUserRequestEvent(question, toolCall, tool, parsedInput, workingDirectory));
           queue.push({ type: 'user_question', question, toolCallId: toolCall.toolCallId });
           return askUser(question, toolCall.toolCallId);
         } : undefined,
@@ -117,6 +118,7 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
         const hookContext: ToolContext = {
           ...toolContext,
           askUser: askUser ? (question: string) => {
+            queue.push(createUserRequestEvent(question, toolCall, tool, parsedInput, workingDirectory));
             queue.push({ type: 'user_question', question, toolCallId: toolCall.toolCallId });
             return askUser(question, toolCall.toolCallId);
           } : undefined,
@@ -203,6 +205,37 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
   }
 
   return { action: 'prepared', pendingTools };
+}
+
+function createUserRequestEvent(
+  question: string,
+  toolCall: LanguageToolCallContent,
+  tool: Tool,
+  input: Record<string, unknown>,
+  workingDirectory: string,
+): AgentEvent {
+  return {
+    type: 'user_request',
+    request: {
+      requestId: toolCall.toolCallId,
+      kind: tool?.sideEffects === 'write' || tool?.sideEffects === 'destructive' ? 'tool_approval' : 'question',
+      prompt: question,
+      context: {
+        toolCallId: toolCall.toolCallId,
+        toolName: tool?.name ?? toolCall.toolName,
+        sideEffects: tool?.sideEffects ?? 'write',
+        inputPreview: summarizeInput(input),
+        workingDirectory,
+      },
+      allowedResponses: ['yes', 'no'],
+    },
+  };
+}
+
+function summarizeInput(input: Record<string, unknown>): string {
+  const json = JSON.stringify(input);
+  if (!json) return '{}';
+  return json.length <= 800 ? json : `${json.slice(0, 800)}...`;
 }
 
 function createToolContext(input: {

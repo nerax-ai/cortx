@@ -12,7 +12,7 @@ status: target-achieved
 
 ## 当前结论
 
-Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 99%，已经超过 95% 新版本完成目标。
+Runtime Host 新版本已经完成 core purity + runtime closure + upper asset path 这一轮架构收口，整体完成度约 99%，已经超过 95% 新版本完成目标。
 
 已经闭环的部分：
 
@@ -21,7 +21,11 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 - TUI 已拆成 local runtime 和 remote server 两种 adapter。
 - Web 已对齐 runtime-backed server API，并保持 remote-only。
 - `@cortx/code` 包已删除；原文件/命令工具能力已迁入 runtime 内部 `workspace-tools` capability，并保留路径边界测试。
-- core 已增加 capability toggles，skills/sub-agent 默认能力可以被 runtime 显式开关。
+- core 已移除产品默认能力：不再 discovery skills、不再默认创建 `agent` sub-agent tool、不再内置 default approval policy。
+- skills、sub-agent、default approval 已迁入 `@cortx/runtime` official capabilities，由 runtime per-session 挂载或禁用。
+- runtime event envelope 已落地，事件带 `sequence`、`timestamp`、`sessionId`、`runId`，child lifecycle event 带 parent attribution。
+- durable resume 已使用稳定 `sessionId + runId`，unsupported checkpoint schema 会产生 typed `client_error` event。
+- AgentSpec 与 SkillPack v1 已落地，可用数据资产启动 prompt-only 或 skill-pack-backed session。
 - 新增边界测试，防止 core、server、Web、frontend 职责重新混杂。
 - server 现在提供 `createServerRuntime()`，嵌入式宿主可以显式释放 runtime。
 - 已完成一次真实 HTTP smoke，覆盖 server 启动、token exchange、多 workspace session、prompt、invalid workspace 和 abort。
@@ -35,8 +39,6 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 
 仍然保留的 1%：
 
-- skills discovery / skill bridge 代码还在 core 内，当前通过 capability toggles 降低耦合，但还没有完全迁成 runtime-mounted official capability。
-- sub-agent tool 仍由 core 创建，当前通过 capability toggles 和 runtime 默认能力映射控制，但还没有完全抽成官方 capability module。
 - UI smoke 已覆盖 render/proxy/remote event path，但还没有由真人在真实终端和浏览器里完整走一次交互体验。
 - 如果走完整 LFG shipping，还需要后续最终全量验证、commit/push/PR/CI 步骤。
 
@@ -49,11 +51,33 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 | U3 Server runtime 化 | 已完成 | `packages/server/src/session-manager.ts` 已删除，`packages/server/src/server.ts` 创建 `CortxRuntime` 并委托所有 session action；`createServerRuntime()` 提供嵌入式 dispose |
 | U4 TUI local/remote adapter | 已完成 | `packages/tui/src/runtime-session.ts`、`packages/tui/src/remote-client.ts`，TUI adapter tests 覆盖 local 和 remote |
 | U5 Web remote contract | 已完成 | `packages/web/src/bridge/event-bridge.ts`，Web tests 覆盖 runtime API、typed errors、SSE 短期 token、remote-only manifest |
-| U6 Core capability 边界 | 基本完成 | `packages/core/src/types.ts`、`packages/core/src/agent.ts`、`packages/runtime/src/default-capabilities.ts`，core/runtime tests 覆盖 skills/sub-agent disabled |
-| U7 Conformance 与文档 | 基本完成 | `docs/architecture/runtime-host.md`、`docs/brainstorms/2026-07-04-cortx-runtime-host-requirements.md`、`docs/architecture/sdk-and-core-extension-guide.md`、`packages/runtime/tests/core-boundary.test.ts` |
+| U6 Core capability 边界 | 已完成 | core 已移除 skills/sub-agent/default approval 产品默认能力；`packages/runtime/tests/core-boundary.test.ts` 保护边界 |
+| U7 Conformance 与文档 | 已完成 | `docs/architecture/runtime-host.md`、`docs/brainstorms/2026-07-04-cortx-runtime-host-requirements.md`、`docs/architecture/sdk-and-core-extension-guide.md`、`packages/runtime/tests/core-boundary.test.ts` |
 | U8 最终设计口径 | 已完成 | `docs/architecture/cortx-runtime-host-final-design.md` 统一记录 core + runtime host + server adapter + thin frontends 的最终分层、边界和验收标准 |
 
 ## 本轮新增进度
+
+### Round 8
+
+- 完成 core 产品默认能力下沉：
+  - 删除 `packages/core/src/skill/*`、`packages/core/src/sub-agent-session.ts`、`packages/core/src/safety-policy.ts`。
+  - Core 保留显式 tools/extensions、agent loop、controller、checkpoint primitive，不再默认 discovery 或装配产品能力。
+  - Runtime 新增 official capabilities：skills、sub-agent、approval。
+- 完成 runtime closure 增强：
+  - `ManagedRuntimeSession` 增加 event envelopes、run id、child session store。
+  - `CortxRuntime.subscribeEnvelopes()` / `getEventEnvelopeHistory()` 提供 host metadata 事件流。
+  - `server` SSE 支持 `?format=envelope`，并以 envelope sequence 作为 SSE id。
+  - child lifecycle events 带 parent session/run/toolCall attribution。
+- 完成 durable 与 asset v1：
+  - `MemoryDurableRunStore` 用于测试/内存恢复。
+  - checkpoint 增加 `runId`。
+  - unsupported checkpoint schema 会通过 `client_error` event 暴露。
+  - `AgentSpec` / `SkillPack` v1 支持 prompt-only 和 skill-pack-backed session launch。
+- 新增/迁移测试：
+  - former core skill tests 迁入 runtime skill tests。
+  - sub-agent tests 迁入 runtime，并新增 envelope parent attribution 覆盖。
+  - server tests 新增 envelope SSE replay 覆盖。
+  - runtime tests 新增 event envelope bounded history 覆盖。
 
 ### Round 7
 

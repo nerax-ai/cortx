@@ -50,7 +50,6 @@
       "name": "@cortx/server",
       "version": "0.0.1",
       "dependencies": {
-        "@cortx/core": "workspace:*",
         "@cortx/runtime": "workspace:*",
         "@cortx/sdk": "workspace:*",
         "@cortx/store": "workspace:*",
@@ -82,7 +81,6 @@
         "cortx": "./dist/cli.js",
       },
       "dependencies": {
-        "@cortx/core": "workspace:*",
         "@cortx/runtime": "workspace:*",
         "@cortx/sdk": "workspace:*",
         "@cortx/store": "workspace:*",

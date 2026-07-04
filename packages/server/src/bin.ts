@@ -2,7 +2,7 @@ import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/core';
+import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/runtime';
 import { createServer } from './server.js';
 
 interface CortxConfig {

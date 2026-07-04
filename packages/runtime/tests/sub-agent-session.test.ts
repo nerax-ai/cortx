@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { SubAgentSessionStore } from '../src/sub-agent-session';
+import { SubAgentSessionStore } from '../src/capabilities/sub-agent/session-store';
 
 describe('SubAgentSessionStore', () => {
   test('create adds a running session', () => {

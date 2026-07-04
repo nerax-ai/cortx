@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { parseFrontmatter, parseSkillFile, SkillParseError } from '../../src/skill/parse.js';
+import { parseFrontmatter, parseSkillFile, SkillParseError } from '../../src/capabilities/skills/parse.js';
 
 describe('parseFrontmatter', () => {
   test('parses valid YAML frontmatter with body', () => {

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { renderSkillSummary } from '../../src/skill/render.js';
+import { renderSkillSummary } from '../../src/capabilities/skills/render.js';
 import type { SkillInfo } from '@cortx/sdk';
 
 function skill(name: string, description: string): SkillInfo {

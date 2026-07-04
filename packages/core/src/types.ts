@@ -166,17 +166,12 @@ export interface CortxConfig {
   tracer?: AgentTracer;
   recorder?: AgentRunRecorder;
   durableStore?: AgentDurableRunStore;
+  extensions?: import('@cortx/sdk').AgentRuntimeExtensions;
+  sessionId?: string;
+  runId?: number;
   workingDirectory?: string;
   autoContinueLimit?: number;
   toolResultBudget?: number;
   maxConcurrentTools?: number;
   maxConcurrentAgents?: number;
-  skillPaths?: string[];
-  capabilities?: {
-    skills?: 'enabled' | 'disabled';
-    subAgents?: 'enabled' | 'disabled';
-  };
-  safety?: {
-    toolApproval?: 'enabled' | 'disabled';
-  };
 }
