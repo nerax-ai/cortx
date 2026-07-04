@@ -17,7 +17,6 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@cortx/code": "workspace:*",
     "@cortx/core": "workspace:*",
     "@cortx/sdk": "workspace:*",
     "@nerax-ai/logger": "^0.2.0",

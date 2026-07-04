@@ -25,6 +25,11 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 describe('architecture boundaries', () => {
+  test('legacy code package stays removed', async () => {
+    const codePackage = join(import.meta.dir, '..', '..', 'code');
+    expect(await pathExists(codePackage)).toBe(false);
+  });
+
   test('core source does not import host/runtime/frontend packages', async () => {
     const coreSrc = join(import.meta.dir, '..', '..', 'core', 'src');
     const forbidden = ['@cortx/runtime', '@cortx/server', '@cortx/tui', '@cortx/web'];
@@ -48,6 +53,12 @@ describe('architecture boundaries', () => {
         deps['@cortx/code'],
         `@cortx/${packageDir} should receive workspace tools through runtime`,
       ).toBeUndefined();
+
+      const srcDir = join(import.meta.dir, '..', '..', packageDir, 'src');
+      for (const file of await walk(srcDir)) {
+        const source = await readFile(file, 'utf8');
+        expect(source, `${file} must not import runtime workspace-tools internals`).not.toContain('workspace-tools');
+      }
     }
   });
 
@@ -64,6 +75,7 @@ describe('architecture boundaries', () => {
 
       expect(source, `${file} must not construct Cortx directly`).not.toMatch(/\bnew\s+Cortx\b/);
       expect(source, `${file} must not import workspace tool packs directly`).not.toContain('@cortx/code');
+      expect(source, `${file} must not import runtime workspace-tools internals`).not.toContain('workspace-tools');
     }
 
     expect(importsRuntime).toBe(true);
@@ -71,7 +83,7 @@ describe('architecture boundaries', () => {
 
   test('web source remains a remote-only client', async () => {
     const webSrc = join(import.meta.dir, '..', '..', 'web', 'src');
-    const forbidden = ['@cortx/core', '@cortx/runtime', '@cortx/code'];
+    const forbidden = ['@cortx/core', '@cortx/runtime', '@cortx/code', 'workspace-tools'];
 
     for (const file of await walk(webSrc)) {
       const source = await readFile(file, 'utf8');

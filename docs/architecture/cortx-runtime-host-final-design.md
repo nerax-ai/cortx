@@ -35,16 +35,16 @@ Cortx 要成为一套可以被任意 agent 场景复用的底座：
 flowchart TB
   Core["@cortx/core\nsingle-agent kernel"]
   Runtime["@cortx/runtime\nmulti-session host"]
-  Code["@cortx/code\nworkspace tool pack"]
   Server["@cortx/server\nHTTP/SSE adapter"]
   Tui["@cortx/tui\nlocal runtime / remote server"]
   Web["@cortx/web\nremote-only frontend"]
   Desktop["future desktop\nruntime embed / server client"]
-  Official["official capabilities\nskills / sub-agent / approval / tools"]
+  Official["official capabilities\nskills / sub-agent / approval"]
+  WorkspaceTools["runtime workspace-tools\nhost-mounted tool capability"]
   Plugins["user plugins\npolicies / tools / observers"]
 
   Runtime --> Core
-  Runtime --> Code
+  Runtime --> WorkspaceTools
   Runtime --> Official
   Runtime --> Plugins
   Server --> Runtime
@@ -121,7 +121,7 @@ Web：
 - remote-only。
 - 通过 server 控制 runtime session。
 - 不在浏览器里运行 local agent。
-- 不导入 core/runtime/code 执行本地文件工具。
+- 不导入 core、runtime 或 runtime workspace-tools 执行本地文件工具。
 
 未来 Desktop：
 
@@ -137,8 +137,7 @@ Web：
 | `@cortx/runtime` | session 生命周期、多目录、多 agent、workspace 验证、工具挂载、默认 capability、event history、host action、运行错误归一化 | UI 渲染、HTTP 鉴权细节、终端快捷键、浏览器状态 |
 | `@cortx/server` | REST/SSE、认证、CORS、短 token、HTTP 错误格式化、日志脱敏 | 独立 session manager、独立 workspace policy、独立 agent loop 语义 |
 | `@cortx/tui` | Ink UI、local/remote adapter、输入历史、快捷键、审批表现、终端渲染 | 绕过 runtime 装配工具、复制 server session manager |
-| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行本地 agent、本地 filesystem 工具、导入 core/runtime/code |
-| `@cortx/code` | 官方 workspace tools、路径安全、read/write/edit/grep/find/bash 等工具语义 | session 管理、UI 审批、server 鉴权 |
+| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行本地 agent、本地 filesystem 工具、导入 core/runtime/workspace-tools 执行本地能力 |
 | `@cortx/sdk` | 插件作者和工具作者使用的稳定类型、helper、extension point 常量 | 产品默认行为、运行时宿主策略 |
 
 ## Core 的稳定边界
@@ -257,7 +256,7 @@ runtime 不应该假设：
 
 ## Workspace 与工具安全
 
-workspace 安全不依赖 UI 约定，而由 runtime 和 official tool pack 共同保证。
+workspace 安全不依赖 UI 约定，而由 runtime 的 workspace-tools capability 共同保证。该 capability 现在是 runtime 内部能力，未来可以再抽成官方插件或可安装 tool pack，但不再作为独立 `code` 包存在。
 
 第一版必须满足：
 
@@ -267,7 +266,7 @@ workspace 安全不依赖 UI 约定，而由 runtime 和 official tool pack 共�
 - 工具不能读写 sibling workspace 或 allowed root 外路径。
 - write/destructive 工具默认接入 approval policy。
 - 没有审批通道时，write/destructive 默认拒绝。
-- `@cortx/code` 作为官方 workspace tool pack，被 runtime/server/TUI local/Desktop 复用。
+- workspace-tools 作为 runtime-hosted capability，被 server、TUI local 和未来 Desktop 通过 runtime 间接复用；frontend 不直接装配这些工具。
 
 建议 tool mode：
 
@@ -386,8 +385,8 @@ TUI、Web、Desktop 应该共享同一套 session/action/event 语义。
 - core 不导入 runtime/server/tui/web。
 - server 不再出现自有 session manager。
 - server 不直接 new `Cortx` 绕过 runtime。
-- server 不直接导入 `@cortx/code` 挂载工具。
-- web 不导入 core/runtime/code。
+- server 不直接导入或实现 workspace-tools，所有工具挂载都通过 runtime。
+- web 不导入 core、runtime 或 runtime workspace-tools。
 - TUI remote mode 不扫描本地 skill/workspace。
 - workspace tool path safety 覆盖 lexical、realpath、symlink escape。
 - write/destructive 无审批通道时默认拒绝。
@@ -402,7 +401,7 @@ TUI、Web、Desktop 应该共享同一套 session/action/event 语义。
 - server 所有 session action 都委托 runtime。
 - TUI local/remote 通过同一抽象操控 session。
 - Web remote-only，不导入本地 agent 执行包。
-- workspace tools 由 runtime/code 挂载，不由 UI 复制。
+- workspace tools 由 runtime 内部 workspace-tools capability 挂载，不由 UI 复制。
 - core 支持 capability toggles，宿主能力可以由 runtime 控制。
 - 全量 lint/build/test 通过。
 - HTTP/SSE smoke 通过。

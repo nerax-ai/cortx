@@ -20,7 +20,7 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 - `@cortx/server` 已从自有 session manager 改为 runtime adapter。
 - TUI 已拆成 local runtime 和 remote server 两种 adapter。
 - Web 已对齐 runtime-backed server API，并保持 remote-only。
-- workspace tool pack 已通过 runtime 挂载，并保留路径边界测试。
+- `@cortx/code` 包已删除；原文件/命令工具能力已迁入 runtime 内部 `workspace-tools` capability，并保留路径边界测试。
 - core 已增加 capability toggles，skills/sub-agent 默认能力可以被 runtime 显式开关。
 - 新增边界测试，防止 core、server、Web、frontend 职责重新混杂。
 - server 现在提供 `createServerRuntime()`，嵌入式宿主可以显式释放 runtime。
@@ -45,7 +45,7 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 | 单元 | 状态 | 当前证据 |
 | --- | --- | --- |
 | U1 新增 `@cortx/runtime` | 已完成 | `packages/runtime/src/runtime.ts`，runtime tests 覆盖 create/list/get/delete/prompt/steer/follow-up/resume/answer/abort/subscribe |
-| U2 Workspace 与工具挂载 | 已完成 | `packages/runtime/src/workspace.ts`、`packages/runtime/src/tool-mount.ts`、`packages/code/src/index.ts`，workspace tests 覆盖 lexical/realpath/symlink、tool mode、无审批拒绝写入 |
+| U2 Workspace 与工具挂载 | 已完成 | `packages/runtime/src/workspace.ts`、`packages/runtime/src/tool-mount.ts`、`packages/runtime/src/workspace-tools/index.ts`，workspace tests 覆盖 lexical/realpath/symlink、tool mode、无审批拒绝写入；`packages/code` 已删除 |
 | U3 Server runtime 化 | 已完成 | `packages/server/src/session-manager.ts` 已删除，`packages/server/src/server.ts` 创建 `CortxRuntime` 并委托所有 session action；`createServerRuntime()` 提供嵌入式 dispose |
 | U4 TUI local/remote adapter | 已完成 | `packages/tui/src/runtime-session.ts`、`packages/tui/src/remote-client.ts`，TUI adapter tests 覆盖 local 和 remote |
 | U5 Web remote contract | 已完成 | `packages/web/src/bridge/event-bridge.ts`，Web tests 覆盖 runtime API、typed errors、SSE 短期 token、remote-only manifest |
@@ -55,12 +55,32 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 
 ## 本轮新增进度
 
+### Round 7
+
+- 根据新的架构判断，彻底删除独立 `@cortx/code` 包：
+  - 移除 `packages/code/package.json` 和 `packages/code/tsconfig.json`。
+  - 将原 read/write/edit/bash/grep/find/ls/path-safety/search 工具实现迁入 `packages/runtime/src/workspace-tools/`。
+  - 将原 code 工具测试迁入 `packages/runtime/tests/workspace-tools.test.ts`。
+  - 移除 `@cortx/runtime` 对 `@cortx/code` 的 workspace 依赖。
+  - 更新 lockfile，使 workspace 图只剩 sdk/store/core/runtime/server/tui/web 这 7 个包。
+- 更新当前权威文档：
+  - `@cortx/code` 不再被描述为包职责边界的一部分。
+  - workspace tools 被定义为 runtime 内部 host-mounted capability。
+  - 后续如果需要产品化分发，再抽成官方插件或可安装 tool pack，而不是恢复 `code` 这个模糊包。
+- 加强架构边界测试：
+  - `packages/code` 不能重新出现。
+  - server/TUI/Web 不能直接导入 runtime 内部 `workspace-tools` 实现。
+- 本轮验证：
+  - `bun run lint`：通过，7 个 workspace package 全部成功。
+  - `bun run build`：通过，7 个 workspace package 全部成功。
+  - `bun test`：通过，717 pass，0 fail，1898 expect。
+
 ### Round 6
 
 - 完成本轮 LFG 收尾审计：
   - 重新确认 plan metadata：`artifact_contract: ce-unified-plan/v1`、`artifact_readiness: implementation-ready`、`execution: code`。
   - 重新核对需求文档和最终设计文档中的 95% 验收标准。
-  - 当前实现已经覆盖 runtime host、server adapter、TUI local/remote adapter、Web remote-only contract、workspace tool pack、core capability boundary、conformance/boundary tests 和最终设计文档。
+  - 当前实现已经覆盖 runtime host、server adapter、TUI local/remote adapter、Web remote-only contract、workspace-tools capability、core capability boundary、conformance/boundary tests 和最终设计文档。
 - 完成最新顺序全量验证：
   - `bun run lint`：通过，8 个 workspace package lint 全部成功。
   - `bun run build`：通过，8 个 workspace package build 全部成功，包含 Web production build。
@@ -83,7 +103,7 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 ### Round 4
 
 - 完成 LFG simplify/review 方向的 focused pass：
-  - reuse：确认 workspace path safety、workspace tool pack、runtime host contract 已复用共享实现，没有发现需要再复制/合并的核心路径。
+  - reuse：确认 workspace path safety、workspace-tools capability、runtime host contract 已复用共享实现，没有发现需要再复制/合并的核心路径。
   - quality：修复 server SSE replay event id 固定为 `0` 的问题，改为连续序号。
   - quality/security：把 server 短期 token store 从模块级全局 `Map` 改为每个 `createServerRuntime()` 实例独立，避免同一进程多个 server 之间 token 串用。
   - reliability：Web `AuthClient` 记录 `tokenExpiresAt`，REST/SSE 统一通过 `getAuthToken()` 在 token 临近过期时自动刷新。
@@ -155,10 +175,10 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 - 修复 `packages/core/tests/capabilities.test.ts` 的 `PluginRegistry` 单例污染，保证完整测试套件稳定。
 - 扩展 `packages/runtime/tests/core-boundary.test.ts`：
   - core 不能导入 runtime/server/tui/web。
-  - TUI/Web 不能直接依赖 `@cortx/code`。
+  - TUI/Web 不能直接依赖 runtime workspace-tools implementation。
   - server 不能重新出现 `session-manager.ts`。
-  - server 不能直接 `new Cortx` 或导入 workspace tool pack。
-  - Web 源码不能导入 core/runtime/code。
+  - server 不能直接 `new Cortx` 或导入 workspace-tools implementation。
+  - Web 源码不能导入 core、runtime 或 workspace-tools implementation。
 
 ## 验证结果
 
@@ -180,7 +200,7 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
 - `bun test packages/core/tests/capabilities.test.ts packages/core/tests/core-extensions.test.ts`
 - `bun test packages/runtime/tests/core-boundary.test.ts`
 - `bun test packages/runtime/tests/workspace.test.ts packages/runtime/tests/runtime.test.ts packages/server/tests/server.test.ts packages/web/tests/event-bridge.test.ts packages/tui/src/__tests__/runtime-session.test.ts packages/tui/src/__tests__/remote-client.test.ts`
-- `bun test`：716 pass，0 fail
+- `bun test`：717 pass，0 fail，1898 expect
 - `bun run lint`：所有 workspace package 通过
 - `bun run build`：所有 workspace package 通过，包含 Web production build
 - `git diff --check`
@@ -188,10 +208,10 @@ Runtime Host 新版本已经完成本轮 LFG 收尾验证，整体完成度约 9
   - server/auth/web/tui/runtime 相关 targeted tests：通过
   - server/web/tui scoped lint：通过
   - `git diff --check`：通过
-- 本轮最新 LFG 收尾验证：
-  - `bun run lint`：8 个 workspace package 全部通过
-  - `bun run build`：8 个 workspace package 全部通过，Web production build 通过
-  - `bun test`：716 pass，0 fail，1854 expect
+- 本轮最新顺序验证（Round 7）：
+  - `bun run lint`：7 个 workspace package 全部通过
+  - `bun run build`：7 个 workspace package 全部通过，Web production build 通过
+  - `bun test`：717 pass，0 fail，1898 expect
   - `git diff --check`：通过
 
 ## 下一轮建议

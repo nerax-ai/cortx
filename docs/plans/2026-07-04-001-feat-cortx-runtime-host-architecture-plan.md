@@ -48,7 +48,7 @@ Requirement IDs R1-R25, actors, flows, and acceptance examples keep the same pro
 - **Server is an adapter over runtime.** `server` 不拥有 agent 编排语义；它只把 runtime 暴露成 HTTP/SSE API，并处理认证、CORS 和传输错误。
 - **Frontends stay thin.** `tui`、`web` 和未来 desktop 都消费同一套 session/action/event contract；它们可以有不同表现方式，但不重新定义 agent 运行语义。
 - **TUI keeps local mode.** TUI 的本地 in-process 模式仍是一级能力；远程模式是增强，不替代本地模式。
-- **Workspace tools become runtime-mounted capabilities.** `@cortx/code` 不应被简单删除后复制到多个前端；它应演进为 workspace tools factory 或官方工具插件，让 runtime、server 和 TUI 本地模式复用同一套路径安全和工具语义。
+- **Workspace tools become runtime-mounted capabilities.** 原 `@cortx/code` 不再作为独立包保留；文件/命令工具能力迁入 runtime 内部 workspace-tools capability，未来可再抽成官方插件或可安装 tool pack。
 - **Core slimming is part of the same architecture version.** skills runtime bridge、built-in sub-agent tool、inline tools path 等 core 内能力入口需要向统一 contribution/runtime path 收敛，避免 core 再次变成产品宿主层。
 
 ### Actors
@@ -75,7 +75,7 @@ Requirement IDs R1-R25, actors, flows, and acceptance examples keep the same pro
 - R7. workspace 路径边界必须使用 lexical containment 和 realpath/symlink containment，不能只依赖字符串前缀。
 - R8. workspace tools 必须按 session working directory 装配，工具执行不能越过该 session 的 workspace boundary。
 - R9. write/destructive 工具必须接入默认 approval policy；无可用审批通道时默认拒绝而不是静默执行。
-- R10. `@cortx/code` 的工具能力必须演进为 runtime 可挂载的 workspace tools factory 或官方插件，而不是由每个前端复制工具实现。
+- R10. workspace tools 必须作为 runtime 可挂载 capability 或官方插件形态存在，而不是由每个前端复制工具实现，也不再保留模糊的独立 `code` 包。
 
 **Server Adapter**
 
@@ -178,7 +178,7 @@ Requirement IDs R1-R25, actors, flows, and acceptance examples keep the same pro
 
 - D1. Existing core `AgentEvent` remains the canonical event stream shared by runtime, server and frontends.
 - D2. Existing server and web transport can evolve without replacing Hono/SSE as the first remote protocol.
-- D3. Existing `@cortx/code` path-safety work can become the basis for shared workspace tool safety.
+- D3. Existing workspace tool path-safety work becomes runtime-owned workspace safety infrastructure.
 - D4. Existing core extension plan remains valid and should not be duplicated by this runtime architecture plan.
 - D5. Runtime naming is accepted as the durable term for the multi-session host layer.
 - D6. TUI remote mode may initially share the Web bridge contract through a small TypeScript client rather than a React-specific implementation.
@@ -192,8 +192,8 @@ Requirement IDs R1-R25, actors, flows, and acceptance examples keep the same pro
 - `packages/server/src/server.ts` shows current `POST /sessions` does not read a creation body.
 - `packages/server/src/types.ts` shows server config owns language/model/plugins today and lacks workspace root configuration.
 - `packages/web/src/bridge/event-bridge.ts` shows Web already acts as a server REST/SSE client.
-- `packages/code/src/path-safety.ts` shows workspace path containment already exists inside the current code tools package.
-- `packages/code/src/index.ts` shows workspace tools are currently exposed as cwd-bound factory functions.
+- `packages/runtime/src/workspace-tools/path-safety.ts` shows runtime-owned workspace path containment.
+- `packages/runtime/src/workspace-tools/index.ts` shows workspace tools are exposed as cwd-bound runtime capability factories.
 - `packages/core/src/agent.ts` and `packages/core/src/types.ts` show core still has inline tools, skills special-case merge and built-in sub-agent tool paths.
 - `packages/server/tests/server.test.ts` shows existing server tests already cover auth, basic sessions, event cap, abort running gate and plugin pass-through.
 - `docs/plans/2026-06-29-001-feat-cortx-extension-system-plan.md` establishes that core should avoid TUI/Web extension APIs and treat skills/agent specs as assets around a typed runtime extension system.
@@ -209,7 +209,7 @@ Requirement IDs R1-R25, actors, flows, and acceptance examples keep the same pro
 - KTD3. Server delegates to runtime instead of owning `SessionManager`. The existing `packages/server/src/session-manager.ts` behavior should either move into runtime or shrink to an adapter wrapper that contains no independent session semantics.
 - KTD4. Session creation and actions are typed request/response contracts. Server, Web, and TUI remote mode should share a shape for `workingDirectory`, optional `model` or `profile`, optional `metadata`, and tool mode; prompt, steer, follow-up, answer, abort and resume should route through runtime with typed host errors.
 - KTD5. Workspace roots are configured at the runtime/server boundary. Runtime validates requested directories against allowed roots with lexical containment and realpath/symlink containment before creating tools or `Cortx`.
-- KTD6. `@cortx/code` becomes the workspace tool pack provider. It should expose a mount/factory path that takes the verified session workspace and returns tools with the same path-safety behavior, rather than forcing each frontend to call individual tool factories.
+- KTD6. Runtime owns the workspace-tools capability provider. It exposes a mount/factory path that takes the verified session workspace and returns tools with the same path-safety behavior, rather than forcing each frontend to call individual tool factories.
 - KTD7. TUI has two runtime adapters behind one UI: local mode embeds runtime and creates a local session; remote mode speaks the server API. The rendered experience should not depend on whether events came from local runtime or SSE.
 - KTD8. Web stays remote-only. Any feature that requires local filesystem access must go through server/runtime and explicit allowed workspace roots, not browser-local code.
 - KTD9. Skills and sub-agent defaults move toward runtime-mounted capabilities, but the first implementation should preserve current product behavior. TUI local mode and server default profiles can enable the official skill/sub-agent bridge by default while core stops being the place new host capability is added.
@@ -224,7 +224,7 @@ The first version should turn the current server-side `SessionManager` into reus
 flowchart TB
   Core["@cortx/core\nsingle agent loop"]
   Runtime["@cortx/runtime\nsession host"]
-  Code["@cortx/code\nworkspace tool pack"]
+  WorkspaceTools["runtime workspace-tools\nhost-mounted capability"]
   Server["@cortx/server\nHTTP/SSE adapter"]
   TuiLocal["@cortx/tui local\nInk UI + embedded runtime"]
   TuiRemote["@cortx/tui remote\nInk UI + server client"]
@@ -232,7 +232,7 @@ flowchart TB
   Desktop["future desktop\nembedded or remote runtime"]
 
   Runtime --> Core
-  Runtime --> Code
+  Runtime --> WorkspaceTools
   Server --> Runtime
   TuiLocal --> Runtime
   TuiRemote --> Server
@@ -247,7 +247,7 @@ Session creation should flow through one validation and construction path.
 sequenceDiagram
   participant Client as TUI/Web/Desktop/Server caller
   participant Runtime as @cortx/runtime
-  participant Tools as @cortx/code
+  participant Tools as runtime workspace-tools
   participant Core as @cortx/core
 
   Client->>Runtime: createSession(request)
@@ -330,14 +330,14 @@ This order keeps the visible product surfaces usable after each slice and gives 
 
 ### U2. Add Workspace Root Validation and Tool Mounting
 
-- **Goal:** Make runtime the authority for session workspace validation and mount `@cortx/code` tools only after a requested working directory is proven inside allowed roots.
+- **Goal:** Make runtime the authority for session workspace validation and mount runtime-owned workspace tools only after a requested working directory is proven inside allowed roots.
 - **Requirements:** R2, R6, R7, R8, R9, R10, R14.
 - **Dependencies:** U1.
-- **Files:** `packages/runtime/src/workspace.ts`, `packages/runtime/src/tool-mount.ts`, `packages/runtime/tests/workspace.test.ts`, `packages/code/src/index.ts`, `packages/code/src/path-safety.ts`, `packages/code/tests/code.test.ts`.
-- **Approach:** Add a runtime workspace resolver that checks lexical containment and realpath/symlink containment for requested directories. Reuse or generalize `packages/code/src/path-safety.ts` rather than duplicating path rules. Extend `@cortx/code` with a workspace tool pack factory suitable for runtime mounting, while preserving existing `createCodingTools`, `createReadOnlyTools`, and `createAllTools` until callers migrate. Ensure default write/destructive approval policy is still active when mounted through runtime.
-- **Patterns to follow:** `packages/code/src/path-safety.ts` for containment semantics; `packages/core/src/safety-policy.ts` for default approval behavior; `packages/code/tests/code.test.ts` for tool safety test style.
+- **Files:** `packages/runtime/src/workspace.ts`, `packages/runtime/src/tool-mount.ts`, `packages/runtime/tests/workspace.test.ts`, `packages/runtime/src/workspace-tools/index.ts`, `packages/runtime/src/workspace-tools/path-safety.ts`, `packages/runtime/tests/workspace-tools.test.ts`.
+- **Approach:** Add a runtime workspace resolver that checks lexical containment and realpath/symlink containment for requested directories. Keep the path rules in `packages/runtime/src/workspace-tools/path-safety.ts` and expose a workspace-tools capability factory suitable for runtime mounting. Ensure default write/destructive approval policy is still active when mounted through runtime.
+- **Patterns to follow:** `packages/runtime/src/workspace-tools/path-safety.ts` for containment semantics; `packages/core/src/safety-policy.ts` for default approval behavior; `packages/runtime/tests/workspace-tools.test.ts` for tool safety test style.
 - **Test scenarios:** Covers AE1 and AE2. Resolve a normal workspace under an allowed root and create tools for it. Reject `..` traversal, absolute escape, and symlink escape. Execute read/write/edit/search tools through a mounted session and verify each stays inside the session workspace. Attempt a write/destructive tool with no approval channel and verify the tool returns a structured denial rather than executing. Verify two sessions under sibling workspaces cannot read or write each other's files.
-- **Verification:** Workspace tests prove root validation happens before `Cortx` construction and tool tests prove runtime-mounted tools keep the same path safety as direct `@cortx/code` usage.
+- **Verification:** Workspace tests prove root validation happens before `Cortx` construction and tool tests prove runtime-mounted tools keep the same path safety as direct internal workspace-tools usage.
 
 ### U3. Make Server a Runtime Adapter
 
@@ -369,7 +369,7 @@ This order keeps the visible product surfaces usable after each slice and gives 
 - **Files:** `packages/web/src/bridge/event-bridge.ts`, `packages/web/src/bridge/auth.ts`, `packages/web/src/App.tsx`, `packages/web/src/components/StatusBar.tsx`, `packages/web/src/components/ConnectionOverlay.tsx`, `packages/web/src/components/PromptInput.tsx`, `packages/web/src/hooks/use-store.ts`, `packages/web/tests/auth.test.ts`.
 - **Approach:** Extend the Web bridge to pass session creation options when the UI has them, parse runtime/session metadata, and surface typed errors from server. Keep event consumption through EventSource using short-lived exchange tokens rather than the long-lived API key. Do not add local filesystem access or core imports to Web. Align shared session metadata names with TUI remote mode so future frontend code can share a small client package if needed.
 - **Patterns to follow:** Current `packages/web/src/bridge/event-bridge.ts` for REST/SSE flow; `packages/store/src/store.ts` for canonical event-to-view state; TUI remote adapter from U4 for contract parity.
-- **Test scenarios:** Create a remote session with default body and with a working directory field. Handle invalid workspace, auth failure, server unreachable, expired token, missing session and stream reconnect states with user-visible messages. Verify Web consumes `tool_use`, `tool_result`, `thinking_delta`, `text`, `done`, `error`, and askUser/approval events only from SSE/store dispatch. Verify Web package has no dependency on `@cortx/core`, `@cortx/runtime`, or `@cortx/code` unless explicitly introduced as a transport-only type package.
+- **Test scenarios:** Create a remote session with default body and with a working directory field. Handle invalid workspace, auth failure, server unreachable, expired token, missing session and stream reconnect states with user-visible messages. Verify Web consumes `tool_use`, `tool_result`, `thinking_delta`, `text`, `done`, `error`, and askUser/approval events only from SSE/store dispatch. Verify Web package has no dependency on `@cortx/core`, `@cortx/runtime`, or runtime workspace-tools implementation unless explicitly introduced as a transport-only type package.
 - **Verification:** Web tests and package manifest checks prove Web remains a thin remote frontend and shares the server session contract.
 
 ### U6. Slim Core Capability Mounting
@@ -403,7 +403,7 @@ This order keeps the visible product surfaces usable after each slice and gives 
 | ---------------------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `bun run --filter '@cortx/runtime' lint`                                           | U1, U2, U6, U7 | New runtime package compiles with strict TypeScript and no server/frontend imports.                                    |
 | `bun test packages/runtime/tests/*.test.ts`                                        | U1, U2, U6, U7 | Runtime session, workspace, default capability and boundary tests pass.                                                |
-| `bun test packages/code/tests/code.test.ts`                                        | U2             | Workspace tools retain path safety, unique edit behavior and cross-platform search behavior.                           |
+| `bun test packages/runtime/tests/workspace-tools.test.ts`                                        | U2             | Workspace tools retain path safety, unique edit behavior and cross-platform search behavior.                           |
 | `bun test packages/server/tests/server.test.ts packages/server/tests/auth.test.ts` | U3             | Server routes, auth, SSE replay, typed errors, prompt/steer/follow-up/answer/abort/resume and runtime delegation pass. |
 | `bun test packages/tui/src/__tests__/*.test.ts packages/tui/tests/*.test.ts`       | U4             | TUI local mode, remote adapter, input/history/approval/rendering behavior pass.                                        |
 | `bun test packages/web/tests/*.test.ts`                                            | U5             | Web auth and bridge-level remote behavior pass.                                                                        |
@@ -426,7 +426,7 @@ Manual or smoke verification is still useful after automated tests:
 - Server `POST /sessions` accepts a creation body, validates working directories through runtime, and returns typed, diagnosable errors.
 - TUI supports local mode with embedded runtime and remote mode through server, with one UI/store path for both and complete prompt/steer/follow-up/answer/abort/resume coverage.
 - Web remains remote-only and uses the same server session API/event stream contract as TUI remote mode.
-- Workspace tools are mounted through a shared `@cortx/code` factory or official tool-pack path and keep lexical plus realpath/symlink containment.
+- Workspace tools are mounted through the runtime-owned workspace-tools capability or a future official tool-pack path and keep lexical plus realpath/symlink containment.
 - Default write/destructive approval behavior remains protective in local runtime, server runtime and TUI approval flows.
 - Core's role is smaller: no new multi-session, workspace-root, HTTP, TUI/Web or desktop host logic is added to `@cortx/core`.
 - Skill and sub-agent behavior is preserved for default coding-agent products while the ownership of default mounting moves toward runtime or explicit official capabilities.
@@ -455,7 +455,7 @@ Manual or smoke verification is still useful after automated tests:
 | TUI remote mode creates a second frontend contract parallel to Web.                | Share session creation and event semantics; prefer a small transport client module over TUI-specific route assumptions.                                                    |
 | Workspace root validation rejects legitimate symlink-based projects.               | Test symlink-inside and symlink-outside cases separately; allow inside-root symlinks while rejecting escapes.                                                              |
 | Approval behavior differs between local runtime and server runtime.                | Route both through the same policy/tool context shape and cover no-approval-channel denial in tests.                                                                       |
-| Web grows accidental local-agent dependencies.                                     | Add package manifest and import-boundary tests that fail on `@cortx/core`, `@cortx/runtime`, or `@cortx/code` imports unless explicitly approved for transport-only types. |
+| Web grows accidental local-agent dependencies.                                     | Add package manifest and import-boundary tests that fail on `@cortx/core`, `@cortx/runtime`, or runtime workspace-tools implementation imports unless explicitly approved for transport-only types. |
 | Remote credentials leak through logs, URLs or persisted UI state.                  | Keep long-lived API keys out of EventSource URLs, use short-lived tokens for SSE, redact credentials in logs/errors, and test serialized session metadata for secrets.     |
 
 ---

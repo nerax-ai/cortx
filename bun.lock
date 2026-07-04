@@ -10,16 +10,6 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/code": {
-      "name": "@cortx/code",
-      "version": "0.0.1",
-      "dependencies": {
-        "@cortx/sdk": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/node": "^22.0.0",
-      },
-    },
     "packages/core": {
       "name": "@cortx/core",
       "version": "0.0.1",
@@ -37,7 +27,6 @@
       "name": "@cortx/runtime",
       "version": "0.0.1",
       "dependencies": {
-        "@cortx/code": "workspace:*",
         "@cortx/core": "workspace:*",
         "@cortx/sdk": "workspace:*",
         "@nerax-ai/logger": "^0.2.0",
@@ -183,8 +172,6 @@
     "@base-ui-components/react": ["@base-ui-components/react@1.0.0-rc.0", "", { "dependencies": { "@babel/runtime": "^7.28.4", "@base-ui-components/utils": "0.2.2", "@floating-ui/react-dom": "^2.1.6", "@floating-ui/utils": "^0.2.10", "reselect": "^5.1.1", "tabbable": "^6.3.0", "use-sync-external-store": "^1.6.0" }, "peerDependencies": { "@types/react": "^17 || ^18 || ^19", "react": "^17 || ^18 || ^19", "react-dom": "^17 || ^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-9lhUFbJcbXvc9KulLev1WTFxS/alJRBWDH/ibKSQaNvmDwMFS2gKp1sTeeldYSfKuS/KC1w2MZutc0wHu2hRHQ=="],
 
     "@base-ui-components/utils": ["@base-ui-components/utils@0.2.2", "", { "dependencies": { "@babel/runtime": "^7.28.4", "@floating-ui/utils": "^0.2.10", "reselect": "^5.1.1", "use-sync-external-store": "^1.6.0" }, "peerDependencies": { "@types/react": "^17 || ^18 || ^19", "react": "^17 || ^18 || ^19", "react-dom": "^17 || ^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-rNJCD6TFy3OSRDKVHJDzLpxO3esTV1/drRtWNUpe7rCpPN9HZVHUCuP+6rdDYDGWfXnQHbqi05xOyRP2iZAlkw=="],
-
-    "@cortx/code": ["@cortx/code@workspace:packages/code"],
 
     "@cortx/core": ["@cortx/core@workspace:packages/core"],
 

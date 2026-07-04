@@ -38,7 +38,7 @@ runtime 要负责：
 - 统一处理 prompt、steer、follow-up、answer、abort、resume。
 - 保存 bounded event history，方便 Web/TUI/Desktop 迟到订阅或重连。
 - 验证 workspace root，装配 workspace tools。
-- 挂载默认能力，例如 skills bridge、sub-agent capability、workspace tool pack、policy。
+- 挂载默认能力，例如 skills bridge、sub-agent capability、workspace-tools capability、policy。
 
 ### 2. Server 与前端薄化
 
@@ -105,7 +105,7 @@ core 不应该承担：
 flowchart TB
   Core["@cortx/core\n单 agent 执行内核"]
   Runtime["@cortx/runtime\n多 session 运行承载层"]
-  Code["@cortx/code\nworkspace tool pack"]
+  WorkspaceTools["runtime workspace-tools\nhost-mounted capability"]
   Server["@cortx/server\nHTTP/SSE adapter"]
   Tui["@cortx/tui\nlocal runtime 或 remote server"]
   Web["@cortx/web\nremote frontend"]
@@ -113,7 +113,7 @@ flowchart TB
   Plugins["official/user plugins\nskills/tools/policies/sub-agents"]
 
   Runtime --> Core
-  Runtime --> Code
+  Runtime --> WorkspaceTools
   Runtime --> Plugins
   Server --> Runtime
   Tui --> Runtime
@@ -131,8 +131,7 @@ flowchart TB
 | `@cortx/runtime` | session 生命周期、多目录、多 agent 承载、workspace 验证、工具挂载、event history、host actions、默认 capability | UI 渲染、HTTP 认证细节、终端快捷键、浏览器状态 |
 | `@cortx/server` | REST/SSE、认证、CORS、短期 token、HTTP 错误格式化 | 独立 session manager、独立 workspace policy、独立 agent loop 语义 |
 | `@cortx/tui` | Ink UI、本地输入体验、历史消息、快捷键、local/remote adapter、审批表现 | 复制 server session manager、直接绕开 runtime 装配工具 |
-| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行 local agent、本地文件系统工具、导入 core/code 执行 agent |
-| `@cortx/code` | 官方 workspace tools、路径安全、read/write/edit/grep/find/bash 等工具语义 | session 管理、UI 审批、server 认证 |
+| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行 local agent、本地文件系统工具、导入 core/runtime/workspace-tools 执行 agent |
 | `@cortx/sdk` | 插件作者和工具作者使用的稳定类型、helper、extension point 常量 | 产品默认行为、运行时宿主策略 |
 
 ## Runtime Host Contract
@@ -199,7 +198,7 @@ runtime 必须保证：
 
 ## Workspace 与工具安全
 
-workspace 安全不应该依赖 UI 约定，而应该由 runtime 和 official tool pack 共同保证。
+workspace 安全不应该依赖 UI 约定，而应该由 runtime 内部 workspace-tools capability 共同保证。该能力可以在未来抽成官方插件或可安装 tool pack，但不再作为独立 `code` 包存在。
 
 第一版要求：
 
@@ -209,7 +208,7 @@ workspace 安全不应该依赖 UI 约定，而应该由 runtime 和 official to
 - 工具不能读写 sibling workspace 或 allowed root 外路径。
 - write/destructive 工具默认接入 approval policy。
 - 没有审批通道时，write/destructive 默认拒绝。
-- `@cortx/code` 作为官方 workspace tool pack，被 runtime/server/TUI local/Desktop 复用。
+- workspace-tools 作为 runtime-hosted capability，被 server、TUI local 和未来 Desktop 通过 runtime 间接复用；frontend 不直接装配这些工具。
 
 建议 tool mode：
 
@@ -291,7 +290,7 @@ Web 必须保持 remote-only：
 
 - 只连接 server。
 - 不导入 `@cortx/core` 来运行 agent。
-- 不导入 `@cortx/code` 来访问本地文件系统。
+- 不导入 runtime workspace-tools 来访问本地文件系统。
 - 不保存长效 API key 到 SSE URL。
 - 所有本地文件访问都必须通过 server/runtime 的 allowed workspace 和工具策略。
 
@@ -405,7 +404,7 @@ Sub-agent 也类似：
 - A4. TUI local mode 可以继续当前本地体验。
 - A5. TUI remote mode 可以连接 server session，并支持 prompt、steer、follow-up、answer、abort、resume。
 - A6. Web 和 TUI remote mode 使用同一套 server session API。
-- A7. Web 包不能导入 `@cortx/core` 或 `@cortx/code` 来执行 agent 或访问本地文件。
+- A7. Web 包不能导入 `@cortx/core`、`@cortx/runtime` 或 runtime workspace-tools 来执行 agent 或访问本地文件。
 - A8. server 不再拥有独立 session manager；所有 session 生命周期委托 runtime。
 - A9. core boundary tests 能防止 host/session/workspace/transport 职责回流 core。
 - A10. `bun test` 和 `bun run lint` 对相关包保持通过。
@@ -424,7 +423,7 @@ Sub-agent 也类似：
 
 - runtime 支持 allowed workspace roots。
 - workspace 校验包含 lexical 和 realpath。
-- `@cortx/code` 提供 `createWorkspaceToolPack` 或等价 factory。
+- runtime 内部 workspace-tools 提供 `createWorkspaceToolPack` 或等价 factory。
 - runtime 按 tool mode 挂载工具。
 - 默认 policy 覆盖 write/destructive。
 

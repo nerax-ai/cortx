@@ -42,16 +42,16 @@ Cortx 未来需要同时服务两类完全不同的 agent：
 flowchart TB
   Core["@cortx/core\nsingle agent kernel"]
   Runtime["@cortx/runtime\nmulti-session host"]
-  Code["@cortx/code\nworkspace tool pack"]
   Server["@cortx/server\nHTTP/SSE adapter"]
   Tui["@cortx/tui\nlocal runtime or remote server"]
   Web["@cortx/web\nremote-only frontend"]
   Desktop["future desktop\nembedded runtime or server client"]
-  Capabilities["official capabilities\nskills / sub-agent / approval / tools"]
+  Capabilities["official capabilities\nskills / sub-agent / approval"]
+  WorkspaceTools["runtime workspace-tools\nhost-mounted tool capability"]
   Plugins["user plugins\npolicies / tools / observers"]
 
   Runtime --> Core
-  Runtime --> Code
+  Runtime --> WorkspaceTools
   Runtime --> Capabilities
   Runtime --> Plugins
   Server --> Runtime
@@ -70,8 +70,7 @@ flowchart TB
 | `@cortx/runtime` | session 生命周期、多目录、多 agent、workspace 验证、工具挂载、默认 capability、event history、prompt/steer/follow-up/answer/abort/resume | UI 渲染、HTTP 认证细节、终端快捷键、浏览器状态 |
 | `@cortx/server` | REST/SSE、认证、CORS、短期 SSE token、HTTP 错误格式化、日志脱敏 | 自己维护 session manager、自己 new `Cortx`、自己决定 workspace 策略、自己挂载工具 |
 | `@cortx/tui` | Ink UI、本地输入体验、历史消息、快捷键、local/remote adapter、审批表现 | 复制 server/runtime session manager、绕开 runtime 装配工具 |
-| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行 local agent、访问本地 filesystem、导入 core/code 执行工具 |
-| `@cortx/code` | 官方 workspace tool pack、路径安全、read/write/edit/grep/find/bash 等工具语义 | session 管理、UI 审批、server 认证 |
+| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行 local agent、访问本地 filesystem、导入 core/runtime/workspace-tools 执行本地能力 |
 | `@cortx/sdk` | 插件作者和工具作者使用的稳定类型、helper、extension point 常量 | 产品默认行为、运行时宿主策略 |
 
 ## 三条线必须同时交付
@@ -88,7 +87,7 @@ flowchart TB
 - 统一处理 `prompt`、`steer`、`follow-up`、`answer`、`abort`、`resume`。
 - 保存 bounded event history，让 Web/TUI/Desktop 可以迟到订阅或断线重连。
 - 验证 workspace root，并挂载 workspace tools。
-- 挂载默认 capability，例如 skills bridge、sub-agent、workspace tool pack、approval policy。
+- 挂载默认 capability，例如 skills bridge、sub-agent、workspace-tools capability、approval policy。
 
 ### 2. Server 与前端薄化
 
@@ -104,7 +103,7 @@ TUI、Web、Desktop 不应该再各自理解“agent 如何运行”，它们只
 
 `@cortx/core` 继续保留最底层 agent 能力，但不再吸收 host 层职责。
 
-core 可以提供 extension hooks、tool pipeline、checkpoint primitive 和事件事实；但 skills discovery、默认 sub-agent、workspace tool pack、approval UX、multi-session orchestration 都应该由 runtime 或官方 capability 挂载。
+core 可以提供 extension hooks、tool pipeline、checkpoint primitive 和事件事实；但 skills discovery、默认 sub-agent、workspace-tools capability、approval UX、multi-session orchestration 都应该由 runtime 或官方 capability 挂载。
 
 ## Runtime Host Contract
 
@@ -170,7 +169,7 @@ runtime 必须保证：
 
 ## Workspace 与工具安全
 
-workspace 安全不应该由 UI 约定保证，而应该由 runtime 和 official tool pack 共同保证。
+workspace 安全不应该由 UI 约定保证，而应该由 runtime 的 workspace-tools capability 共同保证。该 capability 现在内置在 runtime 中，未来可以再抽成官方插件或可安装 tool pack；不再保留独立 `code` 包。
 
 第一版要求：
 
@@ -180,7 +179,7 @@ workspace 安全不应该由 UI 约定保证，而应该由 runtime 和 official
 - 工具不能读写 sibling workspace 或 allowed root 外路径。
 - write/destructive 工具默认接入 approval policy。
 - 没有审批通道时，write/destructive 默认拒绝。
-- `@cortx/code` 作为官方 workspace tool pack，被 runtime/server/TUI local/Desktop 复用。
+- workspace-tools 作为 runtime-hosted capability，被 server、TUI local 和未来 Desktop 通过 runtime 间接复用；frontend 不直接装配这些工具。
 
 建议 tool mode：
 
@@ -279,7 +278,7 @@ Web 保持 remote-only：
 
 - 只连接 server。
 - 只消费 REST/SSE。
-- 不导入 core/code 来运行本地 agent。
+- 不导入 core、runtime 或 runtime workspace-tools 来运行本地 agent。
 - 不获得浏览器本地文件系统权限。
 - 可以展示多个 session、切换 session、发送 prompt/steer/follow-up/answer/abort/resume。
 
@@ -380,7 +379,7 @@ await runtime.prompt(session.sessionId, {
 - runtime 可以创建多个不同 workspace 的 session，并保证工具边界不串。
 - server 委托 runtime，不再拥有独立 session manager。
 - TUI local 和 remote 使用同一套 UI action adapter。
-- Web remote-only，不导入 core/runtime/code 执行本地能力。
+- Web remote-only，不导入 core、runtime 或 runtime workspace-tools 执行本地能力。
 - core 不导入 runtime/server/tui/web，也不拥有 workspace root 和 multi-session host。
 - write/destructive 工具默认受 approval/policy 控制。
 - invalid workspace、permission denied、session busy、session missing 等错误可被前端区分。

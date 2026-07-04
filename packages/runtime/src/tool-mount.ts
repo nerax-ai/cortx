@@ -1,5 +1,5 @@
 import type { Tool } from '@cortx/sdk';
-import { createWorkspaceToolPack } from '@cortx/code';
+import { createWorkspaceToolPack } from './workspace-tools/index.js';
 
 export type WorkspaceToolMode = 'none' | 'read-only' | 'coding' | 'all';
 
