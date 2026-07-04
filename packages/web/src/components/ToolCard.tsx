@@ -1,17 +1,25 @@
-import { useState } from 'react';
+import { Collapsible } from '@base-ui-components/react/collapsible';
 import type { ToolCallEntry } from '@cortx/store';
+import { surface, truncateMiddle } from '../design';
 
 interface ToolCardProps {
-  toolCallId: string;
   entry: ToolCallEntry;
 }
 
 function formatValue(value: unknown): string {
   if (value === undefined) return '';
   if (typeof value === 'string') {
-    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
   }
-  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function truncate(str: string, max = 80): string {
@@ -20,86 +28,55 @@ function truncate(str: string, max = 80): string {
 }
 
 export function ToolCard({ entry }: ToolCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [showInput, setShowInput] = useState(false);
-  const [showOutput, setShowOutput] = useState(false);
-
   const isPending = entry.status === 'pending';
   const isError = entry.isError === true;
-
-  const statusIcon = isPending ? (
-    <span className="text-yellow-500 animate-pulse">⏳</span>
-  ) : isError ? (
-    <span className="text-red-400">✗</span>
-  ) : (
-    <span className="text-green-400">✓</span>
-  );
+  const statusLabel = isPending ? 'pending' : isError ? 'error' : 'done';
+  const statusClass = isPending
+    ? 'border-amber-300/20 bg-amber-950/20 text-amber-200'
+    : isError
+      ? 'border-rose-300/20 bg-rose-950/20 text-rose-200'
+      : 'border-emerald-300/20 bg-emerald-950/20 text-emerald-200';
 
   const inputStr = formatValue(entry.input);
   const resultStr = entry.result != null ? formatValue(entry.result) : null;
+  const summary = entry.progress || inputStr || resultStr || 'No details yet';
 
   return (
-    <div className={`bg-gray-900 border rounded-lg text-sm overflow-hidden ${
-      isError ? 'border-red-900/40' : isPending ? 'border-yellow-900/30' : 'border-gray-800/60'
-    }`}>
-      <div
-        className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-800/40 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+    <Collapsible.Root defaultOpen={isPending || isError} className={`overflow-hidden rounded-lg text-sm ${surface.panel}`}>
+      <Collapsible.Trigger
+        className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/[0.035] ${surface.focus}`}
       >
-        {statusIcon}
-        <span className="text-gray-200 font-medium font-mono text-xs">{entry.toolName}</span>
-        {entry.progress && (
-          <span className="text-gray-600 text-xs truncate flex-1">{truncate(entry.progress, 60)}</span>
-        )}
-        {!entry.progress && inputStr && (
-          <span className="text-gray-700 text-xs truncate flex-1 font-mono">{truncate(inputStr, 60)}</span>
-        )}
-        <span className={`text-xs transition-colors ${expanded ? 'text-blue-400' : 'text-gray-700'}`}>
-          {expanded ? '▲' : '▼'}
-        </span>
-      </div>
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${statusClass}`}>{statusLabel}</span>
+        <span className="min-w-0 shrink-0 font-mono text-xs font-medium text-zinc-200">{entry.toolName}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-600">{truncateMiddle(summary, 46)}</span>
+        <span className="text-xs text-zinc-700">details</span>
+      </Collapsible.Trigger>
 
-      {expanded && (
-        <div className="border-t border-gray-800/40">
-          {inputStr && (
-            <div className="px-3 py-1">
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowInput(!showInput); }}
-                className="text-xs text-gray-500 hover:text-gray-400 flex items-center gap-1"
-              >
-                <span className={`transition-transform text-[10px] ${showInput ? 'rotate-90' : ''}`}>▶</span>
-                Input
-              </button>
-              {showInput && (
-                <pre className="mt-1 p-2 bg-gray-950/60 rounded text-xs text-gray-400 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono border border-gray-800/30">
-                  {inputStr}
-                </pre>
-              )}
+      <Collapsible.Panel keepMounted className="border-t border-white/8 px-3 py-2">
+        {inputStr && (
+          <section className="mb-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-zinc-700">Input</div>
+            <pre className="max-h-44 overflow-y-auto rounded-md border border-white/7 bg-black/20 p-2 font-mono text-xs leading-5 text-zinc-500 whitespace-pre-wrap">
+              {truncate(inputStr, 4000)}
+            </pre>
+          </section>
+        )}
+        {resultStr && (
+          <section>
+            <div className={`mb-1 text-[10px] uppercase tracking-[0.18em] ${isError ? 'text-rose-300/70' : 'text-zinc-700'}`}>
+              Output {isError ? 'error' : ''}
             </div>
-          )}
-          {resultStr && (
-            <div className="px-3 py-1">
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowOutput(!showOutput); }}
-                className={`text-xs flex items-center gap-1 ${isError ? 'text-red-500/70 hover:text-red-400' : 'text-gray-500 hover:text-gray-400'}`}
-              >
-                <span className={`transition-transform text-[10px] ${showOutput ? 'rotate-90' : ''}`}>▶</span>
-                Output {isError && '(error)'}
-              </button>
-              {showOutput && (
-                <pre className={`mt-1 p-2 bg-gray-950/60 rounded text-xs max-h-64 overflow-y-auto whitespace-pre-wrap font-mono border ${
-                  isError ? 'text-red-400/80 border-red-900/30' : 'text-gray-400 border-gray-800/30'
-                }`}>
-                  {resultStr}
-                </pre>
-              )}
-            </div>
-          )}
-          {isPending && !resultStr && (
-            <div className="px-3 py-2 text-xs text-gray-600 italic">Waiting for result...</div>
-          )}
-        </div>
-      )}
-    </div>
+            <pre
+              className={`max-h-64 overflow-y-auto rounded-md border bg-black/20 p-2 font-mono text-xs leading-5 whitespace-pre-wrap ${
+                isError ? 'border-rose-300/15 text-rose-100/75' : 'border-white/7 text-zinc-500'
+              }`}
+            >
+              {truncate(resultStr, 6000)}
+            </pre>
+          </section>
+        )}
+        {isPending && !resultStr && <div className="py-2 text-xs text-zinc-600">Waiting for result...</div>}
+      </Collapsible.Panel>
+    </Collapsible.Root>
   );
 }

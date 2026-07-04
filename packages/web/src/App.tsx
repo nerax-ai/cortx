@@ -3,8 +3,7 @@ import { AgentStore } from '@cortx/store';
 import { useStore } from './hooks/use-store';
 import { EventBridge, type WebRuntimeSessionInfo } from './bridge/event-bridge';
 import { ConnectionOverlay } from './components/ConnectionOverlay';
-import { StatusBar } from './components/StatusBar';
-import { ChatView } from './components/ChatView';
+import { DesktopWorkspace } from './components/DesktopWorkspace';
 import { AskUserDialog } from './components/AskUserDialog';
 
 export function App() {
@@ -62,21 +61,10 @@ export function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-950 text-gray-100">
-      <StatusBar
-        status={state.status}
+    <>
+      <DesktopWorkspace
+        state={state}
         session={session}
-        tokenUsage={state.tokenUsage}
-        elapsed={state.totalElapsed}
-        iteration={state.iteration}
-      />
-      <ChatView
-        messages={state.messages}
-        toolCalls={state.toolCalls}
-        agentSessions={state.agentSessions}
-        status={state.status}
-        iteration={state.iteration}
-        error={state.error}
         onSend={sendPrompt}
         onAbort={handleAbort}
         onResume={handleResume}
@@ -84,6 +72,6 @@ export function App() {
       {state.status === 'awaiting_user' && state.pendingQuestion && (
         <AskUserDialog pendingQuestion={state.pendingQuestion} onSubmit={handleAnswer} />
       )}
-    </div>
+    </>
   );
 }

@@ -4,6 +4,9 @@ import UnoCSS from 'unocss/vite';
 
 export default defineConfig({
   plugins: [react(), UnoCSS()],
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     proxy: {
       '/sessions': 'http://localhost:3000',

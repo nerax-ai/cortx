@@ -4,15 +4,17 @@ interface StreamingTextProps {
 
 export function StreamingText({ text }: StreamingTextProps) {
   return (
-    <div className="bg-gray-900 border border-blue-900/30 rounded-lg px-4 py-2.5">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-xs text-blue-400/60 font-semibold uppercase tracking-wider">Assistant</span>
-        <span className="text-xs text-blue-400/40">streaming...</span>
+    <article className="grid gap-2 justify-items-start">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300/70">
+        <span>Cortx</span>
+        <span className="text-zinc-600">streaming</span>
       </div>
-      <div className="whitespace-pre-wrap text-gray-100 text-sm leading-relaxed">
+      <div className="max-w-[min(820px,100%)] border-l border-emerald-300/20 px-4 py-1 text-sm leading-7 text-zinc-100">
+        <div className="whitespace-pre-wrap break-words">
         {text}
-        <span className="inline-block w-1.5 h-4 bg-blue-400 animate-pulse ml-0.5 align-text-bottom rounded-sm" />
+          <span className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-emerald-300 align-text-bottom" />
+        </div>
       </div>
-    </div>
+    </article>
   );
 }

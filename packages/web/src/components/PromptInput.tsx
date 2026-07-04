@@ -1,4 +1,6 @@
 import { useState, useRef, type KeyboardEvent } from 'react';
+import { surface } from '../design';
+import { ControlButton } from './ControlButton';
 
 interface PromptInputProps {
   onSend: (message: string) => void;
@@ -9,6 +11,12 @@ interface PromptInputProps {
 export function PromptInput({ onSend, disabled, mode = 'prompt' }: PromptInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const label = disabled ? 'Awaiting answer' : mode === 'follow-up' ? 'Follow-up' : 'Prompt';
+  const placeholder = disabled
+    ? 'Answer the pending request in the dialog...'
+    : mode === 'follow-up'
+      ? 'Add context while Cortx is working...'
+      : 'Ask Cortx to inspect, change, or explain this workspace...';
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -26,31 +34,36 @@ export function PromptInput({ onSend, disabled, mode = 'prompt' }: PromptInputPr
   }
 
   return (
-    <div className="border-t border-gray-800/60 p-3 bg-gray-900/80">
-      <div className="flex gap-2 max-w-3xl mx-auto">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => {
-            setValue(e.target.value);
-            e.target.style.height = 'auto';
-            e.target.style.height = e.target.scrollHeight + 'px';
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            disabled ? 'Waiting for your answer...' : mode === 'follow-up' ? 'Send a follow-up...' : 'Send a message...'
-          }
-          disabled={disabled}
-          rows={1}
-          className="flex-1 bg-gray-800/80 text-white rounded-lg px-3 py-2 resize-none outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-40 max-h-40 text-sm placeholder-gray-600"
-        />
-        <button
-          onClick={submit}
-          disabled={disabled || !value.trim()}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 font-medium self-end text-sm transition-colors"
-        >
-          {mode === 'follow-up' ? 'Follow up' : 'Send'}
-        </button>
+    <div className="border-t border-white/8 bg-[#151515] p-3">
+      <div className={`mx-auto max-w-4xl rounded-xl p-2 ${surface.panel}`}>
+        <div className="mb-2 flex items-center justify-between gap-3 px-2 text-[11px] uppercase tracking-[0.18em] text-zinc-600">
+          <span>{label}</span>
+          <span className="hidden sm:inline">Enter to send · Shift Enter for newline</span>
+        </div>
+        <div className="flex gap-2">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = e.target.scrollHeight + 'px';
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            disabled={disabled}
+            rows={1}
+            className={`max-h-44 min-h-11 flex-1 resize-none rounded-lg border border-white/8 bg-black/20 px-3 py-2.5 text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-700 disabled:opacity-40 ${surface.focus}`}
+          />
+          <ControlButton
+            tone="primary"
+            onClick={submit}
+            disabled={disabled || !value.trim()}
+            className="self-end px-4 py-2.5"
+          >
+            {mode === 'follow-up' ? 'Follow up' : 'Send'}
+          </ControlButton>
+        </div>
       </div>
     </div>
   );

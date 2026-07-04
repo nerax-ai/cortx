@@ -1,41 +1,97 @@
 import { useState } from 'react';
+import { Dialog } from '@base-ui-components/react/dialog';
 import type { PendingQuestion } from '@cortx/store';
+import { surface } from '../design';
+import { ControlButton } from './ControlButton';
 
 interface AskUserDialogProps {
   pendingQuestion: PendingQuestion;
   onSubmit: (toolCallId: string, response: string) => void;
 }
 
-export function AskUserDialog({ pendingQuestion, onSubmit }: AskUserDialogProps) {
-  const [response, setResponse] = useState('');
+interface AskUserDialogContentProps extends AskUserDialogProps {
+  response: string;
+  onResponseChange: (response: string) => void;
+  onClear: () => void;
+}
 
+export function ApprovalDialogBody({
+  pendingQuestion,
+  response,
+  onResponseChange,
+  onClear,
+  onSubmit,
+}: AskUserDialogContentProps) {
   function handleSubmit() {
     if (!response.trim()) return;
     onSubmit(pendingQuestion.toolCallId, response);
-    setResponse('');
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-gray-900 rounded-lg p-6 w-96 shadow-xl">
-        <h3 className="text-lg font-medium text-white mb-2">Agent asks:</h3>
-        <p className="text-gray-300 mb-4 whitespace-pre-wrap">{pendingQuestion.question}</p>
-        <textarea
-          value={response}
-          onChange={(e) => setResponse(e.target.value)}
-          placeholder="Type your response..."
-          rows={3}
-          className="w-full bg-gray-800 text-white rounded px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-          autoFocus
-        />
-        <button
-          onClick={handleSubmit}
-          disabled={!response.trim()}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 font-medium"
-        >
-          Submit
-        </button>
+    <>
+      <div className="mt-4 rounded-lg border border-white/8 bg-black/20 p-3 text-sm leading-6 text-zinc-300 whitespace-pre-wrap">
+        {pendingQuestion.question}
       </div>
-    </div>
+
+      <label className="mt-4 block text-xs font-medium uppercase tracking-[0.18em] text-zinc-600">
+        Response
+      </label>
+      <textarea
+        value={response}
+        onChange={(e) => onResponseChange(e.target.value)}
+        placeholder="Type your response..."
+        rows={4}
+        className={`mt-2 w-full resize-none rounded-lg border border-white/8 bg-black/25 px-3 py-2 text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-700 ${surface.focus}`}
+        autoFocus
+      />
+
+      <div className="mt-4 flex justify-end gap-2">
+        <ControlButton onClick={onClear} disabled={!response}>
+          Clear
+        </ControlButton>
+        <ControlButton tone="primary" onClick={handleSubmit} disabled={!response.trim()}>
+          Submit answer
+        </ControlButton>
+      </div>
+    </>
+  );
+}
+
+export function AskUserDialogContent(props: AskUserDialogContentProps) {
+  return (
+    <>
+      <Dialog.Title className="text-lg font-semibold text-zinc-100">Approval required</Dialog.Title>
+      <Dialog.Description className="mt-1 text-sm text-zinc-500">
+        Cortx is waiting for your answer before continuing this tool call.
+      </Dialog.Description>
+      <ApprovalDialogBody {...props} />
+    </>
+  );
+}
+
+export function AskUserDialog({ pendingQuestion, onSubmit }: AskUserDialogProps) {
+  const [response, setResponse] = useState('');
+
+  return (
+    <Dialog.Root open modal disablePointerDismissal onOpenChange={() => undefined}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" />
+        <Dialog.Popup
+          initialFocus
+          className={`fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl shadow-black/40 ${surface.panel}`}
+        >
+          <AskUserDialogContent
+            pendingQuestion={pendingQuestion}
+            response={response}
+            onResponseChange={setResponse}
+            onClear={() => setResponse('')}
+            onSubmit={(toolCallId, answer) => {
+              onSubmit(toolCallId, answer);
+              setResponse('');
+            }}
+          />
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

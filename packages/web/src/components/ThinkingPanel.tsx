@@ -8,18 +8,18 @@ export function ThinkingPanel({ content }: ThinkingPanelProps) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="border border-gray-800/60 rounded-lg overflow-hidden">
+    <div className="overflow-hidden rounded-lg border border-white/8 bg-white/[0.025]">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-gray-900/50 text-gray-400 text-xs hover:bg-gray-900 transition-colors"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-zinc-500 transition-colors hover:bg-white/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/35"
       >
-        <span className={`transition-transform text-gray-600 ${open ? 'rotate-90' : ''}`}>{'▶'}</span>
-        <span className="text-purple-400/70">Thinking</span>
-        <span className="text-gray-700 ml-1">({content.length} chars)</span>
-        <span className="ml-auto text-gray-700">{open ? 'Hide' : 'Show'}</span>
+        <span className={`text-zinc-700 transition-transform ${open ? 'rotate-90' : ''}`}>{'>'}</span>
+        <span className="text-zinc-400">Thinking</span>
+        <span className="ml-1 text-zinc-700">{content.length} chars</span>
+        <span className="ml-auto text-zinc-700">{open ? 'Hide' : 'Show'}</span>
       </button>
       {open && (
-        <div className="px-3 py-2 bg-gray-950/50 text-gray-500 text-xs whitespace-pre-wrap font-mono max-h-64 overflow-y-auto border-t border-gray-800/40">
+        <div className="max-h-64 overflow-y-auto border-t border-white/8 bg-black/20 px-3 py-2 font-mono text-xs leading-5 text-zinc-500 whitespace-pre-wrap">
           {content}
         </div>
       )}

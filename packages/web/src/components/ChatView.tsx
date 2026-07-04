@@ -5,8 +5,8 @@ import { PromptInput } from './PromptInput';
 import { StreamingText } from './StreamingText';
 import { ThinkingPanel } from './ThinkingPanel';
 import { MessageBubble } from './MessageBubble';
-import { ToolRegion } from './ToolRegion';
 import type { AgentStatus } from '@cortx/store';
+import { summarizeInspector, surface } from '../design';
 
 interface ChatViewProps {
   messages: AgentState['messages'];
@@ -22,12 +22,48 @@ interface ChatViewProps {
 
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <div className="bg-red-950/30 border border-red-900/40 rounded-lg px-4 py-2.5 text-sm">
-      <div className="flex items-center gap-2">
-        <span className="text-red-400">✗</span>
-        <span className="text-red-300 font-medium text-xs uppercase tracking-wider">Error</span>
+    <div className="rounded-lg border border-rose-400/20 bg-rose-950/20 px-4 py-3 text-sm">
+      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-rose-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+        Error
       </div>
-      <div className="text-red-400/80 mt-1 text-xs font-mono whitespace-pre-wrap">{message}</div>
+      <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-rose-100/80">{message}</div>
+    </div>
+  );
+}
+
+function EmptyConversation() {
+  return (
+    <div className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-4 py-16">
+      <div className="mb-4 inline-flex w-fit rounded-full border border-white/8 bg-white/5 px-3 py-1 text-xs text-zinc-400">
+        Ready for a workspace task
+      </div>
+      <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">What should Cortx work on?</h1>
+      <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-500">
+        Start with a concrete request. The runtime will stream assistant output here while tools, approvals and sub-agents stay visible in the inspector.
+      </p>
+    </div>
+  );
+}
+
+function MobileActivityStrip({
+  toolCalls,
+  agentSessions,
+}: {
+  toolCalls: Map<string, ToolCallEntry>;
+  agentSessions: Map<string, AgentSessionSummary>;
+}) {
+  const summary = summarizeInspector(toolCalls, agentSessions);
+  if (summary.totalTools === 0 && summary.totalAgents === 0) return null;
+
+  return (
+    <div className={`mx-auto max-w-3xl rounded-lg px-3 py-2 text-xs xl:hidden ${surface.panel}`}>
+      <div className="flex flex-wrap items-center gap-3 text-zinc-500">
+        <span className="text-zinc-300">Activity</span>
+        <span>{summary.pendingTools} pending tools</span>
+        <span>{summary.completedTools} complete</span>
+        <span>{summary.runningAgents} running agents</span>
+      </div>
     </div>
   );
 }
@@ -51,37 +87,47 @@ export function ChatView({
     }
   }, [messages.currentText, messages.turns.length, toolCalls.size, error]);
 
+  const hasConversation =
+    messages.turns.length > 0 || Boolean(messages.currentText) || Boolean(messages.currentThinking) || Boolean(error);
+
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {messages.turns.map((turn: TurnEntry, i: number) => (
-          <MessageBubble key={i} role={turn.role} content={turn.content} duration={turn.duration} />
-        ))}
-        {messages.currentThinking && <ThinkingPanel content={messages.currentThinking} />}
-        {messages.currentText && <StreamingText text={messages.currentText} />}
-        {toolCalls.size > 0 && <ToolRegion toolCalls={toolCalls} agentSessions={agentSessions} />}
-        {error && <ErrorBanner message={error} />}
+    <section className="flex min-h-0 flex-1 flex-col bg-[#111111]">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+        {hasConversation ? (
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6 lg:px-8">
+            {messages.turns.map((turn: TurnEntry, i: number) => (
+              <MessageBubble key={`${turn.timestamp}-${i}`} role={turn.role} content={turn.content} duration={turn.duration} />
+            ))}
+            {messages.currentThinking && <ThinkingPanel content={messages.currentThinking} />}
+            {messages.currentText && <StreamingText text={messages.currentText} />}
+            <MobileActivityStrip toolCalls={toolCalls} agentSessions={agentSessions} />
+            {error && <ErrorBanner message={error} />}
+          </div>
+        ) : (
+          <EmptyConversation />
+        )}
       </div>
+
       {status === 'running' && (
-        <div className="px-4 py-1.5 bg-gray-900/50 border-t border-gray-800/40 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs text-gray-500">Agent is working...</span>
-          {iteration > 0 && <span className="text-xs text-gray-700 font-mono ml-auto">iter {iteration}</span>}
+        <div className="flex items-center gap-3 border-t border-white/8 bg-[#151515] px-4 py-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-xs text-zinc-500">Cortx is working</span>
+          {iteration > 0 && <span className="ml-auto font-mono text-xs text-zinc-600">turn {iteration}</span>}
           <button
             type="button"
             onClick={onAbort}
-            className="text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-100 hover:border-gray-500"
+            className={`rounded-md border border-white/10 px-2.5 py-1 text-xs text-zinc-400 hover:border-rose-300/30 hover:text-rose-100 ${surface.focus}`}
           >
             Stop
           </button>
         </div>
       )}
       {status === 'error' && (
-        <div className="px-4 py-1.5 bg-gray-900/50 border-t border-gray-800/40 flex justify-end">
+        <div className="flex justify-end border-t border-white/8 bg-[#151515] px-4 py-2">
           <button
             type="button"
             onClick={onResume}
-            className="text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-100 hover:border-gray-500"
+            className={`rounded-md border border-white/10 px-2.5 py-1 text-xs text-zinc-300 hover:border-cyan-300/30 hover:text-cyan-100 ${surface.focus}`}
           >
             Resume
           </button>
@@ -92,6 +138,6 @@ export function ChatView({
         disabled={status === 'awaiting_user'}
         mode={status === 'running' ? 'follow-up' : 'prompt'}
       />
-    </div>
+    </section>
   );
 }
