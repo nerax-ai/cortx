@@ -22,6 +22,7 @@ export interface AppShellProps {
   registryReady?: boolean;
   model: string;
   cwd: string;
+  runtimeMode?: 'local' | 'remote';
   skills: SkillItem[];
   agentSessionsStore: SubAgentSessionStore;
   onSubmit: (value: string) => void;
@@ -40,6 +41,7 @@ export function AppShell({
   registryReady = true,
   model,
   cwd,
+  runtimeMode = 'local',
   skills,
   agentSessionsStore,
   onSubmit,
@@ -68,19 +70,16 @@ export function AppShell({
   const [toolExpanded, setToolExpanded] = useState(false);
   const anyOverlayActive = paletteOpen || sessionPickerOpen;
 
-  const paletteItems = useMemo(
-    () => buildItems(registry.getCommands(), skills),
-    [registry, registryReady, skills],
-  );
+  const paletteItems = useMemo(() => buildItems(registry.getCommands(), skills), [registry, registryReady, skills]);
 
-  const filteredPaletteItems = useMemo(
-    () => filterItems(paletteItems, paletteFilter),
-    [paletteItems, paletteFilter],
-  );
+  const filteredPaletteItems = useMemo(() => filterItems(paletteItems, paletteFilter), [paletteItems, paletteFilter]);
 
-  const handlePaletteNavigate = useCallback((dir: 'up' | 'down') => {
-    setPaletteSelectedIndex((prev) => moveSelection(prev, dir, filteredPaletteItems.length));
-  }, [filteredPaletteItems]);
+  const handlePaletteNavigate = useCallback(
+    (dir: 'up' | 'down') => {
+      setPaletteSelectedIndex((prev) => moveSelection(prev, dir, filteredPaletteItems.length));
+    },
+    [filteredPaletteItems],
+  );
 
   const handlePaletteSelect = useCallback((): boolean => {
     if (filteredPaletteItems.length === 0) {
@@ -129,13 +128,7 @@ export function AppShell({
 
   // Session picker overlay
   if (sessionPickerOpen && onSessionSelect && onSessionPickerClose) {
-    return (
-      <SessionPicker
-        sessions={sessionList}
-        onSelect={onSessionSelect}
-        onClose={onSessionPickerClose}
-      />
-    );
+    return <SessionPicker sessions={sessionList} onSelect={onSessionSelect} onClose={onSessionPickerClose} />;
   }
 
   // Agent viewer mode
@@ -153,7 +146,11 @@ export function AppShell({
           isRunning={status === 'running'}
           onAbort={onAbort}
           onForceExit={onForceExit}
-          onOpenPalette={() => { setPaletteOpen(true); setPaletteSelectedIndex(0); setPaletteFilter(''); }}
+          onOpenPalette={() => {
+            setPaletteOpen(true);
+            setPaletteSelectedIndex(0);
+            setPaletteFilter('');
+          }}
           onPaletteNavigate={handlePaletteNavigate}
           onPaletteSelect={handlePaletteSelect}
           onPaletteClose={handlePaletteClose}
@@ -163,6 +160,7 @@ export function AppShell({
           store={store}
           model={model}
           cwd={cwd}
+          runtimeMode={runtimeMode}
           registryReady={registryReady}
           injectedValue={injectedValue}
         />
@@ -181,7 +179,11 @@ export function AppShell({
         isRunning={status === 'running'}
         onAbort={onAbort}
         onForceExit={onForceExit}
-        onOpenPalette={() => { setPaletteOpen(true); setPaletteSelectedIndex(0); setPaletteFilter(''); }}
+        onOpenPalette={() => {
+          setPaletteOpen(true);
+          setPaletteSelectedIndex(0);
+          setPaletteFilter('');
+        }}
         onPaletteNavigate={handlePaletteNavigate}
         onPaletteSelect={handlePaletteSelect}
         onPaletteClose={handlePaletteClose}
@@ -191,16 +193,13 @@ export function AppShell({
         store={store}
         model={model}
         cwd={cwd}
+        runtimeMode={runtimeMode}
         registryReady={registryReady}
         injectedValue={injectedValue}
       />
 
       {paletteOpen && (
-        <CommandPalette
-          items={paletteItems}
-          filter={paletteFilter}
-          selectedIndex={paletteSelectedIndex}
-        />
+        <CommandPalette items={paletteItems} filter={paletteFilter} selectedIndex={paletteSelectedIndex} />
       )}
     </Box>
   );

@@ -3,9 +3,10 @@ import { useState, useRef, type KeyboardEvent } from 'react';
 interface PromptInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
+  mode?: 'prompt' | 'follow-up';
 }
 
-export function PromptInput({ onSend, disabled }: PromptInputProps) {
+export function PromptInput({ onSend, disabled, mode = 'prompt' }: PromptInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -36,7 +37,9 @@ export function PromptInput({ onSend, disabled }: PromptInputProps) {
             e.target.style.height = e.target.scrollHeight + 'px';
           }}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'Agent is working...' : 'Send a message...'}
+          placeholder={
+            disabled ? 'Waiting for your answer...' : mode === 'follow-up' ? 'Send a follow-up...' : 'Send a message...'
+          }
           disabled={disabled}
           rows={1}
           className="flex-1 bg-gray-800/80 text-white rounded-lg px-3 py-2 resize-none outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-40 max-h-40 text-sm placeholder-gray-600"
@@ -46,7 +49,7 @@ export function PromptInput({ onSend, disabled }: PromptInputProps) {
           disabled={disabled || !value.trim()}
           className="bg-blue-600 hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 font-medium self-end text-sm transition-colors"
         >
-          Send
+          {mode === 'follow-up' ? 'Follow up' : 'Send'}
         </button>
       </div>
     </div>

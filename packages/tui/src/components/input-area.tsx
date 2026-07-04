@@ -34,6 +34,7 @@ export interface InputAreaProps {
   store: TuiStore;
   model: string;
   cwd: string;
+  runtimeMode?: 'local' | 'remote';
   registryReady?: boolean;
   /** When set, replaces the input field value (used after skill selection from palette). */
   injectedValue?: string;
@@ -109,10 +110,7 @@ export function handleBackspace(value: string): string {
 
 export type CtrlCAction = 'clear' | 'exit' | 'abort' | 'force-exit' | 'noop';
 
-export function resolveCtrlCAction(
-  status: 'idle' | 'running' | 'interrupting',
-  inputValue: string,
-): CtrlCAction {
+export function resolveCtrlCAction(status: 'idle' | 'running' | 'interrupting', inputValue: string): CtrlCAction {
   switch (status) {
     case 'idle':
       return inputValue.length > 0 ? 'clear' : 'exit';
@@ -176,10 +174,7 @@ export function openInEditor(initialContent: string): string | null {
 type ActivityState = 'idle' | 'thinking' | 'executing' | 'interrupting' | 'error';
 type InputMode = 'chat' | 'steer';
 
-function deriveActivity(
-  status: string,
-  toolCalls: Map<string, { status: string; toolName: string }>,
-): ActivityState {
+function deriveActivity(status: string, toolCalls: Map<string, { status: string; toolName: string }>): ActivityState {
   if (status === 'interrupting') return 'interrupting';
   if (status === 'error') return 'error';
   if (status === 'running') {
@@ -245,6 +240,7 @@ export function InputArea({
   store,
   model,
   cwd,
+  runtimeMode = 'local',
   registryReady = true,
   injectedValue,
 }: InputAreaProps) {
@@ -260,9 +256,7 @@ export function InputArea({
       setValue(injectedValue);
     }
   }, [injectedValue]);
-  const [status, setStatus] = useState<'idle' | 'running' | 'interrupting'>(
-    isRunning ? 'running' : 'idle',
-  );
+  const [status, setStatus] = useState<'idle' | 'running' | 'interrupting'>(isRunning ? 'running' : 'idle');
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef<number>(-1);
 
@@ -483,16 +477,19 @@ export function InputArea({
   const effectiveStatus = status === 'interrupting' ? 'interrupting' : storeStatus;
   const activity = deriveActivity(effectiveStatus, toolCalls);
 
-  const prompt = inputMode === 'steer' ? 'steer' : storeStatus === 'awaiting_user' ? 'answer' : isRunning ? 'follow-up' : 'cortx';
+  const prompt =
+    inputMode === 'steer' ? 'steer' : storeStatus === 'awaiting_user' ? 'answer' : isRunning ? 'follow-up' : 'cortx';
   const { lines, hiddenCount } = visibleInputLines(value, 4);
   const statusSummary = statusBadge(effectiveStatus, registryReady);
-  const activitySummary = effectiveStatus === 'running'
-    ? {
-      label: activityLabel(activity, { toolCalls }),
-      color: activityColor(activity, statusSummary.color),
-    }
-    : statusSummary;
+  const activitySummary =
+    effectiveStatus === 'running'
+      ? {
+          label: activityLabel(activity, { toolCalls }),
+          color: activityColor(activity, statusSummary.color),
+        }
+      : statusSummary;
   const contextSegments = headerSegments({
+    mode: runtimeMode,
     model,
     cwd,
     sessionId,
@@ -505,16 +502,25 @@ export function InputArea({
     <Box flexDirection="column" marginTop={1}>
       <Box
         borderStyle="round"
-        borderColor={inputMode === 'steer' ? colors.activityThinking : composerBorderColor(effectiveStatus, paletteOpen)}
+        borderColor={
+          inputMode === 'steer' ? colors.activityThinking : composerBorderColor(effectiveStatus, paletteOpen)
+        }
         paddingX={1}
         flexDirection="column"
       >
         <Box>
-          <Text bold color="cyan">Cortx</Text>
+          <Text bold color="cyan">
+            Cortx
+          </Text>
           <Text dimColor>{' · '}</Text>
-          <Text color={activitySummary.color} bold>{activitySummary.label}</Text>
+          <Text color={activitySummary.color} bold>
+            {activitySummary.label}
+          </Text>
           {contextSegments.length > 0 && (
-            <Text dimColor>{' · '}{contextSegments.join(' · ')}</Text>
+            <Text dimColor>
+              {' · '}
+              {contextSegments.join(' · ')}
+            </Text>
           )}
         </Box>
         {hiddenCount > 0 && (
@@ -526,20 +532,22 @@ export function InputArea({
           <Box key={i}>
             {i === 0 && hiddenCount === 0 && (
               <>
-                <Text color={colors.prompt} bold>{prompt}</Text>
+                <Text color={colors.prompt} bold>
+                  {prompt}
+                </Text>
                 <Text dimColor>{' › '}</Text>
               </>
             )}
-            {(i > 0 || hiddenCount > 0) && (
-              <Text dimColor>{' '.repeat(prompt.length + 3)}</Text>
-            )}
+            {(i > 0 || hiddenCount > 0) && <Text dimColor>{' '.repeat(prompt.length + 3)}</Text>}
             <Text>{line}</Text>
             {i === lines.length - 1 && <Text dimColor>_</Text>}
           </Box>
         ))}
         {lines.length === 0 && (
           <Box>
-            <Text color={colors.prompt} bold>{prompt}</Text>
+            <Text color={colors.prompt} bold>
+              {prompt}
+            </Text>
             <Text dimColor>{' › '}</Text>
             <Text dimColor>_</Text>
           </Box>

@@ -7,7 +7,13 @@ interface TokenEntry {
 }
 
 const TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const tokens = new Map<string, TokenEntry>();
+interface TokenStore {
+  tokens: Map<string, TokenEntry>;
+}
+
+function createTokenStore(): TokenStore {
+  return { tokens: new Map() };
+}
 
 function generateToken(): string {
   const bytes = new Uint8Array(32);
@@ -15,10 +21,10 @@ function generateToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function cleanupExpiredTokens(): void {
+function cleanupExpiredTokens(store: TokenStore): void {
   const now = Date.now();
-  for (const [token, entry] of tokens) {
-    if (entry.expiresAt <= now) tokens.delete(token);
+  for (const [token, entry] of store.tokens) {
+    if (entry.expiresAt <= now) store.tokens.delete(token);
   }
 }
 
@@ -36,7 +42,7 @@ export function extractApiKey(c: Context): string | null {
 /**
  * Auth middleware: validates API key or short-lived token.
  */
-export function createAuthMiddleware(apiKey: string) {
+export function createAuthMiddleware(apiKey: string, store: TokenStore = createTokenStore()) {
   return createMiddleware(async (c: Context, next: Next) => {
     // Health endpoint is always accessible
     if (c.req.path === '/health') return next();
@@ -48,8 +54,8 @@ export function createAuthMiddleware(apiKey: string) {
 
     // Check if it's a short-lived token
     if (providedKey) {
-      cleanupExpiredTokens();
-      const entry = tokens.get(providedKey);
+      cleanupExpiredTokens(store);
+      const entry = store.tokens.get(providedKey);
       if (entry && entry.expiresAt > Date.now()) return next();
     }
 
@@ -60,18 +66,26 @@ export function createAuthMiddleware(apiKey: string) {
 /**
  * POST /auth/token — exchange API key for short-lived token.
  */
-export function handleTokenExchange(apiKey: string) {
+export function handleTokenExchange(apiKey: string, store: TokenStore = createTokenStore()) {
   return (c: Context) => {
     const providedKey = extractApiKey(c);
     if (providedKey !== apiKey) {
       return c.json({ error: 'Unauthorized' }, 401 as import('hono/utils/http-status').ContentfulStatusCode);
     }
 
-    cleanupExpiredTokens();
+    cleanupExpiredTokens(store);
     const token = generateToken();
     const expiresAt = Date.now() + TOKEN_TTL_MS;
-    tokens.set(token, { token, expiresAt });
+    store.tokens.set(token, { token, expiresAt });
 
     return c.json({ token, expiresAt });
+  };
+}
+
+export function createAuthHandlers(apiKey: string) {
+  const store = createTokenStore();
+  return {
+    middleware: createAuthMiddleware(apiKey, store),
+    tokenExchange: handleTokenExchange(apiKey, store),
   };
 }

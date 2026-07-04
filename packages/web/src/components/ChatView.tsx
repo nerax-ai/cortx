@@ -16,6 +16,8 @@ interface ChatViewProps {
   iteration: number;
   error: string | undefined;
   onSend: (message: string) => void;
+  onAbort: () => void;
+  onResume: () => void;
 }
 
 function ErrorBanner({ message }: { message: string }) {
@@ -30,7 +32,17 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-export function ChatView({ messages, toolCalls, agentSessions, status, iteration, error, onSend }: ChatViewProps) {
+export function ChatView({
+  messages,
+  toolCalls,
+  agentSessions,
+  status,
+  iteration,
+  error,
+  onSend,
+  onAbort,
+  onResume,
+}: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,31 +57,40 @@ export function ChatView({ messages, toolCalls, agentSessions, status, iteration
         {messages.turns.map((turn: TurnEntry, i: number) => (
           <MessageBubble key={i} role={turn.role} content={turn.content} duration={turn.duration} />
         ))}
-        {messages.currentThinking && (
-          <ThinkingPanel content={messages.currentThinking} />
-        )}
-        {messages.currentText && (
-          <StreamingText text={messages.currentText} />
-        )}
-        {toolCalls.size > 0 && (
-          <ToolRegion toolCalls={toolCalls} agentSessions={agentSessions} />
-        )}
-        {error && (
-          <ErrorBanner message={error} />
-        )}
+        {messages.currentThinking && <ThinkingPanel content={messages.currentThinking} />}
+        {messages.currentText && <StreamingText text={messages.currentText} />}
+        {toolCalls.size > 0 && <ToolRegion toolCalls={toolCalls} agentSessions={agentSessions} />}
+        {error && <ErrorBanner message={error} />}
       </div>
       {status === 'running' && (
         <div className="px-4 py-1.5 bg-gray-900/50 border-t border-gray-800/40 flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
           <span className="text-xs text-gray-500">Agent is working...</span>
-          {iteration > 0 && (
-            <span className="text-xs text-gray-700 font-mono ml-auto">iter {iteration}</span>
-          )}
+          {iteration > 0 && <span className="text-xs text-gray-700 font-mono ml-auto">iter {iteration}</span>}
+          <button
+            type="button"
+            onClick={onAbort}
+            className="text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-100 hover:border-gray-500"
+          >
+            Stop
+          </button>
+        </div>
+      )}
+      {status === 'error' && (
+        <div className="px-4 py-1.5 bg-gray-900/50 border-t border-gray-800/40 flex justify-end">
+          <button
+            type="button"
+            onClick={onResume}
+            className="text-xs px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-100 hover:border-gray-500"
+          >
+            Resume
+          </button>
         </div>
       )}
       <PromptInput
         onSend={onSend}
-        disabled={status === 'running'}
+        disabled={status === 'awaiting_user'}
+        mode={status === 'running' ? 'follow-up' : 'prompt'}
       />
     </div>
   );

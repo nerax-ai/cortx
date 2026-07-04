@@ -1,14 +1,22 @@
 import type { AgentStatus, TokenUsage } from '@cortx/store';
+import type { WebRuntimeSessionInfo } from '../bridge/event-bridge';
 
 interface StatusBarProps {
   status: AgentStatus;
-  sessionId: string | null;
+  session: WebRuntimeSessionInfo | null;
   tokenUsage: TokenUsage;
   elapsed: number;
   iteration: number;
 }
 
-export function StatusBar({ status, sessionId, tokenUsage, elapsed, iteration }: StatusBarProps) {
+function compactPath(path: string): string {
+  const parts = path.replace(/\/+$/, '').split('/').filter(Boolean);
+  if (parts.length === 0) return '/';
+  if (parts.length === 1) return parts[0];
+  return `${parts.at(-2)}/${parts.at(-1)}`;
+}
+
+export function StatusBar({ status, session, tokenUsage, elapsed, iteration }: StatusBarProps) {
   const statusConfig: Record<AgentStatus, { color: string; label: string; pulse: boolean }> = {
     idle: { color: 'bg-gray-500', label: 'Ready', pulse: false },
     running: { color: 'bg-green-500', label: 'Running', pulse: true },
@@ -24,13 +32,11 @@ export function StatusBar({ status, sessionId, tokenUsage, elapsed, iteration }:
         <span className={`w-2 h-2 rounded-full ${cfg.color} ${cfg.pulse ? 'animate-pulse' : ''}`} />
         <span className="text-gray-300 font-medium">{cfg.label}</span>
       </div>
-      {iteration > 0 && (
-        <span className="text-gray-500 text-xs">
-          Iteration {iteration}
+      {iteration > 0 && <span className="text-gray-500 text-xs">Iteration {iteration}</span>}
+      {session && (
+        <span className="text-gray-600 font-mono text-xs truncate max-w-72">
+          {session.model} · {compactPath(session.workingDirectory)} · {session.id.slice(0, 20)}
         </span>
-      )}
-      {sessionId && (
-        <span className="text-gray-600 font-mono text-xs truncate max-w-32">{sessionId.slice(0, 20)}</span>
       )}
       <div className="ml-auto flex gap-3 text-gray-500 text-xs font-mono">
         <span title="Input tokens">

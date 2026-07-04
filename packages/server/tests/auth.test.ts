@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { handleTokenExchange, extractApiKey } from '../src/auth';
+import { Hono } from 'hono';
+import { handleTokenExchange, extractApiKey, createAuthHandlers } from '../src/auth';
 import type { Context } from 'hono';
 
 function mockContext(headers: Record<string, string> = {}, query: Record<string, string> = {}): Context {
@@ -45,5 +46,30 @@ describe('auth', () => {
     const result = handler(ctx) as { body: { error: string }; status: number };
     expect(result.status).toBe(401);
     expect(result.body.error).toBe('Unauthorized');
+  });
+
+  test('short-lived tokens are scoped to one auth handler instance', async () => {
+    const first = createAuthHandlers('first-key');
+    const second = createAuthHandlers('second-key');
+    const firstApp = new Hono();
+    const secondApp = new Hono();
+
+    firstApp.use('*', first.middleware);
+    firstApp.post('/auth/token', first.tokenExchange);
+    firstApp.get('/sessions', (c) => c.json({ ok: true }));
+    secondApp.use('*', second.middleware);
+    secondApp.get('/sessions', (c) => c.json({ ok: true }));
+
+    const tokenRes = await firstApp.request('/auth/token', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer first-key' },
+    });
+    const { token } = (await tokenRes.json()) as { token: string };
+
+    const sameServer = await firstApp.request(`/sessions?token=${token}`);
+    const otherServer = await secondApp.request(`/sessions?token=${token}`);
+
+    expect(sameServer.status).toBe(200);
+    expect(otherServer.status).toBe(401);
   });
 });

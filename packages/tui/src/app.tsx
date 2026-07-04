@@ -1,6 +1,5 @@
 import { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 import { useApp } from 'ink';
-import type { CortxSession } from '@cortx/core';
 import { AppShell } from './components/app-shell.js';
 import { TuiStore } from './store.js';
 import { TuiRegistry } from './tui-registry.js';
@@ -12,11 +11,10 @@ import type { TurnEntry } from './types/tui-state.js';
 import { processEvent } from './renderer.js';
 import { parseAgentMessages, turnsToMessages } from './message-io.js';
 import type { Logger } from '@nerax-ai/logger';
+import type { TuiSessionAdapter } from './runtime-session.js';
 
 export interface AppProps {
-  session: CortxSession;
-  model: string;
-  cwd: string;
+  session: TuiSessionAdapter;
   logger?: Logger;
 }
 
@@ -26,7 +24,7 @@ interface SubmitInputDeps {
   registryStatus: RegistryStatus;
   registryError: string | null;
   registry: Pick<TuiRegistry, 'executeCommand'>;
-  session: Pick<CortxSession, 'controller' | 'prompt'>;
+  session: Pick<TuiSessionAdapter, 'abort' | 'prompt'>;
   store: Pick<TuiStore, 'addUserMessage' | 'dispatch'>;
 }
 
@@ -55,39 +53,67 @@ export async function submitInput(value: string, deps: SubmitInputDeps): Promise
     const cmdArgs = parts.slice(1).join(' ');
     const found = await deps.registry.executeCommand(cmdName, cmdArgs, {
       args: cmdArgs,
-      abort: () => deps.session.controller?.abort('user interrupt'),
+      abort: () => {
+        void deps.session.abort('user interrupt');
+      },
     });
     if (found) return;
   }
 
   deps.store.addUserMessage(value);
-  Promise.resolve(deps.session.prompt(value)).catch(() => {});
+  Promise.resolve(deps.session.prompt(value)).catch((error) => {
+    deps.store.dispatch({ type: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+  });
 }
 
-export default function App({ session, model, cwd, logger }: AppProps) {
+export default function App({ session, logger }: AppProps) {
   const { exit } = useApp();
 
   const store = useMemo(() => new TuiStore(), []);
   const sessionStore = useMemo(() => createDefaultSessionStore(), []);
+  const sessionInfo = session.getInfo();
+  const model = sessionInfo.model;
+  const cwd = sessionInfo.workingDirectory;
 
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const sessionListRef = useRef<SessionSummary[]>([]);
 
+  useEffect(() => {
+    store.reset(session.getInfo().id);
+  }, [session, store]);
+
   // --- Discover skills for palette display ---
   const [skills, setSkills] = useState<SkillItem[]>([]);
   useEffect(() => {
+    if (session.mode === 'remote') {
+      setSkills([]);
+      return;
+    }
+
     let cancelled = false;
-    discoverSkillItems(cwd).then((items) => {
-      if (!cancelled) setSkills(items);
-    });
-    return () => { cancelled = true; };
-  }, [cwd]);
+    discoverSkillItems(cwd)
+      .then((items) => {
+        if (!cancelled) setSkills(items);
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd, session.mode]);
 
   // --- Session restore handler ---
   const handleRestoreSession = useCallback(
     async (summary: SessionSummary) => {
       setSessionPickerOpen(false);
       try {
+        if (!session.supportsMessageRestore) {
+          store.showNotice(
+            'Remote sessions keep history on the server. Local transcript restore is unavailable in remote mode.',
+          );
+          return;
+        }
         const meta = await sessionStore.read(summary.sessionId);
         if (meta && meta.messages) {
           store.reset(meta.sessionId);
@@ -95,7 +121,7 @@ export default function App({ session, model, cwd, logger }: AppProps) {
           const agentMessages = meta.agentMessages
             ? parseAgentMessages(meta.agentMessages)
             : turnsToMessages(meta.messages as TurnEntry[]);
-          session.cortx.replaceMessages(agentMessages);
+          session.replaceAgentMessages(agentMessages);
           if (meta.status === 'crashed') {
             store.showNotice(`Restored crashed session ${meta.sessionId}. Attempting checkpoint resume...`);
             session.resume().catch((error) => {
@@ -138,8 +164,10 @@ export default function App({ session, model, cwd, logger }: AppProps) {
       const command = commandPlugin({
         exit: () => exit(),
         clear: () => store.reset(),
-        steer: (message) => session.controller?.steer(message),
-        getConfig: () => ({} as Record<string, unknown>),
+        steer: (message) => {
+          void session.steer(message);
+        },
+        getConfig: () => ({}) as Record<string, unknown>,
         getCommands: () => registry.getCommands(),
       });
 
@@ -179,7 +207,7 @@ export default function App({ session, model, cwd, logger }: AppProps) {
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
       getMessageSnapshot: () => store.getState().messages,
-      getAgentMessages: () => session.cortx.messages,
+      getAgentMessages: () => session.getAgentMessages(),
       getModel: () => model,
       sessionStore,
       startTime: new Date().toISOString(),
@@ -194,26 +222,47 @@ export default function App({ session, model, cwd, logger }: AppProps) {
     };
   }, [session, store, model, sessionStore, registry]);
 
-  useEffect(() => () => {
-    store.dispose();
-  }, [store]);
+  useEffect(
+    () => () => {
+      store.dispose();
+    },
+    [store],
+  );
 
-  const handleSubmit = useCallback((value: string) => {
-    const pending = store.getState().pendingQuestion;
-    if (pending) {
-      session.controller?.answerUser(pending.toolCallId, value);
-      store.dispatch({ type: 'user_answer', toolCallId: pending.toolCallId, response: value });
-      return;
-    }
-    submitInput(value, { registryStatus, registryError, registry, session, store }).catch(() => {});
-  }, [registryStatus, registryError, registry, session, store]);
+  useEffect(
+    () => () => {
+      session.dispose();
+    },
+    [session],
+  );
 
-  const handleSteer = useCallback((value: string) => {
-    session.controller?.steer(value);
-  }, [session]);
+  const handleSubmit = useCallback(
+    (value: string) => {
+      const pending = store.getState().pendingQuestion;
+      if (pending) {
+        Promise.resolve(session.answerUser(pending.toolCallId, value)).catch((error) => {
+          store.dispatch({ type: 'error', error: new Error(`Failed to answer question: ${errorMessage(error)}`) });
+        });
+        return;
+      }
+      submitInput(value, { registryStatus, registryError, registry, session, store }).catch(() => {});
+    },
+    [registryStatus, registryError, registry, session, store],
+  );
+
+  const handleSteer = useCallback(
+    (value: string) => {
+      Promise.resolve(session.steer(value)).catch((error) => {
+        store.dispatch({ type: 'error', error: new Error(`Failed to steer session: ${errorMessage(error)}`) });
+      });
+    },
+    [session],
+  );
 
   const handleAbort = useCallback(() => {
-    session.controller?.abort('user interrupt');
+    Promise.resolve(session.abort('user interrupt')).catch((error) => {
+      store.dispatch({ type: 'error', error: new Error(`Failed to abort session: ${errorMessage(error)}`) });
+    });
     store.setInterrupting();
   }, [session, store]);
 
@@ -228,8 +277,9 @@ export default function App({ session, model, cwd, logger }: AppProps) {
       registryReady={registryReady}
       model={model}
       cwd={cwd}
+      runtimeMode={session.mode}
       skills={skills}
-      agentSessionsStore={session.cortx.agentSessions}
+      agentSessionsStore={session.agentSessions}
       onSubmit={handleSubmit}
       onSteer={handleSteer}
       onAbort={handleAbort}

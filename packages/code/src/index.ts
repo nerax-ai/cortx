@@ -25,7 +25,25 @@ export function createReadOnlyTools(cwd: string): Tool[] {
 
 export function createAllTools(cwd: string): Tool[] {
   return [
-    createReadTool(cwd), createBashTool(cwd), createEditTool(cwd),
-    createWriteTool(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd),
+    createReadTool(cwd),
+    createBashTool(cwd),
+    createEditTool(cwd),
+    createWriteTool(cwd),
+    createGrepTool(cwd),
+    createFindTool(cwd),
+    createLsTool(cwd),
   ];
+}
+
+export type WorkspaceToolPackMode = 'read-only' | 'coding' | 'all';
+
+export interface WorkspaceToolPackOptions {
+  mode?: WorkspaceToolPackMode;
+}
+
+export function createWorkspaceToolPack(cwd: string, options: WorkspaceToolPackOptions = {}): Tool[] {
+  const mode = options.mode ?? 'all';
+  if (mode === 'read-only') return createReadOnlyTools(cwd);
+  if (mode === 'coding') return createCodingTools(cwd);
+  return createAllTools(cwd);
 }

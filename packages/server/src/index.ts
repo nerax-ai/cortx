@@ -1,3 +1,3 @@
-export { createServer } from './server.js';
-export { SessionManager } from './session-manager.js';
+export { createServer, createServerRuntime } from './server.js';
+export type { ServerRuntimeHandle } from './server.js';
 export type { ServerConfig, SessionInfo } from './types.js';

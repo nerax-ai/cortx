@@ -1,11 +1,18 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
+import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { noopLogger, type AgentEvent } from '@cortx/sdk';
+import { CortxRuntime, isRuntimeError, RuntimeError, type RuntimeSessionCreateRequest } from '@cortx/runtime';
 import type { ServerConfig } from './types.js';
-import { createAuthMiddleware, handleTokenExchange } from './auth.js';
-import { SessionManager } from './session-manager.js';
+import { createAuthHandlers } from './auth.js';
+
+export interface ServerRuntimeHandle {
+  app: Hono;
+  runtime: CortxRuntime;
+  dispose(): void;
+}
 
 function serializeEvent(event: AgentEvent): string {
   if (event.type === 'error' && event.error instanceof Error) {
@@ -14,23 +21,63 @@ function serializeEvent(event: AgentEvent): string {
   return JSON.stringify(event);
 }
 
-export function createServer(config: ServerConfig): Hono {
+function errorResponse(error: unknown): {
+  body: { error: string; kind?: string; details?: Record<string, unknown> };
+  status: ContentfulStatusCode;
+} {
+  if (isRuntimeError(error)) {
+    return {
+      body: { error: error.message, kind: error.kind, details: error.details },
+      status: error.status as ContentfulStatusCode,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { body: { error: message }, status: 500 as ContentfulStatusCode };
+}
+
+async function readOptionalJson(c: Context): Promise<Record<string, unknown>> {
+  const text = await c.req.text();
+  if (!text.trim()) return {};
+  try {
+    const value = JSON.parse(text);
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
+    throw new RuntimeError('invalid_request', 'JSON body must be an object');
+  } catch (error) {
+    if (isRuntimeError(error)) throw error;
+    throw new RuntimeError('invalid_request', 'Invalid JSON body');
+  }
+}
+
+function readMessage(body: Record<string, unknown>): string {
+  if (body.message === undefined) return '';
+  if (typeof body.message !== 'string') throw new RuntimeError('invalid_request', 'message must be a string');
+  return body.message;
+}
+
+export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
   const app = new Hono();
   const logger = config.logger ?? noopLogger;
 
   if (config.host === '0.0.0.0') {
     logger.warn('[server] Binding to 0.0.0.0 — server accessible from network. Ensure TLS is configured.');
   }
+  const auth = createAuthHandlers(config.apiKey);
 
-  const manager = new SessionManager({
+  const runtime = new CortxRuntime({
+    appName: 'cortx',
     maxSessions: config.maxSessions,
     maxEventsPerSession: config.maxEventsPerSession,
     idleTimeoutMs: config.idleTimeoutMs,
     language: config.language,
     model: config.model,
     system: config.system,
+    maxIterations: config.maxIterations,
     registry: config.registry,
     plugins: config.plugins,
+    defaultWorkingDirectory: config.defaultWorkingDirectory,
+    allowedWorkspaceRoots: config.allowedWorkspaceRoots,
+    toolMode: config.toolMode,
+    approvalMode: config.approvalMode ?? 'interactive',
     logger,
   });
 
@@ -38,109 +85,160 @@ export function createServer(config: ServerConfig): Hono {
   app.use('*', cors({ origin: config.corsOrigin ?? '*' }));
 
   // Auth middleware (applies to all routes except health)
-  app.use('*', createAuthMiddleware(config.apiKey));
+  app.use('*', auth.middleware);
 
   // Health check
   app.get('/health', (c) => {
     return c.json({
       status: 'ok',
       uptime: process.uptime(),
-      sessions: manager.list().length,
+      sessions: runtime.listSessions().length,
     });
   });
 
   // Token exchange
-  app.post('/auth/token', handleTokenExchange(config.apiKey));
+  app.post('/auth/token', auth.tokenExchange);
 
   // Create session
   app.post('/sessions', async (c) => {
-    const result = await manager.create();
-    if ('error' in result) {
-      return c.json({ error: result.error }, result.status as ContentfulStatusCode);
+    try {
+      const body = await readOptionalJson(c);
+      const session = await runtime.createSession(body as RuntimeSessionCreateRequest);
+      return c.json({ sessionId: session.id, session }, 201);
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
     }
-    return c.json({ sessionId: result.id }, 201);
   });
 
   // List sessions
   app.get('/sessions', (c) => {
-    return c.json({ sessions: manager.list() });
+    return c.json({ sessions: runtime.listSessions() });
   });
 
   // Get session info
   app.get('/sessions/:id', (c) => {
     const id = c.req.param('id');
-    const sessions = manager.list().find((s) => s.id === id);
-    if (!sessions) return c.json({ error: 'Session not found' }, 404 as ContentfulStatusCode);
-    return c.json({ session: sessions });
+    try {
+      return c.json({ session: runtime.getSession(id) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
   });
 
   // Send prompt
   app.post('/sessions/:id/prompt', async (c) => {
     const id = c.req.param('id');
-    let body: { message?: string };
     try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: 'Invalid JSON body' }, 400 as ContentfulStatusCode);
+      const body = await readOptionalJson(c);
+      await runtime.prompt(id, readMessage(body));
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
     }
-    const result = await manager.prompt(id, body.message ?? '');
-    if (result) return c.json({ error: result.error }, result.status as ContentfulStatusCode);
-    return c.json({ ok: true });
+  });
+
+  app.post('/sessions/:id/steer', async (c) => {
+    const id = c.req.param('id');
+    try {
+      const body = await readOptionalJson(c);
+      runtime.steer(id, readMessage(body));
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.post('/sessions/:id/follow-up', async (c) => {
+    const id = c.req.param('id');
+    try {
+      const body = await readOptionalJson(c);
+      runtime.followUp(id, readMessage(body));
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.post('/sessions/:id/resume', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await runtime.resume(id);
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
   });
 
   // Abort session
   app.post('/sessions/:id/abort', (c) => {
     const id = c.req.param('id');
-    const result = manager.abort(id);
-    if (result) return c.json({ error: result.error }, result.status as ContentfulStatusCode);
-    return c.json({ ok: true });
+    try {
+      runtime.abort(id);
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
   });
 
   // Answer askUser question
   app.post('/sessions/:id/answer', async (c) => {
     const id = c.req.param('id');
-    let body: { toolCallId?: string; response?: string };
     try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: 'Invalid JSON body' }, 400 as ContentfulStatusCode);
+      const body = await readOptionalJson(c);
+      if (typeof body.toolCallId !== 'string' || typeof body.response !== 'string') {
+        throw new RuntimeError('invalid_request', 'toolCallId and response are required');
+      }
+      runtime.answer(id, body.toolCallId, body.response);
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
     }
-    if (!body.toolCallId || !body.response) {
-      return c.json({ error: 'toolCallId and response are required' }, 400 as ContentfulStatusCode);
-    }
-    const result = manager.answer(id, body.toolCallId, body.response);
-    if (result) return c.json({ error: result.error }, result.status as ContentfulStatusCode);
-    return c.json({ ok: true });
   });
 
   // SSE event stream
   app.get('/sessions/:id/events', (c) => {
     const id = c.req.param('id');
-    const session = manager.get(id);
-    if (!session) return c.json({ error: 'Session not found' }, 404);
+    try {
+      runtime.getSession(id);
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
 
     return streamSSE(c, async (stream) => {
       // Replay prior events (snapshot to avoid concurrent mutation)
-      const snapshot = [...session.events];
+      const snapshot = runtime.getEventHistory(id);
+      let sequence = 0;
       for (const event of snapshot) {
         await stream.writeSSE({
           data: serializeEvent(event),
-          id: String(event.type === 'error' ? 0 : 0),
+          id: String(++sequence),
         });
       }
 
       // Subscribe to new events
-      let sequence = snapshot.length;
-      const unsub = manager.subscribe(id, async (event: AgentEvent) => {
-        try {
-          await stream.writeSSE({
-            data: serializeEvent(event),
-            id: String(++sequence),
-          });
-        } catch {
-          // Stream closed
-        }
-      });
+      const unsub = runtime.subscribe(
+        id,
+        async (event: AgentEvent) => {
+          try {
+            await stream.writeSSE({
+              data: serializeEvent(event),
+              id: String(++sequence),
+            });
+          } catch {
+            // Stream closed
+          }
+        },
+        { replay: false },
+      );
 
       // Wait for close
       stream.onAbort(() => {
@@ -164,10 +262,24 @@ export function createServer(config: ServerConfig): Hono {
   // Delete session
   app.delete('/sessions/:id', (c) => {
     const id = c.req.param('id');
-    const result = manager.delete(id);
-    if (result) return c.json({ error: result.error }, result.status as ContentfulStatusCode);
-    return c.json({ ok: true });
+    try {
+      runtime.deleteSession(id);
+      return c.json({ ok: true });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
   });
 
-  return app;
+  return {
+    app,
+    runtime,
+    dispose() {
+      runtime.dispose();
+    },
+  };
+}
+
+export function createServer(config: ServerConfig): Hono {
+  return createServerRuntime(config).app;
 }

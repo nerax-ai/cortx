@@ -6,6 +6,15 @@ export interface CortxConfig {
   system?: string;
   maxIterations?: number;
   workingDirectory?: string;
+  runtime?: {
+    mode?: 'local' | 'remote';
+    server?: {
+      baseUrl?: string;
+      apiKey?: string;
+      sessionId?: string;
+      workingDirectory?: string;
+    };
+  };
   plugins?: string[];
   agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
   providers?: ProviderConfig[];

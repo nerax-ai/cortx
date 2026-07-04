@@ -1,6 +1,7 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { Logger } from '@cortx/sdk';
 import type { CortxRegistry, PluginConfig } from '@cortx/core';
+import type { WorkspaceToolMode } from '@cortx/runtime';
 
 export interface ServerConfig {
   apiKey: string;
@@ -13,8 +14,13 @@ export interface ServerConfig {
   language: LanguageClient;
   model: string;
   system?: string;
+  maxIterations?: number;
   registry?: CortxRegistry;
   plugins?: PluginConfig[];
+  defaultWorkingDirectory?: string;
+  allowedWorkspaceRoots?: string[];
+  toolMode?: WorkspaceToolMode;
+  approvalMode?: 'deny' | 'interactive';
   logger?: Logger;
 }
 
@@ -22,4 +28,12 @@ export interface SessionInfo {
   id: string;
   createdAt: number;
   lastActivityAt: number;
+  workingDirectory: string;
+  model: string;
+  maxIterations?: number;
+  toolMode: WorkspaceToolMode;
+  approvalMode: 'deny' | 'interactive';
+  isRunning: boolean;
+  eventCount: number;
+  metadata?: Record<string, unknown>;
 }

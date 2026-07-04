@@ -42,6 +42,113 @@ SDK 也提供薄 helper，用于让插件代码保持类型清晰：
 | `agent.eventObserver`     | 观察 agent events，不影响主流程       | `onAgentEvent(event)`            |
 | `agent.sessionPolicy`     | 会话级策略：turn/model/tool/sub-agent | `AgentSessionPolicyContribution` |
 
+## Runtime-Mounted Capability
+
+Core 扩展点只描述“单 agent loop 内可以发生什么”。一个能力是否默认启用、在哪个 workspace 启用、用什么工具模式启用、是否有审批通道，属于 `@cortx/runtime` 的 host 语义。
+
+因此官方能力建议按两层组织：
+
+- **Capability implementation**：用 `@cortx/sdk` / `@cortx/core` 的扩展点实现具体语义，例如工具、policy、system/messages transform、event observer。
+- **Runtime mounting**：由 `@cortx/runtime` 或 server/TUI 的 runtime config 决定是否挂载该能力、传入哪个 working directory、使用什么 approval mode。
+
+这能让同一个能力同时服务很小的 agent 和完整 coding agent 产品：
+
+- 小 agent 可以只传一份 prompt、少量 `tools` 和几个 policy。
+- TUI/server 可以用 runtime 默认能力挂载 workspace tools、skills bridge、sub-agent capability 和 approval policy。
+- Web/Desktop 不需要知道能力如何实现，只消费 runtime 的 session/action/event contract。
+
+### 什么时候写 Core 插件
+
+当能力需要进入 agent loop 语义时，写 core 插件或 SDK contribution：
+
+- 新模型可见工具：`agent.tool`
+- 请求前上下文改写：`agent.systemTransform` / `agent.messagesTransform`
+- 工具权限、参数修正、缓存：`agent.sessionPolicy` / `agent.toolBefore`
+- 工具结果归一化：`agent.toolAfter`
+- 事件采集：`agent.eventObserver`
+
+### 什么时候写 Runtime Mount
+
+当能力依赖宿主配置或 workspace 时，放到 runtime mount 层：
+
+- 按 `toolMode` 装配 workspace tools。
+- 按 `approvalMode` 决定 write/destructive 工具是否询问或默认拒绝。
+- 按 session working directory 发现 skills。
+- 按产品配置启用/禁用 sub-agent。
+- 按 allowed workspace roots 拒绝非法目录。
+
+当前 runtime 已经提供默认 capability 映射：
+
+```ts
+import { CortxRuntime } from '@cortx/runtime';
+
+const runtime = new CortxRuntime({
+  language,
+  model: 'default',
+  defaultWorkingDirectory: process.cwd(),
+  allowedWorkspaceRoots: [process.cwd()],
+  toolMode: 'coding',
+  approvalMode: 'interactive',
+  capabilities: {
+    skills: true,
+    subAgents: true,
+  },
+});
+
+const session = await runtime.createSession({
+  workingDirectory: '.',
+  metadata: { source: 'tui' },
+});
+
+await runtime.prompt(session.id, 'review this repository');
+```
+
+禁用默认能力时，runtime 会把它们映射成 core capability flags：
+
+```ts
+const session = await runtime.createSession({
+  toolMode: 'read-only',
+  approvalMode: 'deny',
+  capabilities: {
+    skills: false,
+    subAgents: false,
+  },
+});
+```
+
+这不会删除 core 的底层执行能力；它只是让宿主明确声明“这个 session 不挂载这些产品能力”。
+
+### Server 嵌入生命周期
+
+`@cortx/server` 是 runtime 的 HTTP/SSE adapter。普通启动可以继续使用 `createServer(config)`；嵌入式宿主、测试和未来 desktop 更适合使用 `createServerRuntime(config)`，这样可以在退出时显式释放 runtime session、pending questions 和 idle timers。
+
+```ts
+import { createServerRuntime } from '@cortx/server';
+
+const handle = createServerRuntime({
+  apiKey: process.env.CORTX_API_KEY!,
+  language,
+  model: 'default',
+  defaultWorkingDirectory: process.cwd(),
+  allowedWorkspaceRoots: [process.cwd()],
+});
+
+const server = Bun.serve({ port: 3000, fetch: handle.app.fetch });
+
+process.on('SIGTERM', () => {
+  server.stop(true);
+  handle.dispose();
+});
+```
+
+### Skills 与 Sub-Agent 的当前状态
+
+Skills 仍然是 `SKILL.md` 文件系统资产，不要求 skill 作者写 JavaScript 插件。当前实现中，skill discovery 和 bridge 仍位于 core 代码内，但已经可以通过 runtime/core capability flags 禁用。
+
+Sub-agent tool 也仍由 core 创建，但已可以通过 `capabilities.subAgents` 禁用。下一步如果继续追求更干净的边界，应把“默认挂载 skill bridge / sub-agent tool”迁到官方 runtime capability module；core 保留底层 hook、事件和执行 primitive。
+
+这是一条迁移边界，不是对 skill 作者或插件作者的新负担。
+
 ## Session Policy
 
 `agent.sessionPolicy` 是用于横切控制面的策略扩展。每个 hook 的 decision 类型是独立的，避免一个 hook 返回另一个 hook 才能处理的 action。

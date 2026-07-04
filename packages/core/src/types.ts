@@ -172,6 +172,10 @@ export interface CortxConfig {
   maxConcurrentTools?: number;
   maxConcurrentAgents?: number;
   skillPaths?: string[];
+  capabilities?: {
+    skills?: 'enabled' | 'disabled';
+    subAgents?: 'enabled' | 'disabled';
+  };
   safety?: {
     toolApproval?: 'enabled' | 'disabled';
   };

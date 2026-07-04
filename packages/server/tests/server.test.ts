@@ -1,11 +1,10 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { createServer } from '../src/server';
-import { SessionManager } from '../src/session-manager';
+import { createServer, createServerRuntime, type ServerRuntimeHandle } from '../src/server';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
-import { PluginRegistry } from '@nerax-ai/plugin';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { ServerConfig } from '../src/types';
-import type { AgentEvent } from '@cortx/sdk';
-import { AGENT_EVENT_OBSERVER, type CortxFactoryMap, type CortxExtensionType } from '@cortx/core';
 
 // Mock language client that yields a simple response
 function mockLanguageClient() {
@@ -29,14 +28,16 @@ const BASE = `http://localhost:${config.port}`;
 
 describe('server routes', () => {
   let server: ReturnType<typeof Bun.serve> | undefined;
+  let handle: ServerRuntimeHandle | undefined;
 
   beforeAll(() => {
-    const app = createServer(config);
-    server = Bun.serve({ port: config.port, fetch: app.fetch });
+    handle = createServerRuntime(config);
+    server = Bun.serve({ port: config.port, fetch: handle.app.fetch });
   });
 
   afterAll(() => {
     server?.stop();
+    handle?.dispose();
   });
 
   const headers = { Authorization: 'Bearer test-key-123' };
@@ -58,6 +59,46 @@ describe('server routes', () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.sessionId).toBeTruthy();
+    expect(body.session.workingDirectory).toBeTruthy();
+  });
+
+  test('create session accepts a working directory body', async () => {
+    const res = await fetch(`${BASE}/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workingDirectory: '.', metadata: { source: 'test' } }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.sessionId).toBeTruthy();
+    expect(body.session.metadata).toMatchObject({ source: 'test' });
+  });
+
+  test('create session rejects invalid JSON body', async () => {
+    const res = await fetch(`${BASE}/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: '{',
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.kind).toBe('invalid_request');
+  });
+
+  test('create session rejects workspaces outside allowed roots', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'cortx-server-outside-'));
+    try {
+      const res = await fetch(`${BASE}/sessions`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDirectory: outside }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.kind).toBe('invalid_workspace');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   test('list sessions', async () => {
@@ -72,7 +113,7 @@ describe('server routes', () => {
   test('send prompt to session', async () => {
     // Create session
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
-    const { sessionId } = await createRes.json() as { sessionId: string };
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
 
     // Send prompt
     const promptRes = await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
@@ -96,7 +137,7 @@ describe('server routes', () => {
 
   test('prompt with empty message returns 400', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
-    const { sessionId } = await createRes.json() as { sessionId: string };
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
 
     const res = await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
       method: 'POST',
@@ -106,9 +147,35 @@ describe('server routes', () => {
     expect(res.status).toBe(400);
   });
 
+  test('message action endpoints return typed invalid_request for invalid bodies', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+
+    for (const action of ['prompt', 'steer', 'follow-up'] as const) {
+      const invalidJson = await fetch(`${BASE}/sessions/${sessionId}/${action}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: '{',
+      });
+      expect(invalidJson.status).toBe(400);
+      await expect(invalidJson.json()).resolves.toMatchObject({ kind: 'invalid_request' });
+
+      const invalidMessage = await fetch(`${BASE}/sessions/${sessionId}/${action}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: { text: 'hello' } }),
+      });
+      expect(invalidMessage.status).toBe(400);
+      await expect(invalidMessage.json()).resolves.toMatchObject({
+        kind: 'invalid_request',
+        error: 'message must be a string',
+      });
+    }
+  });
+
   test('SSE stream returns event-stream content type', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
-    const { sessionId } = await createRes.json() as { sessionId: string };
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
 
     // Abort after getting headers to prevent hanging on infinite stream
     const ctrl = new AbortController();
@@ -129,7 +196,7 @@ describe('server routes', () => {
 
   test('delete session', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
-    const { sessionId } = await createRes.json() as { sessionId: string };
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
 
     const res = await fetch(`${BASE}/sessions/${sessionId}`, {
       method: 'DELETE',
@@ -152,7 +219,7 @@ describe('server routes', () => {
       headers,
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { token: string; expiresAt: number };
+    const body = (await res.json()) as { token: string; expiresAt: number };
     expect(body.token).toBeTruthy();
     expect(body.expiresAt).toBeGreaterThan(Date.now() - 1000);
   });
@@ -167,7 +234,7 @@ describe('server routes', () => {
 
   test('answer endpoint works', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
-    const { sessionId } = await createRes.json() as { sessionId: string };
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
 
     const res = await fetch(`${BASE}/sessions/${sessionId}/answer`, {
       method: 'POST',
@@ -175,6 +242,46 @@ describe('server routes', () => {
       body: JSON.stringify({ toolCallId: 'tc_1', response: 'yes' }),
     });
     expect(res.status).toBe(200);
+  });
+
+  test('steer, follow-up, resume and abort endpoints route to runtime', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+
+    for (const [path, body] of [
+      ['steer', { message: 'use this instruction' }],
+      ['follow-up', { message: 'then do this' }],
+      ['resume', undefined],
+      ['abort', undefined],
+    ] as const) {
+      const res = await fetch(`${BASE}/sessions/${sessionId}/${path}`, {
+        method: 'POST',
+        headers: body ? { ...headers, 'Content-Type': 'application/json' } : headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ ok: true });
+    }
+  });
+
+  test('SSE stream accepts short-lived token', async () => {
+    const tokenRes = await fetch(`${BASE}/auth/token`, { method: 'POST', headers });
+    const { token } = (await tokenRes.json()) as { token: string };
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 2000);
+
+    try {
+      const eventRes = await fetch(`${BASE}/sessions/${sessionId}/events?token=${token}`, {
+        signal: ctrl.signal,
+      });
+      expect(eventRes.status).toBe(200);
+      expect(eventRes.headers.get('content-type')).toContain('text/event-stream');
+    } catch (e) {
+      expect((e as Error).name).toBe('AbortError');
+    }
   });
 });
 
@@ -191,119 +298,12 @@ describe('server logging', () => {
 
     expect(sink.records.some((record) => record.message.includes('Binding to 0.0.0.0'))).toBe(true);
   });
-});
 
-describe('SessionManager', () => {
-  test('passes configured registry plugins into managed sessions', async () => {
-    PluginRegistry.reset();
-    let pluginSawDone = false;
-    const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({ appName: 'session-manager-plugin-test' });
-    await registry.register({
-      manifest: { manifestVersion: 1, id: 'session-plugin', name: 'session-plugin', version: '0.0.0', runtime: { main: 'inline' } },
-      setup(ctx) {
-        ctx.register(AGENT_EVENT_OBSERVER, 'event-plugin', () => ({
-          onAgentEvent(event) {
-            if (event.type === 'done') pluginSawDone = true;
-          },
-        }));
-      },
-    });
-
-    const manager = new SessionManager({
-      registry,
-      plugins: [{ use: 'event-plugin' }],
-      language: mockLanguageClient(),
-      model: 'test-model',
-      logger: createLogger({ appName: 'session-manager-plugin-test', console: false }),
-    });
-    const created = await manager.create();
-    if ('error' in created) throw new Error(created.error);
-
-    expect(await manager.prompt(created.id, 'hello')).toBeNull();
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    expect(pluginSawDone).toBe(true);
-    manager.dispose();
-    PluginRegistry.reset();
-  });
-
-  test('stream failures are broadcast with real Error instances', async () => {
-    PluginRegistry.reset();
-    const manager = new SessionManager({
-      registry: PluginRegistry.getInstance({ appName: 'session-manager-test' }),
-      language: {
-        stream: async function* () {
-          const error = new Error('stream failed') as Error & { statusCode?: number };
-          error.statusCode = 400;
-          throw error;
-        },
-      } as any,
-      model: 'test-model',
-      logger: createLogger({ appName: 'session-manager-test', console: false }),
-    });
-    const created = await manager.create();
-    if ('error' in created) throw new Error(created.error);
-    const events: AgentEvent[] = [];
-    manager.subscribe(created.id, (event) => events.push(event));
-
-    expect(await manager.prompt(created.id, 'hello')).toBeNull();
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const errorEvent = events.find((event) => event.type === 'error') as Extract<AgentEvent, { type: 'error' }>;
-    expect(errorEvent.error).toBeInstanceOf(Error);
-    expect(errorEvent.error.message).toBe('stream failed');
-    manager.dispose();
-    PluginRegistry.reset();
-  });
-
-  test('caps retained event history per session', async () => {
-    PluginRegistry.reset();
-    const manager = new SessionManager({
-      maxEventsPerSession: 3,
-      language: {
-        stream: async function* () {
-          yield { type: 'text-delta', delta: 'a' };
-          yield { type: 'text-delta', delta: 'b' };
-          yield { type: 'text-delta', delta: 'c' };
-          yield { type: 'text-delta', delta: 'd' };
-          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
-        },
-      } as any,
-      model: 'test-model',
-      logger: createLogger({ appName: 'session-manager-history-test', console: false }),
-    });
-    const created = await manager.create();
-    if ('error' in created) throw new Error(created.error);
-
-    expect(await manager.prompt(created.id, 'hello')).toBeNull();
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const session = manager.get(created.id);
-    expect(session?.events.length).toBeLessThanOrEqual(3);
-    expect(session?.events.at(-1)?.type).toBe('done');
-    manager.dispose();
-    PluginRegistry.reset();
-  });
-
-  test('abort clears the running gate and ignores the aborted run', async () => {
-    PluginRegistry.reset();
-    const manager = new SessionManager({
-      language: {
-        stream: async function* () {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
-        },
-      } as any,
-      model: 'test-model',
-      logger: createLogger({ appName: 'session-manager-abort-test', console: false }),
-    });
-    const created = await manager.create();
-    if ('error' in created) throw new Error(created.error);
-
-    expect(await manager.prompt(created.id, 'first')).toBeNull();
-    expect(manager.abort(created.id)).toBeNull();
-    expect(await manager.prompt(created.id, 'second')).toBeNull();
-    manager.dispose();
-    PluginRegistry.reset();
+  test('createServerRuntime exposes a disposable runtime handle for embedded hosts', () => {
+    const handle = createServerRuntime(config);
+    expect(typeof handle.app.fetch).toBe('function');
+    expect(handle.runtime.listSessions()).toEqual([]);
+    handle.dispose();
+    expect(handle.runtime.listSessions()).toEqual([]);
   });
 });

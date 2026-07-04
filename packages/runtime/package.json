@@ -1,5 +1,5 @@
 {
-  "name": "@cortx/server",
+  "name": "@cortx/runtime",
   "version": "0.0.1",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,22 +14,17 @@
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "dev": "tsc --watch",
     "lint": "tsc --noEmit",
-    "clean": "rm -rf dist",
-    "start": "bun src/bin.ts"
+    "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@cortx/code": "workspace:*",
     "@cortx/core": "workspace:*",
-    "@cortx/runtime": "workspace:*",
     "@cortx/sdk": "workspace:*",
-    "@cortx/store": "workspace:*",
     "@nerax-ai/logger": "^0.2.0",
-    "@nerax-ai/plugin": "^0.2.0",
-    "@nerax-ai/storage": "^0.2.0",
-    "@synax-ai/core": "link:@synax-ai/core",
-    "@synax-ai/sdk": "link:@synax-ai/sdk",
-    "hono": "^4.7.0"
+    "@synax-ai/core": "link:@synax-ai/core"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "bun-types": "^1.3.9"
   }
 }

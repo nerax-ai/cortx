@@ -14,6 +14,7 @@ export interface SessionHeaderProps {
   store: TuiStore;
   model: string;
   cwd: string;
+  mode?: 'local' | 'remote';
   registryReady?: boolean;
 }
 
@@ -30,8 +31,7 @@ export function compactPath(cwd: string): string {
 }
 
 export function formatTokenUsage(tokenUsage: TokenUsage): string {
-  const format = (value: number) =>
-    value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
+  const format = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value));
   return `${format(tokenUsage.inputTokens)} in / ${format(tokenUsage.outputTokens)} out`;
 }
 
@@ -52,6 +52,7 @@ export function statusBadge(status: TuiStatus, registryReady?: boolean): { label
 }
 
 export function headerSegments({
+  mode,
   model,
   cwd,
   sessionId,
@@ -59,6 +60,7 @@ export function headerSegments({
   tokenUsage,
   totalElapsed,
 }: {
+  mode?: 'local' | 'remote';
   model: string;
   cwd: string;
   sessionId: string;
@@ -66,11 +68,7 @@ export function headerSegments({
   tokenUsage: TokenUsage;
   totalElapsed: number;
 }): string[] {
-  const segments = [
-    model,
-    compactPath(cwd),
-    `session ${shortSessionId(sessionId)}`,
-  ];
+  const segments = [mode ?? 'local', model, compactPath(cwd), `session ${shortSessionId(sessionId)}`];
   if (iteration > 0) segments.push(`turn ${iteration}`);
   if (tokenUsage.inputTokens > 0 || tokenUsage.outputTokens > 0) {
     segments.push(formatTokenUsage(tokenUsage));
@@ -79,7 +77,7 @@ export function headerSegments({
   return segments;
 }
 
-export function SessionHeader({ store, model, cwd, registryReady = true }: SessionHeaderProps) {
+export function SessionHeader({ store, model, cwd, mode = 'local', registryReady = true }: SessionHeaderProps) {
   const sessionId = useSyncExternalStore(
     useCallback((listener) => store.select(selectSessionId).subscribe(listener), [store]),
     useCallback(() => store.select(selectSessionId).get(), [store]),
@@ -101,14 +99,18 @@ export function SessionHeader({ store, model, cwd, registryReady = true }: Sessi
     useCallback(() => store.select(selectTotalElapsed).get(), [store]),
   );
   const status = statusBadge(tuiStatus, registryReady);
-  const segments = headerSegments({ model, cwd, sessionId, iteration, tokenUsage, totalElapsed });
+  const segments = headerSegments({ mode, model, cwd, sessionId, iteration, tokenUsage, totalElapsed });
 
   return (
     <Box paddingX={1} paddingY={0} flexDirection="column">
       <Box>
-        <Text bold color="cyan">Cortx</Text>
+        <Text bold color="cyan">
+          Cortx
+        </Text>
         <Text dimColor>{' · '}</Text>
-        <Text color={status.color} bold>{status.label}</Text>
+        <Text color={status.color} bold>
+          {status.label}
+        </Text>
       </Box>
       <Box>
         <Text dimColor>{segments.join('  ·  ')}</Text>

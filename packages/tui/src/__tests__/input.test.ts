@@ -234,21 +234,27 @@ describe('composerBorderColor', () => {
 describe('activityLabel', () => {
   test('uses tool name while executing', () => {
     const toolCalls = new Map([['tc_1', { status: 'pending', toolName: 'read' }]]);
-    expect(activityLabel('executing', {
-      toolCalls,
-    })).toBe('running read');
+    expect(
+      activityLabel('executing', {
+        toolCalls,
+      }),
+    ).toBe('running read');
   });
 
   test('uses concise thinking label', () => {
-    expect(activityLabel('thinking', {
-      toolCalls: new Map(),
-    })).toBe('thinking');
+    expect(
+      activityLabel('thinking', {
+        toolCalls: new Map(),
+      }),
+    ).toBe('thinking');
   });
 
   test('uses error label for error activity', () => {
-    expect(activityLabel('error', {
-      toolCalls: new Map(),
-    })).toBe('error');
+    expect(
+      activityLabel('error', {
+        toolCalls: new Map(),
+      }),
+    ).toBe('error');
   });
 });
 
@@ -527,7 +533,7 @@ describe('submitInput', () => {
         },
       },
       session: {
-        controller: { abort: () => {} } as any,
+        abort: () => {},
         prompt: async (value: string) => {
           promptCalls.push(value);
         },
@@ -561,7 +567,7 @@ describe('submitInput', () => {
         executeCommand: async () => false,
       },
       session: {
-        controller: { abort: () => {} } as any,
+        abort: () => {},
         prompt: async (value: string) => {
           promptCalls.push(value);
         },
@@ -592,7 +598,7 @@ describe('submitInput', () => {
         },
       },
       session: {
-        controller: { abort: () => {} } as any,
+        abort: () => {},
         prompt: async (value: string) => {
           promptCalls.push(value);
         },
@@ -622,7 +628,7 @@ describe('submitInput', () => {
         },
       },
       session: {
-        controller: { abort: () => {} } as any,
+        abort: () => {},
         prompt: async (value: string) => {
           promptCalls.push(value);
         },
@@ -651,7 +657,7 @@ describe('submitInput', () => {
         executeCommand: async () => false,
       },
       session: {
-        controller: { abort: () => {} } as any,
+        abort: () => {},
         prompt: async (value: string) => {
           promptCalls.push(value);
         },

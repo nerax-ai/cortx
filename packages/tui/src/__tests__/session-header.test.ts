@@ -37,20 +37,29 @@ describe('session header helpers', () => {
   });
 
   test('headerSegments builds compact context segments', () => {
-    expect(headerSegments({
-      model: 'default',
-      cwd: '/Users/zhxout/gitwork/cortx',
-      sessionId: 'session_abcdef',
-      iteration: 2,
-      tokenUsage: { inputTokens: 1000, outputTokens: 25 },
-      totalElapsed: 9,
-    })).toEqual([
-      'default',
-      'gitwork/cortx',
-      'session session_',
-      'turn 2',
-      '1.0k in / 25 out',
-      '9s',
-    ]);
+    expect(
+      headerSegments({
+        model: 'default',
+        cwd: '/Users/zhxout/gitwork/cortx',
+        sessionId: 'session_abcdef',
+        iteration: 2,
+        tokenUsage: { inputTokens: 1000, outputTokens: 25 },
+        totalElapsed: 9,
+      }),
+    ).toEqual(['local', 'default', 'gitwork/cortx', 'session session_', 'turn 2', '1.0k in / 25 out', '9s']);
+  });
+
+  test('headerSegments can show remote mode', () => {
+    expect(
+      headerSegments({
+        mode: 'remote',
+        model: 'default',
+        cwd: '/repo/cortx',
+        sessionId: 'sess_remote',
+        iteration: 0,
+        tokenUsage: { inputTokens: 0, outputTokens: 0 },
+        totalElapsed: 0,
+      })[0],
+    ).toBe('remote');
   });
 });

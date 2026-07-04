@@ -21,8 +21,8 @@
     "start": "bun src/cli.tsx"
   },
   "dependencies": {
-    "@cortx/code": "workspace:*",
     "@cortx/core": "workspace:*",
+    "@cortx/runtime": "workspace:*",
     "@cortx/sdk": "workspace:*",
     "@cortx/store": "workspace:*",
     "@nerax-ai/logger": "^0.2.0",

@@ -58,7 +58,9 @@ export class Cortx {
     this.config = config;
     this.registry = getRegistry(config);
     for (const t of config.tools ?? []) this.tools.set(t.name, t);
-    this.tools.set('agent', this.createAgentTool());
+    if (config.capabilities?.subAgents !== 'disabled') {
+      this.tools.set('agent', this.createAgentTool());
+    }
   }
 
   get messages(): LanguageMessage[] {
@@ -87,9 +89,7 @@ export class Cortx {
     const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
 
-    const cwd = this.config.workingDirectory ?? process.cwd();
-    const skills = await discoverSkills(cwd, this.config);
-    this._skillExtensions = skills.length ? createSkillExtensions(skills) : null;
+    this._skillExtensions = await this.createSkillBridgeExtensions();
 
     const extensions = this.withDefaultSafetyExtensions(
       mergeAgentRuntimeExtensions(this._skillExtensions, configuredExtensions),
@@ -153,6 +153,13 @@ export class Cortx {
   }
   replaceMessages(messages: LanguageMessage[]): void {
     this._messages = messages.slice();
+  }
+
+  private async createSkillBridgeExtensions(): Promise<AgentRuntimeExtensions | null> {
+    if (this.config.capabilities?.skills === 'disabled') return null;
+    const cwd = this.config.workingDirectory ?? process.cwd();
+    const skills = await discoverSkills(cwd, this.config);
+    return skills.length ? createSkillExtensions(skills) : null;
   }
 
   private async loadResumeCheckpoint(): Promise<AgentRunCheckpoint | undefined> {
