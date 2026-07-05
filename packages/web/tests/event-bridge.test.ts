@@ -152,6 +152,47 @@ describe('EventBridge', () => {
     expect(calls[1].body).toEqual({ path: 'examples/skill-packs/basic/agents/reviewer.json' });
   });
 
+  test('lists discovered AgentSpec assets through the server bridge', async () => {
+    const calls: Array<{ path: string; auth: string | null }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push({
+        path: url.pathname,
+        auth: new Headers(init?.headers).get('Authorization'),
+      });
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/agent-specs') {
+        return jsonResponse({
+          agentSpecs: [
+            {
+              name: 'reviewer',
+              path: '/repo/agents/reviewer.json',
+              relativePath: 'agents/reviewer.json',
+              sourceRoot: '/repo',
+              promptPreview: 'Review the current diff',
+              toolMode: 'read-only',
+              approvalMode: 'deny',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key');
+    const specs = await bridge.listAgentSpecs();
+
+    expect(specs).toEqual([
+      expect.objectContaining({
+        name: 'reviewer',
+        path: '/repo/agents/reviewer.json',
+        promptPreview: 'Review the current diff',
+      }),
+    ]);
+    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/agent-specs']);
+    expect(calls[1].auth).toBe('Bearer short-token');
+  });
+
   test('surfaces typed server errors', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');

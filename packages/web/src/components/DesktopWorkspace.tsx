@@ -1,5 +1,5 @@
 import type { AgentState } from '@cortx/store';
-import type { WebApprovalMode, WebRuntimeSessionInfo, WebWorkspaceToolMode } from '../bridge/event-bridge';
+import type { WebAgentSpecInfo, WebApprovalMode, WebRuntimeSessionInfo, WebWorkspaceToolMode } from '../bridge/event-bridge';
 import { surface } from '../design';
 import { ChatView } from './ChatView';
 import { InspectorPanel } from './InspectorPanel';
@@ -10,6 +10,7 @@ interface DesktopWorkspaceProps {
   state: AgentState;
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
+  agentSpecs: WebAgentSpecInfo[];
   selectedWorkingDirectory: string | null;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
@@ -20,6 +21,7 @@ interface DesktopWorkspaceProps {
     workingDirectory: string;
   }) => void | Promise<void>;
   onCreateSessionForCurrentProject: () => void | Promise<unknown>;
+  onLaunchAgentSpec: (path: string) => void | Promise<void>;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
@@ -30,6 +32,7 @@ export function DesktopWorkspace({
   state,
   session,
   sessions,
+  agentSpecs,
   selectedWorkingDirectory,
   toolMode,
   approvalMode,
@@ -38,6 +41,7 @@ export function DesktopWorkspace({
   onResume,
   onCreateSession,
   onCreateSessionForCurrentProject,
+  onLaunchAgentSpec,
   onSelectProject,
   onSwitchSession,
   onToolModeChange,
@@ -53,10 +57,12 @@ export function DesktopWorkspace({
           status={state.status}
           session={session}
           sessions={sessions}
+          agentSpecs={agentSpecs}
           selectedWorkingDirectory={selectedWorkingDirectory}
           tokenUsage={state.tokenUsage}
           elapsed={state.totalElapsed}
           onCreateSession={onCreateSession}
+          onLaunchAgentSpec={onLaunchAgentSpec}
           onSelectProject={onSelectProject}
           onSwitchSession={onSwitchSession}
         />

@@ -1,18 +1,20 @@
 import { useState } from 'react';
 import type { AgentStatus, TokenUsage } from '@cortx/store';
 import { compactPath, compactSessionId, formatElapsed, formatTokenUsage, statusTone, surface } from '../design';
-import type { WebRuntimeSessionInfo } from '../bridge/event-bridge';
+import type { WebAgentSpecInfo, WebRuntimeSessionInfo } from '../bridge/event-bridge';
 
 interface SessionSidebarProps {
   status: AgentStatus;
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
+  agentSpecs: WebAgentSpecInfo[];
   selectedWorkingDirectory: string | null;
   tokenUsage: TokenUsage;
   elapsed: number;
   onCreateSession: (request: {
     workingDirectory: string;
   }) => void | Promise<void>;
+  onLaunchAgentSpec: (path: string) => void | Promise<void>;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
 }
@@ -58,16 +60,19 @@ export function SessionSidebar({
   status,
   session,
   sessions,
+  agentSpecs,
   selectedWorkingDirectory,
   tokenUsage,
   elapsed,
   onCreateSession,
+  onLaunchAgentSpec,
   onSelectProject,
   onSwitchSession,
 }: SessionSidebarProps) {
   const tone = statusTone(status);
   const [projectPath, setProjectPath] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [launchingSpecPath, setLaunchingSpecPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const projects = groupSessions(sessions);
 
@@ -83,6 +88,19 @@ export function SessionSidebar({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAdding(false);
+    }
+  }
+
+  async function launchSpec(spec: WebAgentSpecInfo) {
+    if (launchingSpecPath) return;
+    setLaunchingSpecPath(spec.path);
+    setError(null);
+    try {
+      await onLaunchAgentSpec(spec.path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunchingSpecPath(null);
     }
   }
 
@@ -117,61 +135,97 @@ export function SessionSidebar({
       </div>
 
       <section className="min-h-0 flex-1 overflow-y-auto p-2">
-        <div className="mb-2 px-1 text-xs font-medium text-zinc-500">Projects</div>
-        <div className="space-y-2">
-          {projects.map((project) => {
-            const activeProject = project.workingDirectory === selectedWorkingDirectory;
-            return (
-              <div key={project.workingDirectory} className="space-y-1">
-                <button
-                  type="button"
-                  title={project.workingDirectory}
-                  onClick={() => void onSelectProject(project.workingDirectory)}
-                  className={`w-full rounded-md px-2 py-2 text-left text-xs transition-colors ${
-                    activeProject ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-600 hover:bg-white/70 hover:text-zinc-950'
-                  } ${surface.focus}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-medium">{compactPath(project.workingDirectory)}</span>
-                    <span className="shrink-0 text-[10px] text-zinc-400">
-                      {project.sessions.length} session{project.sessions.length === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
-                    {project.runningCount > 0 ? `${project.runningCount} running · ` : ''}
-                    {project.workingDirectory}
-                  </div>
-                </button>
+        <div className="space-y-4">
+          <div>
+            <div className="mb-2 px-1 text-xs font-medium text-zinc-500">Projects</div>
+            <div className="space-y-2">
+              {projects.map((project) => {
+                const activeProject = project.workingDirectory === selectedWorkingDirectory;
+                return (
+                  <div key={project.workingDirectory} className="space-y-1">
+                    <button
+                      type="button"
+                      title={project.workingDirectory}
+                      onClick={() => void onSelectProject(project.workingDirectory)}
+                      className={`w-full rounded-md px-2 py-2 text-left text-xs transition-colors ${
+                        activeProject ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-600 hover:bg-white/70 hover:text-zinc-950'
+                      } ${surface.focus}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium">{compactPath(project.workingDirectory)}</span>
+                        <span className="shrink-0 text-[10px] text-zinc-400">
+                          {project.sessions.length} session{project.sessions.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                      <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
+                        {project.runningCount > 0 ? `${project.runningCount} running · ` : ''}
+                        {project.workingDirectory}
+                      </div>
+                    </button>
 
-                {activeProject && (
-                  <div className="ml-2 space-y-1 border-l border-zinc-200 pl-2">
-                    {project.sessions.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => void onSwitchSession(item.id)}
-                        className={`w-full rounded-md px-2 py-1.5 text-left text-[11px] transition-colors ${
-                          item.id === session?.id
-                            ? 'bg-zinc-950 text-white shadow-sm'
-                            : 'text-zinc-500 hover:bg-white/80 hover:text-zinc-900'
-                        } ${surface.focus}`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-mono">{compactSessionId(item.id, 15)}</span>
-                          <span className={item.id === session?.id ? 'text-zinc-300' : 'text-zinc-400'}>
-                            {item.isRunning ? 'running' : 'ready'}
-                          </span>
-                        </div>
-                        <div className={`mt-1 truncate ${item.id === session?.id ? 'text-zinc-300' : 'text-zinc-400'}`}>
-                          {item.toolMode} · {item.approvalMode}
-                        </div>
-                      </button>
-                    ))}
+                    {activeProject && (
+                      <div className="ml-2 space-y-1 border-l border-zinc-200 pl-2">
+                        {project.sessions.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => void onSwitchSession(item.id)}
+                            className={`w-full rounded-md px-2 py-1.5 text-left text-[11px] transition-colors ${
+                              item.id === session?.id
+                                ? 'bg-zinc-950 text-white shadow-sm'
+                                : 'text-zinc-500 hover:bg-white/80 hover:text-zinc-900'
+                            } ${surface.focus}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate font-mono">{compactSessionId(item.id, 15)}</span>
+                              <span className={item.id === session?.id ? 'text-zinc-300' : 'text-zinc-400'}>
+                                {item.isRunning ? 'running' : 'ready'}
+                              </span>
+                            </div>
+                            <div className={`mt-1 truncate ${item.id === session?.id ? 'text-zinc-300' : 'text-zinc-400'}`}>
+                              {item.toolMode} · {item.approvalMode}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+                );
+              })}
+            </div>
+          </div>
+
+          {agentSpecs.length > 0 && (
+            <div>
+              <div className="mb-2 flex items-center justify-between px-1">
+                <span className="text-xs font-medium text-zinc-500">Agents</span>
+                <span className="text-[10px] text-zinc-400">{agentSpecs.length}</span>
               </div>
-            );
-          })}
+              <div className="space-y-1">
+                {agentSpecs.map((spec) => (
+                  <button
+                    key={spec.path}
+                    type="button"
+                    title={spec.path}
+                    disabled={Boolean(launchingSpecPath)}
+                    onClick={() => void launchSpec(spec)}
+                    className={`w-full rounded-md border border-transparent px-2 py-2 text-left text-xs text-zinc-600 transition-colors hover:border-zinc-200 hover:bg-white hover:text-zinc-950 disabled:cursor-wait disabled:opacity-60 ${surface.focus}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-medium">{spec.name}</span>
+                      <span className="shrink-0 text-[10px] text-zinc-400">
+                        {launchingSpecPath === spec.path ? 'launching' : spec.toolMode ?? 'agent'}
+                      </span>
+                    </div>
+                    <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
+                      {spec.relativePath || compactPath(spec.path)}
+                    </div>
+                    <div className="mt-1 max-h-8 overflow-hidden text-[11px] leading-4 text-zinc-500">{spec.promptPreview}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

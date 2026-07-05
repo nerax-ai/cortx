@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer, createServerRuntime, type ServerRuntimeHandle } from '../src/server';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ServerConfig } from '../src/types';
@@ -636,6 +636,66 @@ describe('server scoped API keys', () => {
       const body = (await ownLaunch.json()) as { sessionId: string; session: { metadata?: Record<string, unknown> } };
       expect(body.session.metadata).toMatchObject({ agentSpec: 'project-b-agent' });
       await waitForRuntimeEnvelope(handle, body.sessionId, 'done');
+    } finally {
+      handle.dispose();
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
+  test('lists discovered AgentSpec assets within the current API key workspace scope', async () => {
+    const rootA = mkdtempSync(join(tmpdir(), 'cortx-server-discover-root-a-'));
+    const rootB = mkdtempSync(join(tmpdir(), 'cortx-server-discover-root-b-'));
+    const agentsA = join(rootA, 'agents');
+    const agentsB = join(rootB, 'agents');
+    mkdirSync(agentsA, { recursive: true });
+    mkdirSync(agentsB, { recursive: true });
+    writeFileSync(
+      join(agentsA, 'reviewer.json'),
+      JSON.stringify({
+        name: 'project-a-reviewer',
+        prompt: 'review project a',
+        workingDirectory: rootA,
+        toolMode: 'read-only',
+        approvalMode: 'deny',
+      }),
+      'utf8',
+    );
+    writeFileSync(join(agentsA, 'broken.json'), JSON.stringify({ prompt: '' }), 'utf8');
+    writeFileSync(
+      join(agentsB, 'builder.json'),
+      JSON.stringify({
+        name: 'project-b-builder',
+        prompt: 'build project b',
+        workingDirectory: rootB,
+        toolMode: 'all',
+        approvalMode: 'full-access',
+      }),
+      'utf8',
+    );
+
+    const handle = createServerRuntime({
+      ...config,
+      apiKey: 'admin-key',
+      defaultWorkingDirectory: rootA,
+      allowedWorkspaceRoots: [rootA],
+      apiKeys: [
+        { id: 'project-a', key: 'key-a', allowedWorkspaceRoots: [rootA] },
+        { id: 'project-b', key: 'key-b', allowedWorkspaceRoots: [rootB] },
+      ],
+    });
+
+    try {
+      const listA = await handle.app.request('/agent-specs', { headers: { Authorization: 'Bearer key-a' } });
+      const specsA = ((await listA.json()) as { agentSpecs: Array<{ name: string; path: string }> }).agentSpecs;
+      expect(listA.status).toBe(200);
+      expect(specsA.map((item) => item.name)).toEqual(['project-a-reviewer']);
+      expect(specsA[0].path).toBe(join(agentsA, 'reviewer.json'));
+
+      const listB = await handle.app.request('/agent-specs', { headers: { Authorization: 'Bearer key-b' } });
+      const specsB = ((await listB.json()) as { agentSpecs: Array<{ name: string; path: string }> }).agentSpecs;
+      expect(listB.status).toBe(200);
+      expect(specsB.map((item) => item.name)).toEqual(['project-b-builder']);
     } finally {
       handle.dispose();
       rmSync(rootA, { recursive: true, force: true });

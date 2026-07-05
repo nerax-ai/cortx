@@ -147,6 +147,17 @@ describe('web desktop UI', () => {
             eventCount: 3,
           },
         ]}
+        agentSpecs={[
+          {
+            name: 'basic-reviewer',
+            path: '/Users/dev/work/cortx/examples/skill-packs/basic/agents/reviewer.json',
+            relativePath: 'examples/skill-packs/basic/agents/reviewer.json',
+            sourceRoot: '/Users/dev/work/cortx',
+            promptPreview: '/review current changes',
+            toolMode: 'read-only',
+            approvalMode: 'deny',
+          },
+        ]}
         selectedWorkingDirectory="/Users/dev/work/cortx"
         toolMode="all"
         approvalMode="interactive"
@@ -155,6 +166,7 @@ describe('web desktop UI', () => {
         onResume={() => undefined}
         onCreateSession={() => undefined}
         onCreateSessionForCurrentProject={() => undefined}
+        onLaunchAgentSpec={() => undefined}
         onSelectProject={() => undefined}
         onSwitchSession={() => undefined}
         onToolModeChange={() => undefined}
@@ -165,6 +177,9 @@ describe('web desktop UI', () => {
     expect(html).toContain('Cortx');
     expect(html).toContain('Agent workspace');
     expect(html).toContain('Projects');
+    expect(html).toContain('Agents');
+    expect(html).toContain('basic-reviewer');
+    expect(html).toContain('/review current changes');
     expect(html).toContain('Add Project');
     expect(html).toContain('Add project');
     expect(html).toContain('Working');

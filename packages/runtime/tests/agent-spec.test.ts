@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, LanguageMessage } from '@cortx/sdk';
-import { CortxRuntime, loadAgentSpecFile, parseAgentSpec } from '../src/index';
+import { CortxRuntime, discoverAgentSpecs, loadAgentSpecFile, parseAgentSpec } from '../src/index';
 
 let tmpDir: string;
 
@@ -135,6 +135,47 @@ describe('AgentSpec asset launch', () => {
     expect(textOf(captured.messages?.at(-1))).toBe('file task');
     expect(captured.tools ?? []).toEqual([]);
     runtime.dispose();
+  });
+
+  test('discovers AgentSpec JSON files from agents directories', async () => {
+    const agentsDir = join(tmpDir, 'packs', 'review', 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, 'reviewer.json'),
+      JSON.stringify({
+        name: 'reviewer',
+        prompt: 'Review the current diff and report correctness findings.',
+        workingDirectory: tmpDir,
+        toolMode: 'read-only',
+        approvalMode: 'deny',
+        metadata: { source: 'test' },
+      }),
+      'utf8',
+    );
+    writeFileSync(join(agentsDir, 'README.md'), 'ignored', 'utf8');
+
+    const specs = await discoverAgentSpecs({ roots: [tmpDir] });
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toMatchObject({
+      name: 'reviewer',
+      workingDirectory: tmpDir,
+      toolMode: 'read-only',
+      approvalMode: 'deny',
+      metadata: { source: 'test' },
+    });
+    expect(specs[0].path).toBe(join(agentsDir, 'reviewer.json'));
+    expect(specs[0].relativePath).toBe('packs/review/agents/reviewer.json');
+    expect(specs[0].promptPreview).toContain('Review the current diff');
+  });
+
+  test('skips invalid specs by default and throws in strict discovery mode', async () => {
+    const agentsDir = join(tmpDir, 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(agentsDir, 'invalid.json'), JSON.stringify({ prompt: '' }), 'utf8');
+
+    await expect(discoverAgentSpecs({ roots: [tmpDir] })).resolves.toEqual([]);
+    await expect(discoverAgentSpecs({ roots: [tmpDir], strict: true })).rejects.toThrow('Invalid AgentSpec');
   });
 });
 

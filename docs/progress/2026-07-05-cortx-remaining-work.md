@@ -22,7 +22,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
 - P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
 - P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试与文档。
-- P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，server 暴露 `POST /agent-specs/launch`，Web bridge 与 TUI remote client 可直接调用该 endpoint；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的 skill-pack 示例。
+- P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；server 暴露 `GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge 与 Web sidebar 已能列出并启动发现到的 AgentSpec；TUI remote client 仍有直接 launch endpoint；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
@@ -37,7 +37,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`758 pass / 0 fail / 2144 expect`
+- 当前全量测试：`bun test` 通过，`768 pass / 0 fail / 2194 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -169,14 +169,14 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 当前状态
 
-AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-only 或 skill-pack-backed session。Runtime 支持 JSON 文件启动，server/Web bridge/TUI remote client 已有启动入口。
+AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-only 或 skill-pack-backed session。Runtime 支持 JSON 文件启动和 `agents/` 目录 discovery；server 提供 scoped `GET /agent-specs` listing 与 launch endpoint；Web bridge 和 sidebar 已能展示并启动发现到的 AgentSpec，启动后仍进入普通 runtime session。
 
 ### 缺口
 
-- 缺安装、发现、启用入口。
+- 缺安装、启用入口。
 - 缺 manifest 规范和版本策略。
 - 官方示例包已有 basic 版本，但还缺覆盖更多真实官方插件集场景的示例。
-- 缺 Web/TUI 中面向用户的 AgentSpec 选择器；底层 API 已就绪。
+- TUI 中还缺面向用户的 AgentSpec 选择器；Web 已有第一版 selector，仍需真实 provider dogfood 打磨。
 - 缺 skill pack 与普通 `SKILL.md`、companion files、prompt template 的完整官方约定。
 
 ### 后续验收

@@ -39,14 +39,18 @@ describe('skill pack assets', () => {
   test('resolves skills and launches a skill-backed AgentSpec without core changes', async () => {
     const packDir = join(tmpDir, 'pack');
     const skillDir = join(packDir, 'skills', 'commit');
+    const agentsDir = join(packDir, 'agents');
     mkdirSync(skillDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
     writeFileSync(
       join(skillDir, 'SKILL.md'),
       '---\nname: commit\ndescription: Commit changes\n---\nExpanded pack skill: $ARGUMENTS',
     );
+    writeFileSync(join(agentsDir, 'commit-agent.json'), JSON.stringify({ prompt: '/commit changes' }), 'utf8');
 
     const pack = await resolveSkillPack(packDir);
     expect(pack.skillPaths).toEqual([join(packDir, 'skills')]);
+    expect(pack.agentSpecPaths).toEqual([agentsDir]);
 
     const captured: { messages?: LanguageMessage[] } = {};
     const runtime = new CortxRuntime({

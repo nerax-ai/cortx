@@ -3,6 +3,7 @@ import { AgentStore } from '@cortx/store';
 import { useStore } from './hooks/use-store';
 import {
   EventBridge,
+  type WebAgentSpecInfo,
   type WebApprovalMode,
   type WebRuntimeSessionInfo,
   type WebWorkspaceToolMode,
@@ -22,6 +23,7 @@ export function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [session, setSession] = useState<WebRuntimeSessionInfo | null>(null);
   const [sessions, setSessions] = useState<WebRuntimeSessionInfo[]>([]);
+  const [agentSpecs, setAgentSpecs] = useState<WebAgentSpecInfo[]>([]);
   const [selectedWorkingDirectory, setSelectedWorkingDirectory] = useState<string | null>(null);
   const [toolMode, setToolMode] = useState<WebWorkspaceToolMode>('all');
   const [approvalMode, setApprovalMode] = useState<WebApprovalMode>('interactive');
@@ -47,8 +49,10 @@ export function App() {
         await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' });
       await bridge.connect(target.id);
       const nextSessions = await bridge.listSessions();
+      const discoveredAgentSpecs = await bridge.listAgentSpecs();
       activateSession(target);
       setSessions(nextSessions);
+      setAgentSpecs(discoveredAgentSpecs);
       setConnected(true);
     } catch (err) {
       bridge.disconnect();
@@ -70,6 +74,11 @@ export function App() {
     setSessions(await bridgeRef.current.listSessions());
   }
 
+  async function refreshAgentSpecs() {
+    if (!bridgeRef.current) return;
+    setAgentSpecs(await bridgeRef.current.listAgentSpecs());
+  }
+
   async function createWorkspaceSession(request: {
     workingDirectory: string;
   }) {
@@ -83,6 +92,7 @@ export function App() {
     const nextSessions = await bridgeRef.current.listSessions();
     activateSession(created);
     setSessions(nextSessions);
+    await refreshAgentSpecs();
   }
 
   async function switchSession(sessionId: string) {
@@ -115,6 +125,15 @@ export function App() {
     activateSession(created);
     await refreshSessions();
     return created;
+  }
+
+  async function launchAgentSpec(path: string) {
+    if (!bridgeRef.current) return;
+    const launched = await bridgeRef.current.launchAgentSpec({ path });
+    await bridgeRef.current.connect(launched.id);
+    activateSession(launched);
+    await refreshSessions();
+    await refreshAgentSpecs();
   }
 
   async function sendPrompt(message: string) {
@@ -162,6 +181,7 @@ export function App() {
         state={state}
         session={session}
         sessions={sessions}
+        agentSpecs={agentSpecs}
         selectedWorkingDirectory={selectedWorkingDirectory}
         toolMode={toolMode}
         approvalMode={approvalMode}
@@ -170,6 +190,7 @@ export function App() {
         onResume={handleResume}
         onCreateSession={createWorkspaceSession}
         onCreateSessionForCurrentProject={createSessionForCurrentProject}
+        onLaunchAgentSpec={launchAgentSpec}
         onSelectProject={selectProject}
         onSwitchSession={switchSession}
         onToolModeChange={setToolMode}

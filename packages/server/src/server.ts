@@ -7,12 +7,14 @@ import { dirname, resolve } from 'node:path';
 import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import {
   CortxRuntime,
+  discoverAgentSpecs,
   isRuntimeError,
   loadAgentSpecFile,
   parseAgentSpec,
   resolveWorkspace,
   RuntimeError,
   type AgentSpec,
+  type DiscoveredAgentSpec,
   type RuntimeApprovalMode,
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
@@ -249,6 +251,26 @@ async function listAuthorizedSessions(runtime: CortxRuntime, c: Context, config:
   return visible;
 }
 
+async function listAuthorizedAgentSpecs(c: Context, config: ServerConfig): Promise<DiscoveredAgentSpec[]> {
+  const principal = getAuthPrincipal(c);
+  const discovered = await discoverAgentSpecs({
+    roots: getPrincipalAllowedWorkspaceRoots(config, principal),
+    strict: false,
+  });
+  const visible: DiscoveredAgentSpec[] = [];
+  for (const spec of discovered) {
+    try {
+      await authorizeWorkspace(config, principal, dirname(spec.path));
+      if (spec.workingDirectory) await authorizeWorkspace(config, principal, spec.workingDirectory);
+      visible.push(spec);
+    } catch (error) {
+      if (isRuntimeError(error) && (error.kind === 'permission_denied' || error.kind === 'invalid_workspace')) continue;
+      throw error;
+    }
+  }
+  return visible;
+}
+
 async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, c: Context, path: string) {
   const principal = getAuthPrincipal(c);
   const defaultWorkingDirectory = config.defaultWorkingDirectory ?? process.cwd();
@@ -357,6 +379,15 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
           ? await launchAgentSpecPath(runtime, config, c, specPath)
           : await launchInlineAgentSpec(runtime, config, c, body.spec ?? body);
       return c.json({ sessionId: session.id, session }, 201);
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.get('/agent-specs', async (c) => {
+    try {
+      return c.json({ agentSpecs: await listAuthorizedAgentSpecs(c, config) });
     } catch (error) {
       const response = errorResponse(error);
       return c.json(response.body, response.status);

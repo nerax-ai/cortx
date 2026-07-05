@@ -23,8 +23,8 @@ export type {
   RuntimeSessionSnapshot,
   RuntimeSubAgentSessionSnapshot,
 } from './durable/types.js';
-export { loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
-export type { AgentSpec } from './assets/agent-spec.js';
+export { discoverAgentSpecs, loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
+export type { AgentSpec, DiscoverAgentSpecsOptions, DiscoveredAgentSpec } from './assets/agent-spec.js';
 export { resolveSkillPack } from './assets/skill-pack.js';
 export type { SkillPack } from './assets/skill-pack.js';
 export {
