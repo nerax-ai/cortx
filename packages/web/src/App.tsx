@@ -5,6 +5,7 @@ import {
   EventBridge,
   type WebAgentSpecInfo,
   type WebApprovalMode,
+  type WebEventConnectionState,
   type WebRuntimeSessionInfo,
   type WebWorkspaceToolMode,
 } from './bridge/event-bridge';
@@ -13,6 +14,11 @@ import { DesktopWorkspace } from './components/DesktopWorkspace';
 import { AskUserDialog } from './components/AskUserDialog';
 
 const DEFAULT_API_KEY = import.meta.env.VITE_CORTX_API_KEY ?? 'cortx-dev-key';
+const INITIAL_EVENT_CONNECTION: WebEventConnectionState = {
+  phase: 'closed',
+  message: 'No active event stream',
+  updatedAt: 0,
+};
 
 export function App() {
   const [store] = useState(() => new AgentStore());
@@ -21,6 +27,7 @@ export function App() {
   const didAutoConnectRef = useRef(false);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [eventConnection, setEventConnection] = useState<WebEventConnectionState>(INITIAL_EVENT_CONNECTION);
   const [session, setSession] = useState<WebRuntimeSessionInfo | null>(null);
   const [sessions, setSessions] = useState<WebRuntimeSessionInfo[]>([]);
   const [agentSpecs, setAgentSpecs] = useState<WebAgentSpecInfo[]>([]);
@@ -40,7 +47,8 @@ export function App() {
 
   async function connect() {
     setConnectionError(null);
-    const bridge = new EventBridge(store, DEFAULT_API_KEY);
+    setEventConnection(INITIAL_EVENT_CONNECTION);
+    const bridge = new EventBridge(store, DEFAULT_API_KEY, '', { onConnectionState: setEventConnection });
     bridgeRef.current = bridge;
     try {
       const existing = await bridge.listSessions();
@@ -171,6 +179,30 @@ export function App() {
     setSession(next);
   }
 
+  async function handleRecoverEventStream() {
+    if (!session || !bridgeRef.current) {
+      await connect();
+      return;
+    }
+    try {
+      setConnectionError(null);
+      await bridgeRef.current.connect(session.id);
+      const [next, nextSessions] = await Promise.all([
+        bridgeRef.current.getSession(session.id),
+        bridgeRef.current.listSessions(),
+      ]);
+      activateSession(next);
+      setSessions(nextSessions);
+    } catch (err) {
+      setEventConnection({
+        phase: 'disconnected',
+        sessionId: session.id,
+        message: err instanceof Error ? err.message : String(err),
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
   if (!connected) {
     return <ConnectionStatus error={connectionError} onRetry={connect} />;
   }
@@ -185,9 +217,11 @@ export function App() {
         selectedWorkingDirectory={selectedWorkingDirectory}
         toolMode={toolMode}
         approvalMode={approvalMode}
+        eventConnection={eventConnection}
         onSend={sendPrompt}
         onAbort={handleAbort}
         onResume={handleResume}
+        onRecoverEventStream={handleRecoverEventStream}
         onCreateSession={createWorkspaceSession}
         onCreateSessionForCurrentProject={createSessionForCurrentProject}
         onLaunchAgentSpec={launchAgentSpec}

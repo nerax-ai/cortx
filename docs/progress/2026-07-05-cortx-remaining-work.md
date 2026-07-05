@@ -24,6 +24,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并进一步补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper；SDK 现在有运行时导出测试、`tsc --noEmit` 编译期 type-test 和官方插件作者文档。
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；server 暴露 `GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动和 `/agent` 选择器 overlay；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
+- Web event replay / recovery：Web bridge 现在暴露 typed event stream lifecycle，workspace header 能显示 replay/live/reconnecting/disconnected 状态、last event sequence，并提供不需要重新输入 API key 或 workspace 的 recover stream 操作。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
 - P2 server 权限边界：server 已支持多 API key principal、短 token 继承 principal scope、按 token workspace roots 过滤 session list，并在 session action/SSE/AgentSpec file launch 前做 scope 检查；tool/control mode scope 也不能被 request body 越权。
@@ -128,20 +129,20 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 - 右侧 inspector 展示 runtime facts、tool tabs、sub-agent tabs 和稳定空状态。
 - Approval dialog 已迁到 Base UI dialog，tool card 使用 Base UI collapsible，inspector 使用 Base UI tabs。
 - 连接页已有 connecting/error/retry 基础状态。
+- Workspace header 已有 event replay/live/reconnecting/disconnected 状态和 recover stream 操作。
 - Web 仍通过 `EventBridge` 访问 server/runtime，不直接依赖 core/runtime/workspace-tools 内部实现。
 
 ### 缺口
 
 - session 列表、多 project 分组和同 project 多 session 切换已有第一版；多目录、多 agent 管理体验还需要真实 dogfood 后继续打磨。
-- 缺完整 event replay UI。
 - Approval dialog、tool/result、sub-agent 可视化已有第一版，但还缺真实长会话 dogfood 后的细节打磨。
-- 缺断线、重连、恢复体验。
+- event replay 和断线恢复 UI 已有第一版，但还缺真实断网、server restart、长会话恢复场景 dogfood。
 - 缺真实 server/provider 环境下的 Web remote 长流程验证。
 
 ### 后续验收
 
 - Web 能连接 server，创建多个不同 workspace session。
-- Web 能显示 session 列表和 event replay。
+- Web 能显示 session 列表、event replay 状态和 recover stream 操作。
 - Web 能处理 approval、abort、resume、follow-up。
 - Web 不直接依赖 core/runtime/workspace-tools 内部实现。
 

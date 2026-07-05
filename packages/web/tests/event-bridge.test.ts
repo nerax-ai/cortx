@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { AgentStore } from '@cortx/store';
-import { EventBridge, EventBridgeError } from '../src/bridge/event-bridge';
+import { EventBridge, EventBridgeError, type WebEventConnectionState } from '../src/bridge/event-bridge';
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = (globalThis as unknown as { EventSource?: unknown }).EventSource;
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
+  onopen: ((event: unknown) => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   closed = false;
@@ -109,6 +110,69 @@ describe('EventBridge', () => {
     expect(calls[1].body).toEqual({ workingDirectory: '/repo/cortx', metadata: { source: 'web' } });
     expect(calls[0].auth).toBe('Bearer api-key');
     expect(calls.slice(1).every((call) => call.auth === 'Bearer short-token')).toBe(true);
+  });
+
+  test('emits event stream lifecycle state while replaying and reconnecting', async () => {
+    const states: WebEventConnectionState[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    const bridge = new EventBridge(store, 'api-key', '', {
+      onConnectionState: (state) => states.push(state),
+    });
+
+    await bridge.connect('sess_events');
+    FakeEventSource.instances[0].onopen?.({});
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        sequence: 4,
+        timestamp: 1234,
+        sessionId: 'sess_events',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'restored' },
+      }),
+    });
+    FakeEventSource.instances[0].onerror?.({});
+    bridge.disconnect();
+
+    expect(states.map((state) => state.phase)).toEqual([
+      'connecting',
+      'replaying',
+      'replaying',
+      'live',
+      'reconnecting',
+      'closed',
+    ]);
+    expect(states[3]).toMatchObject({
+      sessionId: 'sess_events',
+      lastSequence: 4,
+      lastEventAt: 1234,
+    });
+    expect(store.getState().messages.currentText).toBe('restored');
+    expect(FakeEventSource.instances[0].closed).toBe(true);
+  });
+
+  test('marks empty replay streams as live on heartbeat', async () => {
+    const phases: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key', '', {
+      onConnectionState: (state) => phases.push(state.phase),
+    });
+    await bridge.connect('sess_empty');
+    FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+
+    expect(phases).toEqual(['connecting', 'replaying', 'live']);
   });
 
   test('launches AgentSpec assets through the server bridge', async () => {

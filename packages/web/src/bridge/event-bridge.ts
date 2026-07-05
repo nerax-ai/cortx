@@ -4,6 +4,26 @@ import { createAuthClient, getAuthToken, apiFetch, type AuthClient } from './aut
 
 export type WebWorkspaceToolMode = 'none' | 'read-only' | 'coding' | 'all';
 export type WebApprovalMode = 'deny' | 'interactive' | 'full-access';
+export type WebEventConnectionPhase =
+  | 'connecting'
+  | 'replaying'
+  | 'live'
+  | 'reconnecting'
+  | 'disconnected'
+  | 'closed';
+
+export interface WebEventConnectionState {
+  phase: WebEventConnectionPhase;
+  sessionId?: string;
+  lastSequence?: number;
+  lastEventAt?: number;
+  message?: string;
+  updatedAt: number;
+}
+
+export interface EventBridgeOptions {
+  onConnectionState?: (state: WebEventConnectionState) => void;
+}
 
 export interface WebRuntimeSessionInfo {
   id: string;
@@ -98,8 +118,15 @@ export class EventBridge {
   readonly store: AgentStore;
   private client: AuthClient;
   private eventSource: EventSource | null = null;
+  private activeSessionId: string | null = null;
+  private connectionState: WebEventConnectionState = { phase: 'closed', updatedAt: Date.now() };
 
-  constructor(store: AgentStore, apiKey = '', baseUrl = '') {
+  constructor(
+    store: AgentStore,
+    apiKey = '',
+    baseUrl = '',
+    private readonly options: EventBridgeOptions = {},
+  ) {
     this.store = store;
     this.client = createAuthClient(apiKey, baseUrl);
   }
@@ -147,25 +174,76 @@ export class EventBridge {
 
   async connect(sessionId: string): Promise<void> {
     this.disconnect();
+    this.activeSessionId = sessionId;
+    this.emitConnection({ phase: 'connecting', sessionId, message: 'Opening event stream' });
     this.store.reset(sessionId);
-    const token = await getAuthToken(this.client);
-    const url = `${this.client.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?format=envelope&token=${encodeURIComponent(token)}`;
-    this.eventSource = new EventSource(url);
-    this.eventSource.onmessage = (e) => {
-      try {
-        if (!e.data || e.data === '{}') return;
-        const parsed = JSON.parse(e.data) as AgentEvent | RuntimeAgentEventEnvelope;
-        const event = isEnvelope(parsed) ? normalizeEvent(parsed.event) : normalizeEvent(parsed);
-        if (event.type) {
-          this.store.dispatch(event, isEnvelope(parsed) ? parsed.timestamp : undefined);
+    try {
+      const token = await getAuthToken(this.client);
+      const url = `${this.client.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?format=envelope&token=${encodeURIComponent(token)}`;
+      const source = new EventSource(url);
+      this.eventSource = source;
+      this.emitConnection({ phase: 'replaying', sessionId, message: 'Restoring event history' });
+      source.onopen = () => {
+        if (this.eventSource === source) {
+          this.emitConnection({ phase: 'replaying', sessionId, message: 'Restoring event history' });
         }
-      } catch {
-        /* ignore parse errors */
+      };
+      source.onmessage = (e) => this.handleSseMessage(source, sessionId, e.data);
+      source.onerror = () => {
+        if (this.eventSource === source) {
+          this.emitConnection({ phase: 'reconnecting', sessionId, message: 'Event stream interrupted' });
+        }
+      };
+    } catch (error) {
+      this.emitConnection({
+        phase: 'disconnected',
+        sessionId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  private handleSseMessage(source: EventSource, sessionId: string, data: string): void {
+    if (this.eventSource !== source) return;
+    try {
+      if (!data || data === '{}') {
+        this.emitConnection({ phase: 'live', sessionId, message: 'Live event stream' });
+        return;
       }
+      const parsed = JSON.parse(data) as AgentEvent | RuntimeAgentEventEnvelope;
+      const envelope = isEnvelope(parsed) ? parsed : null;
+      const event = envelope ? normalizeEvent(envelope.event) : normalizeEvent(parsed as AgentEvent);
+      if (event.type) {
+        this.store.dispatch(event, envelope?.timestamp);
+        this.emitConnection({
+          phase: 'live',
+          sessionId,
+          lastSequence: envelope?.sequence,
+          lastEventAt: envelope?.timestamp,
+          message: 'Live event stream',
+        });
+      }
+    } catch {
+      /* ignore parse errors */
+    }
+  }
+
+  private emitConnection(next: Omit<WebEventConnectionState, 'updatedAt'>): void {
+    const sameSession = next.sessionId !== undefined && next.sessionId === this.connectionState.sessionId;
+    this.connectionState = {
+      phase: next.phase,
+      sessionId: next.sessionId,
+      lastSequence: next.lastSequence ?? (sameSession ? this.connectionState.lastSequence : undefined),
+      lastEventAt: next.lastEventAt ?? (sameSession ? this.connectionState.lastEventAt : undefined),
+      message: next.message,
+      updatedAt: Date.now(),
     };
-    this.eventSource.onerror = () => {
-      // Auto-reconnect is handled by EventSource
-    };
+    this.options.onConnectionState?.(this.connectionState);
+  }
+
+  getConnectionState(): WebEventConnectionState {
+    return this.connectionState;
   }
 
   async prompt(sessionId: string, message: string): Promise<void> {
@@ -213,7 +291,12 @@ export class EventBridge {
   }
 
   disconnect(): void {
+    const sessionId = this.activeSessionId ?? undefined;
     this.eventSource?.close();
     this.eventSource = null;
+    this.activeSessionId = null;
+    if (sessionId) {
+      this.emitConnection({ phase: 'closed', sessionId, message: 'Event stream closed' });
+    }
   }
 }

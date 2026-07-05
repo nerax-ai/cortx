@@ -1,5 +1,11 @@
 import type { AgentState } from '@cortx/store';
-import type { WebAgentSpecInfo, WebApprovalMode, WebRuntimeSessionInfo, WebWorkspaceToolMode } from '../bridge/event-bridge';
+import type {
+  WebAgentSpecInfo,
+  WebApprovalMode,
+  WebEventConnectionState,
+  WebRuntimeSessionInfo,
+  WebWorkspaceToolMode,
+} from '../bridge/event-bridge';
 import { surface } from '../design';
 import { ChatView } from './ChatView';
 import { InspectorPanel } from './InspectorPanel';
@@ -14,9 +20,11 @@ interface DesktopWorkspaceProps {
   selectedWorkingDirectory: string | null;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
+  eventConnection: WebEventConnectionState;
   onSend: (message: string) => void;
   onAbort: () => void;
   onResume: () => void;
+  onRecoverEventStream: () => void | Promise<void>;
   onCreateSession: (request: {
     workingDirectory: string;
   }) => void | Promise<void>;
@@ -36,9 +44,11 @@ export function DesktopWorkspace({
   selectedWorkingDirectory,
   toolMode,
   approvalMode,
+  eventConnection,
   onSend,
   onAbort,
   onResume,
+  onRecoverEventStream,
   onCreateSession,
   onCreateSessionForCurrentProject,
   onLaunchAgentSpec,
@@ -75,6 +85,8 @@ export function DesktopWorkspace({
           tokenUsage={state.tokenUsage}
           elapsed={state.totalElapsed}
           iteration={state.iteration}
+          eventConnection={eventConnection}
+          onRecoverEventStream={onRecoverEventStream}
         />
         <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_344px]">
           <ChatView

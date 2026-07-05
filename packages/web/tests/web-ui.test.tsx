@@ -9,6 +9,7 @@ import { PromptInput } from '../src/components/PromptInput';
 import { ApprovalDialogBody } from '../src/components/AskUserDialog';
 import { ConnectionStatus } from '../src/components/ConnectionStatus';
 import { MarkdownContent } from '../src/components/MarkdownContent';
+import { WorkspaceHeader } from '../src/components/WorkspaceHeader';
 
 function makeState(overrides: Partial<AgentState> = {}): AgentState {
   return {
@@ -161,9 +162,11 @@ describe('web desktop UI', () => {
         selectedWorkingDirectory="/Users/dev/work/cortx"
         toolMode="all"
         approvalMode="interactive"
+        eventConnection={{ phase: 'live', sessionId: 'sess_1234567890', lastSequence: 7, updatedAt: 3 }}
         onSend={() => undefined}
         onAbort={() => undefined}
         onResume={() => undefined}
+        onRecoverEventStream={() => undefined}
         onCreateSession={() => undefined}
         onCreateSessionForCurrentProject={() => undefined}
         onLaunchAgentSpec={() => undefined}
@@ -183,6 +186,8 @@ describe('web desktop UI', () => {
     expect(html).toContain('Add Project');
     expect(html).toContain('Add project');
     expect(html).toContain('Working');
+    expect(html).toContain('Live');
+    expect(html).toContain('event 7');
     expect(html).toContain('work/cortx');
     expect(html).toContain('2 sessions');
     expect(html).toContain('read-only');
@@ -193,6 +198,68 @@ describe('web desktop UI', () => {
     expect(html).toContain('Tool call');
     expect(html).toContain('Sub-agent');
     expect(html).toContain('I will inspect the changed files.');
+  });
+
+  test('WorkspaceHeader renders recover action for degraded event streams', () => {
+    const reconnecting = renderToStaticMarkup(
+      <WorkspaceHeader
+        status="idle"
+        session={{
+          id: 'sess_1234567890',
+          createdAt: 1,
+          lastActivityAt: 2,
+          workingDirectory: '/Users/dev/work/cortx',
+          model: 'default',
+          toolMode: 'all',
+          approvalMode: 'interactive',
+          isRunning: false,
+          eventCount: 7,
+        }}
+        tokenUsage={{ inputTokens: 100, outputTokens: 20 }}
+        elapsed={12}
+        iteration={0}
+        eventConnection={{
+          phase: 'reconnecting',
+          sessionId: 'sess_1234567890',
+          lastSequence: 12,
+          message: 'Event stream interrupted',
+          updatedAt: 4,
+        }}
+        onRecoverEventStream={() => undefined}
+      />,
+    );
+    const live = renderToStaticMarkup(
+      <WorkspaceHeader
+        status="idle"
+        session={{
+          id: 'sess_1234567890',
+          createdAt: 1,
+          lastActivityAt: 2,
+          workingDirectory: '/Users/dev/work/cortx',
+          model: 'default',
+          toolMode: 'all',
+          approvalMode: 'interactive',
+          isRunning: false,
+          eventCount: 7,
+        }}
+        tokenUsage={{ inputTokens: 100, outputTokens: 20 }}
+        elapsed={12}
+        iteration={0}
+        eventConnection={{
+          phase: 'live',
+          sessionId: 'sess_1234567890',
+          lastSequence: 12,
+          updatedAt: 4,
+        }}
+        onRecoverEventStream={() => undefined}
+      />,
+    );
+
+    expect(reconnecting).toContain('Reconnecting');
+    expect(reconnecting).toContain('event 12');
+    expect(reconnecting).toContain('Recover stream');
+    expect(live).toContain('Live');
+    expect(live).not.toContain('Recover stream');
   });
 
   test('ChatView deduplicates sub-agent tool activity in the conversation', () => {
