@@ -11,9 +11,12 @@ export interface WebRuntimeSessionInfo {
   lastActivityAt: number;
   workingDirectory: string;
   model: string;
+  system?: string;
   maxIterations?: number;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
+  capabilities?: Record<string, unknown>;
+  skillPaths?: string[];
   isRunning: boolean;
   eventCount: number;
   metadata?: Record<string, unknown>;
@@ -27,6 +30,11 @@ export interface WebCreateSessionRequest {
   toolMode?: WebWorkspaceToolMode;
   approvalMode?: WebApprovalMode;
   metadata?: Record<string, unknown>;
+}
+
+export interface WebAgentSpecLaunchRequest {
+  spec?: Record<string, unknown>;
+  path?: string;
 }
 
 export class EventBridgeError extends Error {
@@ -105,6 +113,16 @@ export class EventBridge {
     await throwIfError(res, 'List sessions failed');
     const data = (await res.json()) as { sessions: WebRuntimeSessionInfo[] };
     return data.sessions;
+  }
+
+  async launchAgentSpec(request: WebAgentSpecLaunchRequest): Promise<WebRuntimeSessionInfo> {
+    const res = await apiFetch(this.client, '/agent-specs/launch', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+    await throwIfError(res, 'Launch AgentSpec failed');
+    const data = (await res.json()) as { session: WebRuntimeSessionInfo };
+    return data.session;
   }
 
   async connect(sessionId: string): Promise<void> {

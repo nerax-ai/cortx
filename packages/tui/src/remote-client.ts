@@ -19,6 +19,11 @@ export interface RemoteRuntimeClientOptions {
   eventSourceFactory?: EventSourceFactory;
 }
 
+export interface RemoteAgentSpecLaunchRequest {
+  spec?: Record<string, unknown>;
+  path?: string;
+}
+
 export class RemoteRuntimeError extends Error {
   constructor(
     message: string,
@@ -81,6 +86,14 @@ export class RemoteRuntimeClient {
 
   async getSession(sessionId: string): Promise<RuntimeSessionInfo> {
     const data = await this.request<{ session: RuntimeSessionInfo }>(`/sessions/${encodeURIComponent(sessionId)}`);
+    return data.session;
+  }
+
+  async launchAgentSpec(request: RemoteAgentSpecLaunchRequest): Promise<RuntimeSessionInfo> {
+    const data = await this.request<{ session: RuntimeSessionInfo }>('/agent-specs/launch', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
     return data.session;
   }
 

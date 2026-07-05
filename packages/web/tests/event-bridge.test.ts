@@ -111,6 +111,47 @@ describe('EventBridge', () => {
     expect(calls.slice(1).every((call) => call.auth === 'Bearer short-token')).toBe(true);
   });
 
+  test('launches AgentSpec assets through the server bridge', async () => {
+    const calls: Array<{ path: string; auth: string | null; body?: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push({
+        path: url.pathname,
+        auth: new Headers(init?.headers).get('Authorization'),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/agent-specs/launch') {
+        return jsonResponse({
+          session: {
+            id: 'sess_spec',
+            createdAt: 1,
+            lastActivityAt: 2,
+            workingDirectory: '/repo/cortx',
+            model: 'default',
+            toolMode: 'read-only',
+            approvalMode: 'deny',
+            isRunning: true,
+            eventCount: 1,
+            metadata: { agentSpec: 'reviewer' },
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key');
+    const session = await bridge.launchAgentSpec({ path: 'examples/skill-packs/basic/agents/reviewer.json' });
+
+    expect(session).toMatchObject({
+      id: 'sess_spec',
+      metadata: { agentSpec: 'reviewer' },
+    });
+    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/agent-specs/launch']);
+    expect(calls[1].auth).toBe('Bearer short-token');
+    expect(calls[1].body).toEqual({ path: 'examples/skill-packs/basic/agents/reviewer.json' });
+  });
+
   test('surfaces typed server errors', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');

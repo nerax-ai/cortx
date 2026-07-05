@@ -2,7 +2,8 @@
 date: 2026-07-05
 topic: cortx-remaining-work
 baseline_commit: c06a513
-status: open
+latest_audit_commit: 9f55fee
+status: partially-closed
 language: zh-CN
 ---
 
@@ -13,6 +14,22 @@ language: zh-CN
 Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最小 agent kernel，`@cortx/runtime` 承担多 session、多目录、workspace tools、skills、sub-agent、approval、AgentSpec 和 SkillPack 等 host 能力，server/TUI/Web 也已经按薄前端和 runtime host 分层。
 
 因此当前缺口不再是“核心方向是否正确”，而是从架构底座走向长期可用产品所需的最后几块：真实持久化、完整生命周期、SDK 易用性、TUI/Web 体验和真实端到端验证。
+
+## 2026-07-05 最新审计更新
+
+`9f55fee feat(runtime): close durable agent lifecycle gaps` 已经关闭本文件原先最硬的 P0/P1 后端产品化缺口：
+
+- P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
+- P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
+- P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试与文档。
+- P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，server 暴露 `POST /agent-specs/launch`，Web bridge 与 TUI remote client 可直接调用该 endpoint；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的 skill-pack 示例。
+- Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
+
+仍然没有被这轮完全关闭的项：
+
+- TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连、approval + abort/resume + sub-agent 组合流程。
+- durable event store、schema migration、多用户 server 权限模型和 streaming-time token preemption 仍属于后续运维级增强。
+- `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
 
