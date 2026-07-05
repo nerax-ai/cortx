@@ -31,6 +31,7 @@ export {
   AGENT_TOOL_AFTER,
   AGENT_TOOL_BEFORE,
   CORTX_EXTENSION_TYPES,
+  CORTX_EXTENSION_SCHEMA_VERSION,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
   defineCapabilityContribution,
@@ -49,6 +50,8 @@ export {
   defineToolAfter,
   defineToolBefore,
   mergeAgentRuntimeExtensions,
+  normalizeCortxCapabilityContribution,
+  normalizeRuntimeCapabilityDefinition,
   registerRuntimeCapability,
 } from './extensions.js';
 
@@ -77,12 +80,16 @@ export type {
   AgentToolBeforeInput,
   AgentToolBeforeResult,
   AnyCortxCapabilityContribution,
+  AnyNormalizedCortxCapabilityContribution,
   CortxCapabilityContribution,
+  CortxExtensionSchemaVersion,
   CortxExtensionType,
   CortxContributionFactory,
   CortxFactoryContext,
   CortxFactoryMap,
   CortxPluginContext,
+  NormalizedCortxCapabilityContribution,
+  NormalizedRuntimeCapabilityDefinition,
   RuntimeCapabilityDefinition,
 } from './extensions.js';
 

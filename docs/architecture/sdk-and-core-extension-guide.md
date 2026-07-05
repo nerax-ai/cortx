@@ -31,6 +31,8 @@ SDK 也提供薄 helper，用于让插件代码保持类型清晰：
 - `defineContributionFactory(type, factory)`
 - `defineCapabilityContribution(type, id, factory, options?)`
 - `defineRuntimeCapability(capability)`
+- `normalizeCortxCapabilityContribution(contribution)`
+- `normalizeRuntimeCapabilityDefinition(capability)`
 - `registerRuntimeCapability(ctx, capability)`
 
 这些 helper 不做运行时包装，只保留 TypeScript 的窄类型推断。
@@ -167,6 +169,22 @@ export default defineCortxPlugin({
 - 用 `defineCapabilityContribution()` 绑定 extension type、贡献 id、factory 和可选展示信息。
 - 用 `defineRuntimeCapability()` 组合一组有顺序的 contributions。
 - 用 `registerRuntimeCapability()` 在插件 `setup()` 中逐条注册到现有 registry。
+
+### SDK capability schemaVersion
+
+SDK capability declaration 当前版本是 `CORTX_EXTENSION_SCHEMA_VERSION = 1`。
+普通插件作者不需要手写这个字段：`defineCapabilityContribution()` 和 `defineRuntimeCapability()` 会把缺省版本和历史 `schemaVersion: 0` 归一成当前 v1。
+如果显式传入未来未支持版本，SDK 会在 helper 边界直接抛出 schemaVersion 错误，而不是等到 core resolver 才发现贡献 shape 不匹配。
+
+这条版本边界只覆盖 SDK helper 声明对象：
+
+- `defineCapabilityContribution({ schemaVersion, type, id, factory, options })`
+- `defineRuntimeCapability({ schemaVersion, id, contributions })`
+- `normalizeCortxCapabilityContribution()`
+- `normalizeRuntimeCapabilityDefinition()`
+
+直接使用 `ctx.register(type, id, factory)` 的插件仍然有效；它们走 `@nerax-ai/plugin` 的 manifest/registry 语义，不被强制改造成 capability object。
+也就是说，schemaVersion 是官方 SDK authoring helper 的演进边界，不是 runtime mounting、插件安装或 marketplace 协议。
 
 这些 helper 的类型测试位于 `packages/sdk/type-tests/`。
 如果把 `agent.sessionPolicy` 的 factory 注册成 `agent.tool`，`bun run --cwd packages/sdk type-test` 会在编译期失败。

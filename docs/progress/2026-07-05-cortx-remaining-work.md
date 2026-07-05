@@ -21,7 +21,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 - P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
 - P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
-- P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并进一步补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper；SDK 现在有运行时导出测试、`tsc --noEmit` 编译期 type-test 和官方插件作者文档。
+- P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并进一步补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper；SDK capability/contribution declaration 已有 `CORTX_EXTENSION_SCHEMA_VERSION = 1` 和第一版 schema migration，缺省/v0 helper 声明会归一到当前 v1，future schema 会明确失败；SDK 现在有运行时导出测试、`tsc --noEmit` 编译期 type-test 和官方插件作者文档。
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；AgentSpec、SkillPack manifest 和本地 SkillPack install registry 已有第一版 schema migration，缺省版本和 v0 会迁到当前 v1，不支持的未来版本继续明确失败；runtime 已新增本地 SkillPack install registry，session 和 AgentSpec 均可通过已安装 pack id/name 启用 skills；server 暴露 `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec，也能列出/安装 SkillPack 并为新 session 选择 pack；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动、`/agent` 选择器 overlay，以及 `/skill-packs`、`/skill-pack install`、`/skill-pack session` 的第一版 SkillPack 入口；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - Web event replay / recovery：Web bridge 现在暴露 typed event stream lifecycle，workspace header 能显示 replay/live/reconnecting/disconnected 状态、last event sequence，并提供不需要重新输入 API key 或 workspace 的 recover stream 操作。
@@ -42,7 +42,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`829 pass / 0 fail / 2434 expect`
+- 当前全量测试：`bun test` 通过，`830 pass / 0 fail / 2442 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -155,13 +155,13 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 当前状态
 
-底层 extension/policy/tool/event 类型已经拆清楚，core/runtime 边界也比之前稳定。SDK 已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper、编译期 type-test 和插件作者文档。
+底层 extension/policy/tool/event 类型已经拆清楚，core/runtime 边界也比之前稳定。SDK 已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper、capability/contribution schemaVersion migration、编译期 type-test 和插件作者文档。
 
 ### 缺口
 
 - helper 已有更完整的第一版，包括 `defineRuntimeCapability()` 等组合 helper；后续还可以继续打磨官方插件模板脚手架。
 - 已有 `tsc --noEmit` 编译期类型测试；后续可按需要升级为 tsd 或更完整的 dtslint 风格套件。
-- 缺 extension schemaVersion 和 migration 策略。
+- extension schemaVersion 和 migration 第一版已落地；后续如果出现 v2/v3，需要补正式 migration matrix 和 release policy。
 - 官方插件开发手册已有第一版，后续仍需要更多官方示例包和错误示例。
 - 缺错误示例、推荐组合方式和最小可运行样例。
 

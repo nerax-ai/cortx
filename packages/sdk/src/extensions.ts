@@ -14,6 +14,7 @@ export const AGENT_ERROR_RECOVER = 'agent.errorRecover' as const;
 export const AGENT_CONTEXT_OVERFLOW = 'agent.contextOverflow' as const;
 export const AGENT_EVENT_OBSERVER = 'agent.eventObserver' as const;
 export const AGENT_SESSION_POLICY = 'agent.sessionPolicy' as const;
+export const CORTX_EXTENSION_SCHEMA_VERSION = 1;
 
 export const AGENT_EXTENSION_TYPES = [
   AGENT_TOOL,
@@ -31,6 +32,7 @@ export const CORTX_EXTENSION_TYPES = [...AGENT_EXTENSION_TYPES] as const;
 
 export type AgentExtensionType = (typeof AGENT_EXTENSION_TYPES)[number];
 export type CortxExtensionType = (typeof CORTX_EXTENSION_TYPES)[number];
+export type CortxExtensionSchemaVersion = 0 | typeof CORTX_EXTENSION_SCHEMA_VERSION;
 
 export interface CortxFactoryContext {
   instanceId: string;
@@ -236,6 +238,7 @@ export function defineContributionFactory<T extends CortxExtensionType>(
 }
 
 export interface CortxCapabilityContribution<T extends CortxExtensionType> {
+  schemaVersion?: CortxExtensionSchemaVersion;
   type: T;
   id: string;
   factory: CortxContributionFactory<T>;
@@ -246,9 +249,27 @@ export type AnyCortxCapabilityContribution = {
   [T in CortxExtensionType]: CortxCapabilityContribution<T>;
 }[CortxExtensionType];
 
+export type NormalizedCortxCapabilityContribution<T extends CortxExtensionType> = Omit<
+  CortxCapabilityContribution<T>,
+  'schemaVersion'
+> & {
+  schemaVersion: typeof CORTX_EXTENSION_SCHEMA_VERSION;
+};
+
+export type AnyNormalizedCortxCapabilityContribution = {
+  [T in CortxExtensionType]: NormalizedCortxCapabilityContribution<T>;
+}[CortxExtensionType];
+
+type NormalizeCapabilityContributions<TContributions extends readonly AnyCortxCapabilityContribution[]> = {
+  readonly [K in keyof TContributions]: TContributions[K] extends CortxCapabilityContribution<infer T>
+    ? NormalizedCortxCapabilityContribution<T>
+    : never;
+};
+
 export interface RuntimeCapabilityDefinition<
   TContributions extends readonly AnyCortxCapabilityContribution[] = readonly AnyCortxCapabilityContribution[],
 > {
+  schemaVersion?: CortxExtensionSchemaVersion;
   id: string;
   displayName?: string;
   description?: string;
@@ -256,37 +277,97 @@ export interface RuntimeCapabilityDefinition<
   metadata?: Record<string, unknown>;
 }
 
+export type NormalizedRuntimeCapabilityDefinition<
+  TContributions extends readonly AnyCortxCapabilityContribution[] = readonly AnyCortxCapabilityContribution[],
+> = Omit<RuntimeCapabilityDefinition<TContributions>, 'schemaVersion' | 'contributions'> & {
+  schemaVersion: typeof CORTX_EXTENSION_SCHEMA_VERSION;
+  contributions: NormalizeCapabilityContributions<TContributions>;
+};
+
 export type CortxPluginContext = PluginContext<CortxExtensionType, CortxFactoryMap>;
 
+export function defineCapabilityContribution<TContribution extends AnyCortxCapabilityContribution>(
+  contribution: TContribution,
+): TContribution extends CortxCapabilityContribution<infer T> ? NormalizedCortxCapabilityContribution<T> : never;
 export function defineCapabilityContribution<T extends CortxExtensionType>(
   type: T,
   id: string,
   factory: CortxContributionFactory<T>,
   options?: ExtensionOptions,
-): CortxCapabilityContribution<T> {
-  return options === undefined ? { type, id, factory } : { type, id, factory, options };
+): NormalizedCortxCapabilityContribution<T>;
+export function defineCapabilityContribution(
+  typeOrContribution: CortxExtensionType | AnyCortxCapabilityContribution,
+  id?: string,
+  factory?: CortxContributionFactory<CortxExtensionType>,
+  options?: ExtensionOptions,
+): AnyNormalizedCortxCapabilityContribution {
+  if (isCapabilityContribution(typeOrContribution)) {
+    return normalizeCortxCapabilityContribution(typeOrContribution) as AnyNormalizedCortxCapabilityContribution;
+  }
+  if (id === undefined || factory === undefined) {
+    throw new Error('Cortx capability contribution requires type, id, and factory');
+  }
+  return normalizeCortxCapabilityContribution(
+    options === undefined
+      ? { type: typeOrContribution, id, factory }
+      : { type: typeOrContribution, id, factory, options },
+  ) as AnyNormalizedCortxCapabilityContribution;
 }
 
 export function defineRuntimeCapability<const TContributions extends readonly AnyCortxCapabilityContribution[]>(
   definition: RuntimeCapabilityDefinition<TContributions>,
-): RuntimeCapabilityDefinition<TContributions> {
-  return definition;
+): NormalizedRuntimeCapabilityDefinition<TContributions> {
+  return normalizeRuntimeCapabilityDefinition(definition);
 }
 
 export function registerRuntimeCapability(
   ctx: CortxPluginContext,
   capability: RuntimeCapabilityDefinition,
 ): void {
-  for (const contribution of capability.contributions) {
+  for (const contribution of normalizeRuntimeCapabilityDefinition(capability).contributions) {
     registerCapabilityContribution(ctx, contribution);
   }
 }
 
+export function normalizeRuntimeCapabilityDefinition<
+  const TContributions extends readonly AnyCortxCapabilityContribution[],
+>(definition: RuntimeCapabilityDefinition<TContributions>): NormalizedRuntimeCapabilityDefinition<TContributions> {
+  assertSupportedSchemaVersion(definition.schemaVersion, 'RuntimeCapability');
+  return {
+    ...definition,
+    schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
+    contributions: definition.contributions.map((contribution) =>
+      normalizeCortxCapabilityContribution(contribution),
+    ) as NormalizeCapabilityContributions<TContributions>,
+  };
+}
+
+export function normalizeCortxCapabilityContribution<T extends CortxExtensionType>(
+  contribution: CortxCapabilityContribution<T>,
+): NormalizedCortxCapabilityContribution<T> {
+  assertSupportedSchemaVersion(contribution.schemaVersion, 'CortxCapabilityContribution');
+  return {
+    ...contribution,
+    schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
+  };
+}
+
 function registerCapabilityContribution<T extends CortxExtensionType>(
   ctx: CortxPluginContext,
-  contribution: CortxCapabilityContribution<T>,
+  contribution: NormalizedCortxCapabilityContribution<T>,
 ): void {
   ctx.register(contribution.type, contribution.id, contribution.factory, contribution.options);
+}
+
+function assertSupportedSchemaVersion(value: unknown, label: string): void {
+  if (value === undefined || value === 0 || value === CORTX_EXTENSION_SCHEMA_VERSION) return;
+  throw new Error(`${label}.schemaVersion must be ${CORTX_EXTENSION_SCHEMA_VERSION}`);
+}
+
+function isCapabilityContribution(
+  value: CortxExtensionType | AnyCortxCapabilityContribution,
+): value is AnyCortxCapabilityContribution {
+  return typeof value === 'object' && value !== null;
 }
 
 export function defineToolFactory<T extends CortxFactoryMap[typeof AGENT_TOOL]>(factory: T): T {

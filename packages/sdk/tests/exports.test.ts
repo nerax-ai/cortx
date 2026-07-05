@@ -5,6 +5,7 @@ import {
   AGENT_EVENT_OBSERVER,
   AGENT_SESSION_POLICY,
   AGENT_TOOL,
+  CORTX_EXTENSION_SCHEMA_VERSION,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
   defineCapabilityContribution,
@@ -16,6 +17,7 @@ import {
   defineSessionPolicyFactory,
   defineTool,
   defineToolFactory,
+  normalizeRuntimeCapabilityDefinition,
   registerRuntimeCapability,
   type AgentModelRequestPolicyDecision,
   type AgentToolPolicyDecision,
@@ -191,6 +193,13 @@ describe('sdk exports', () => {
       ],
     });
 
+    expect(capability.schemaVersion).toBe(CORTX_EXTENSION_SCHEMA_VERSION);
+    expect(capability.contributions.map((entry) => entry.schemaVersion)).toEqual([
+      CORTX_EXTENSION_SCHEMA_VERSION,
+      CORTX_EXTENSION_SCHEMA_VERSION,
+      CORTX_EXTENSION_SCHEMA_VERSION,
+    ]);
+
     registerRuntimeCapability(ctx, capability);
 
     expect(registered.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
@@ -202,5 +211,63 @@ describe('sdk exports', () => {
     expect((await toolFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })).name).toBe(
       'capability_echo',
     );
+  });
+
+  test('runtime capability schema helpers migrate legacy declarations and reject future schemas', () => {
+    const toolFactory = defineToolFactory(() =>
+      defineTool({
+        name: 'versioned_echo',
+        inputSchema: {},
+        execute: async () => ({ success: true, output: 'versioned' }),
+      }),
+    );
+    const currentContribution = defineCapabilityContribution({
+      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
+      type: AGENT_TOOL,
+      id: 'versioned-echo',
+      factory: toolFactory,
+      options: { displayName: 'Versioned echo' },
+    });
+    const legacyContribution = defineCapabilityContribution({
+      schemaVersion: 0,
+      type: AGENT_TOOL,
+      id: 'legacy-echo',
+      factory: toolFactory,
+    });
+    const normalized = normalizeRuntimeCapabilityDefinition({
+      schemaVersion: 0,
+      id: 'legacy-capability',
+      contributions: [currentContribution, legacyContribution],
+    });
+
+    expect(currentContribution).toMatchObject({
+      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
+      id: 'versioned-echo',
+      options: { displayName: 'Versioned echo' },
+    });
+    expect(legacyContribution.schemaVersion).toBe(CORTX_EXTENSION_SCHEMA_VERSION);
+    expect(normalized).toMatchObject({
+      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
+      id: 'legacy-capability',
+    });
+    expect(normalized.contributions.map((entry) => entry.schemaVersion)).toEqual([
+      CORTX_EXTENSION_SCHEMA_VERSION,
+      CORTX_EXTENSION_SCHEMA_VERSION,
+    ]);
+    expect(() =>
+      defineRuntimeCapability({
+        schemaVersion: 999 as never,
+        id: 'future-capability',
+        contributions: [],
+      }),
+    ).toThrow('RuntimeCapability.schemaVersion');
+    expect(() =>
+      defineCapabilityContribution({
+        schemaVersion: 999 as never,
+        type: AGENT_TOOL,
+        id: 'future-echo',
+        factory: toolFactory,
+      }),
+    ).toThrow('CortxCapabilityContribution.schemaVersion');
   });
 });
