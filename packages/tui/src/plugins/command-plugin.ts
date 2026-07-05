@@ -7,6 +7,8 @@
  *   /config — show current configuration
  *   /help   — list all available commands
  *   /steer  — steer the active run
+ *   /agents — list available AgentSpec agents
+ *   /agent  — launch or pick an AgentSpec agent
  */
 
 import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
@@ -21,6 +23,7 @@ export interface CommandPluginDeps {
   getConfig: () => Record<string, unknown>;
   listAgentSpecs: () => Promise<TuiAgentSpecInfo[]>;
   launchAgentSpec: (identifier: string) => void | Promise<void>;
+  openAgentSpecPicker: () => void | Promise<void>;
   showNotice: (message: string) => void;
   showError: (message: string) => void;
   /** Returns all registered commands (for /help). */
@@ -52,6 +55,7 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
   const getConfig = deps?.getConfig ?? (() => ({}));
   const listAgentSpecs = deps?.listAgentSpecs;
   const launchAgentSpec = deps?.launchAgentSpec;
+  const openAgentSpecPicker = deps?.openAgentSpecPicker;
   const showNotice = deps?.showNotice ?? ((message: string) => ctxLogFallback(message));
   const showError = deps?.showError ?? ((message: string) => ctxLogFallback(message));
   const getCommands = deps?.getCommands;
@@ -143,7 +147,15 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
         handler: async (args) => {
           const identifier = args.trim();
           if (!identifier) {
-            showError('Usage: /agent <name-or-path>');
+            if (!openAgentSpecPicker) {
+              showError('AgentSpec picker is not available in this session. Usage: /agent <name-or-path>');
+              return;
+            }
+            try {
+              await openAgentSpecPicker();
+            } catch (error) {
+              showError(`Failed to open AgentSpec picker: ${error instanceof Error ? error.message : String(error)}`);
+            }
             return;
           }
           if (!launchAgentSpec) {

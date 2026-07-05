@@ -11,7 +11,7 @@ import type { TurnEntry } from './types/tui-state.js';
 import { processEvent } from './renderer.js';
 import { parseAgentMessages, turnsToMessages } from './message-io.js';
 import type { Logger } from '@nerax-ai/logger';
-import type { TuiSessionAdapter } from './runtime-session.js';
+import type { TuiAgentSpecInfo, TuiSessionAdapter } from './runtime-session.js';
 
 export interface AppProps {
   session: TuiSessionAdapter;
@@ -78,6 +78,11 @@ export default function App({ session, logger }: AppProps) {
 
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const sessionListRef = useRef<SessionSummary[]>([]);
+  const [agentSpecPickerOpen, setAgentSpecPickerOpen] = useState(false);
+  const [agentSpecs, setAgentSpecs] = useState<TuiAgentSpecInfo[]>([]);
+  const [agentSpecPickerLoading, setAgentSpecPickerLoading] = useState(false);
+  const [agentSpecPickerError, setAgentSpecPickerError] = useState<string | null>(null);
+  const agentSpecLoadTokenRef = useRef(0);
 
   useEffect(() => {
     setActiveSession(session);
@@ -145,6 +150,7 @@ export default function App({ session, logger }: AppProps) {
 
   const handleOpenSessionPicker = useCallback(async () => {
     try {
+      setAgentSpecPickerOpen(false);
       sessionListRef.current = await sessionStore.list();
       setSessionPickerOpen(true);
     } catch {
@@ -152,6 +158,45 @@ export default function App({ session, logger }: AppProps) {
       setSessionPickerOpen(true);
     }
   }, [sessionStore]);
+
+  const handleCloseAgentSpecPicker = useCallback(() => {
+    agentSpecLoadTokenRef.current += 1;
+    setAgentSpecPickerOpen(false);
+    setAgentSpecPickerLoading(false);
+  }, []);
+
+  const handleOpenAgentSpecPicker = useCallback(async () => {
+    const token = agentSpecLoadTokenRef.current + 1;
+    agentSpecLoadTokenRef.current = token;
+    setSessionPickerOpen(false);
+    setAgentSpecPickerOpen(true);
+    setAgentSpecPickerLoading(true);
+    setAgentSpecPickerError(null);
+    setAgentSpecs([]);
+    try {
+      const specs = await activeSession.listAgentSpecs();
+      if (agentSpecLoadTokenRef.current !== token) return;
+      setAgentSpecs(specs);
+    } catch (error) {
+      if (agentSpecLoadTokenRef.current !== token) return;
+      setAgentSpecPickerError(`Failed to load AgentSpecs: ${errorMessage(error)}`);
+    } finally {
+      if (agentSpecLoadTokenRef.current === token) setAgentSpecPickerLoading(false);
+    }
+  }, [activeSession]);
+
+  const handleSelectAgentSpec = useCallback(
+    async (spec: TuiAgentSpecInfo) => {
+      handleCloseAgentSpecPicker();
+      try {
+        const next = await activeSession.launchAgentSpec(spec.path);
+        setActiveSession(next);
+      } catch (error) {
+        store.dispatch({ type: 'error', error: new Error(`Failed to launch AgentSpec: ${errorMessage(error)}`) });
+      }
+    },
+    [activeSession, handleCloseAgentSpecPicker, store],
+  );
 
   const registry = useMemo(() => {
     return new TuiRegistry({ logger });
@@ -177,6 +222,7 @@ export default function App({ session, logger }: AppProps) {
           const next = await activeSession.launchAgentSpec(identifier);
           setActiveSession(next);
         },
+        openAgentSpecPicker: handleOpenAgentSpecPicker,
         showNotice: (message) => store.showNotice(message),
         showError: (message) => store.dispatch({ type: 'error', error: new Error(message) }),
         getConfig: () => ({}) as Record<string, unknown>,
@@ -212,7 +258,17 @@ export default function App({ session, logger }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore, registry, activeSession]);
+  }, [
+    exit,
+    store,
+    model,
+    handleOpenSessionPicker,
+    handleOpenAgentSpecPicker,
+    handleRestoreSession,
+    sessionStore,
+    registry,
+    activeSession,
+  ]);
 
   useEffect(() => {
     const autoSaveHandler = createAutoSaveHandler({
@@ -300,6 +356,12 @@ export default function App({ session, logger }: AppProps) {
       sessionList={sessionListRef.current}
       onSessionSelect={handleRestoreSession}
       onSessionPickerClose={() => setSessionPickerOpen(false)}
+      agentSpecPickerOpen={agentSpecPickerOpen}
+      agentSpecs={agentSpecs}
+      agentSpecPickerLoading={agentSpecPickerLoading}
+      agentSpecPickerError={agentSpecPickerError}
+      onAgentSpecSelect={handleSelectAgentSpec}
+      onAgentSpecPickerClose={handleCloseAgentSpecPicker}
     />
   );
 }

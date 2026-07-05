@@ -291,6 +291,7 @@ describe('Integration: plugin commands in palette', () => {
   test('AgentSpec commands list and launch through injected dependencies', async () => {
     const notices: string[] = [];
     const launches: string[] = [];
+    let pickerOpens = 0;
     const registry = new TuiRegistry();
     await registry.registerPlugin(commandPlugin({
       exit: () => {},
@@ -308,17 +309,40 @@ describe('Integration: plugin commands in palette', () => {
       launchAgentSpec: async (identifier) => {
         launches.push(identifier);
       },
+      openAgentSpecPicker: () => {
+        pickerOpens += 1;
+      },
       showNotice: (message) => notices.push(message),
       showError: (message) => notices.push(`ERROR: ${message}`),
     }));
 
     await registry.executeCommand('/agents', '', { args: '', abort: () => {} });
+    await registry.executeCommand('/agent', '', { args: '', abort: () => {} });
     await registry.executeCommand('/agent', 'reviewer', { args: 'reviewer', abort: () => {} });
 
     expect(notices[0]).toContain('Available agents:');
     expect(notices[0]).toContain('reviewer');
     expect(notices[1]).toBe('Launched AgentSpec: reviewer');
+    expect(pickerOpens).toBe(1);
     expect(launches).toEqual(['reviewer']);
+  });
+
+  test('/agent without picker support reports a clear command error', async () => {
+    const notices: string[] = [];
+    const registry = new TuiRegistry();
+    await registry.registerPlugin(commandPlugin({
+      exit: () => {},
+      clear: () => {},
+      getConfig: () => ({}),
+      showNotice: (message) => notices.push(message),
+      showError: (message) => notices.push(`ERROR: ${message}`),
+    }));
+
+    await registry.executeCommand('/agent', '', { args: '', abort: () => {} });
+
+    expect(notices).toEqual([
+      'ERROR: AgentSpec picker is not available in this session. Usage: /agent <name-or-path>',
+    ]);
   });
 });
 

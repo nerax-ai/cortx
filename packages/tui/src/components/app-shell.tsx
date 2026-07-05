@@ -6,11 +6,13 @@ import { ToolRegion, firstViewableAgentToolCallId } from './tool-region.js';
 import { AgentViewer } from './agent-viewer.js';
 import { CommandPalette, buildItems, filterItems, moveSelection } from './command-palette.js';
 import { SessionPicker } from './session-picker.js';
+import { AgentSpecPicker } from './agent-spec-picker.js';
 import type { TuiStore } from '../store.js';
 import type { TuiState } from '../types/tui-state.js';
 import type { TuiRegistry } from '../tui-registry.js';
 import type { SessionSummary } from '../plugins/session-plugin.js';
 import type { SkillItem } from '../plugins/skill-plugin.js';
+import type { TuiAgentSpecInfo } from '../runtime-session.js';
 import type { SubAgentSessionStore } from '@cortx/runtime';
 
 const selectStatus = (s: TuiState) => s.status;
@@ -33,6 +35,12 @@ export interface AppShellProps {
   sessionList?: SessionSummary[];
   onSessionSelect?: (session: SessionSummary) => void;
   onSessionPickerClose?: () => void;
+  agentSpecPickerOpen?: boolean;
+  agentSpecs?: TuiAgentSpecInfo[];
+  agentSpecPickerLoading?: boolean;
+  agentSpecPickerError?: string | null;
+  onAgentSpecSelect?: (spec: TuiAgentSpecInfo) => void;
+  onAgentSpecPickerClose?: () => void;
 }
 
 export function AppShell({
@@ -52,6 +60,12 @@ export function AppShell({
   sessionList = [],
   onSessionSelect,
   onSessionPickerClose,
+  agentSpecPickerOpen = false,
+  agentSpecs = [],
+  agentSpecPickerLoading = false,
+  agentSpecPickerError = null,
+  onAgentSpecSelect,
+  onAgentSpecPickerClose,
 }: AppShellProps) {
   const status = useSyncExternalStore(
     useCallback((listener) => store.select(selectStatus).subscribe(listener), [store]),
@@ -68,7 +82,7 @@ export function AppShell({
   const [paletteFilter, setPaletteFilter] = useState('');
   const [injectedValue, setInjectedValue] = useState<string | undefined>(undefined);
   const [toolExpanded, setToolExpanded] = useState(false);
-  const anyOverlayActive = paletteOpen || sessionPickerOpen;
+  const anyOverlayActive = paletteOpen || sessionPickerOpen || agentSpecPickerOpen;
 
   const paletteItems = useMemo(() => buildItems(registry.getCommands(), skills), [registry, registryReady, skills]);
 
@@ -131,6 +145,18 @@ export function AppShell({
     return <SessionPicker sessions={sessionList} onSelect={onSessionSelect} onClose={onSessionPickerClose} />;
   }
 
+  if (agentSpecPickerOpen && onAgentSpecSelect && onAgentSpecPickerClose) {
+    return (
+      <AgentSpecPicker
+        specs={agentSpecs}
+        loading={agentSpecPickerLoading}
+        error={agentSpecPickerError}
+        onSelect={onAgentSpecSelect}
+        onClose={onAgentSpecPickerClose}
+      />
+    );
+  }
+
   // Agent viewer mode
   if (activeAgentView) {
     return (
@@ -155,7 +181,7 @@ export function AppShell({
           onPaletteSelect={handlePaletteSelect}
           onPaletteClose={handlePaletteClose}
           onPaletteFilterChange={handlePaletteFilterChange}
-          overlayActive={sessionPickerOpen}
+          overlayActive={anyOverlayActive}
           paletteOpen={paletteOpen}
           store={store}
           model={model}
@@ -188,7 +214,7 @@ export function AppShell({
         onPaletteSelect={handlePaletteSelect}
         onPaletteClose={handlePaletteClose}
         onPaletteFilterChange={handlePaletteFilterChange}
-        overlayActive={sessionPickerOpen}
+        overlayActive={anyOverlayActive}
         paletteOpen={paletteOpen}
         store={store}
         model={model}
