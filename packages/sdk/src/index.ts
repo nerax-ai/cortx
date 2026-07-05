@@ -33,6 +33,7 @@ export {
   CORTX_EXTENSION_TYPES,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
+  defineCapabilityContribution,
   defineContributionFactory,
   defineContextOverflow,
   defineCortxPlugin,
@@ -40,6 +41,7 @@ export {
   defineEventObserverFactory,
   defineEventObserver,
   defineMessagesTransform,
+  defineRuntimeCapability,
   defineSessionPolicyFactory,
   defineSessionPolicy,
   defineSystemTransform,
@@ -47,6 +49,7 @@ export {
   defineToolAfter,
   defineToolBefore,
   mergeAgentRuntimeExtensions,
+  registerRuntimeCapability,
 } from './extensions.js';
 
 export type {
@@ -73,10 +76,14 @@ export type {
   AgentToolBeforeContribution,
   AgentToolBeforeInput,
   AgentToolBeforeResult,
+  AnyCortxCapabilityContribution,
+  CortxCapabilityContribution,
   CortxExtensionType,
   CortxContributionFactory,
   CortxFactoryContext,
   CortxFactoryMap,
+  CortxPluginContext,
+  RuntimeCapabilityDefinition,
 } from './extensions.js';
 
 export type {

@@ -29,8 +29,148 @@ SDK 也提供薄 helper，用于让插件代码保持类型清晰：
 - `defineSessionPolicyFactory(factory)`
 - `defineEventObserverFactory(factory)`
 - `defineContributionFactory(type, factory)`
+- `defineCapabilityContribution(type, id, factory, options?)`
+- `defineRuntimeCapability(capability)`
+- `registerRuntimeCapability(ctx, capability)`
 
 这些 helper 不做运行时包装，只保留 TypeScript 的窄类型推断。
+
+## Plugin Authoring 推荐路径
+
+一个 Cortx 插件可以继续直接调用 `ctx.register(type, id, factory)`。
+对于官方能力或第三方能力包，更推荐先把多个 contribution 声明成一个 runtime capability，再在 `setup()` 中注册。
+这里的 runtime capability 只是 SDK 层的“贡献集合”，不代表自动启用；是否在某个 session 挂载，仍由 `@cortx/runtime`、server、TUI 或 Web 的 host 配置决定。
+
+最小工具插件：
+
+```ts
+import { AGENT_TOOL, defineCortxPlugin, defineContributionFactory, defineTool } from '@cortx/sdk';
+
+export default defineCortxPlugin({
+  manifest: {
+    manifestVersion: 1,
+    id: 'fetch-tools',
+    name: 'Fetch tools',
+    version: '0.1.0',
+    runtime: { main: 'dist/index.js' },
+  },
+  setup(ctx) {
+    ctx.register(
+      AGENT_TOOL,
+      'fetch-url',
+      defineContributionFactory(AGENT_TOOL, () =>
+        defineTool({
+          name: 'fetch_url',
+          sideEffects: 'read',
+          inputSchema: {
+            type: 'object',
+            properties: { url: { type: 'string' } },
+            required: ['url'],
+          },
+          async execute(input, toolCtx) {
+            const response = await fetch(String(input.url), { signal: toolCtx.signal });
+            return { success: true, output: await response.text() };
+          },
+        }),
+      ),
+    );
+  },
+});
+```
+
+组合能力插件：
+
+```ts
+import {
+  AGENT_EVENT_OBSERVER,
+  AGENT_SESSION_POLICY,
+  AGENT_TOOL,
+  defineCapabilityContribution,
+  defineCortxPlugin,
+  defineEventObserver,
+  defineEventObserverFactory,
+  defineRuntimeCapability,
+  defineSessionPolicy,
+  defineSessionPolicyFactory,
+  defineTool,
+  defineToolFactory,
+  registerRuntimeCapability,
+} from '@cortx/sdk';
+
+const reviewCapability = defineRuntimeCapability({
+  id: 'review-helper',
+  displayName: 'Review helper',
+  description: 'Adds a read-only review tool, a write guard, and event telemetry.',
+  contributions: [
+    defineCapabilityContribution(
+      AGENT_TOOL,
+      'review-summary',
+      defineToolFactory(() =>
+        defineTool({
+          name: 'review_summary',
+          sideEffects: 'read',
+          inputSchema: {},
+          async execute() {
+            return { success: true, output: 'Review workspace and report correctness findings first.' };
+          },
+        }),
+      ),
+      { displayName: 'Review summary tool' },
+    ),
+    defineCapabilityContribution(
+      AGENT_SESSION_POLICY,
+      'read-only-review',
+      defineSessionPolicyFactory(() =>
+        defineSessionPolicy({
+          beforeToolCall({ tool }) {
+            return tool?.sideEffects === 'write' || tool?.sideEffects === 'destructive'
+              ? { action: 'deny', reason: 'Review sessions are read-only.' }
+              : { action: 'allow' };
+          },
+        }),
+      ),
+    ),
+    defineCapabilityContribution(
+      AGENT_EVENT_OBSERVER,
+      'review-events',
+      defineEventObserverFactory(() =>
+        defineEventObserver({
+          onAgentEvent(event) {
+            if (event.type === 'done') {
+              // Send telemetry, update counters, or flush buffered observations.
+            }
+          },
+        }),
+      ),
+    ),
+  ],
+});
+
+export default defineCortxPlugin({
+  manifest: {
+    manifestVersion: 1,
+    id: 'review-helper',
+    name: 'Review helper',
+    version: '0.1.0',
+    runtime: { main: 'dist/index.js' },
+  },
+  setup(ctx) {
+    registerRuntimeCapability(ctx, reviewCapability);
+  },
+});
+```
+
+推荐规则：
+
+- 用 `defineTool()` 声明单个工具，用 `defineToolFactory()` 包住 `agent.tool` factory。
+- 用 `defineSessionPolicy()` 表达权限、预算、delegation 等 session 级策略。
+- 用 `defineCapabilityContribution()` 绑定 extension type、贡献 id、factory 和可选展示信息。
+- 用 `defineRuntimeCapability()` 组合一组有顺序的 contributions。
+- 用 `registerRuntimeCapability()` 在插件 `setup()` 中逐条注册到现有 registry。
+
+这些 helper 的类型测试位于 `packages/sdk/type-tests/`。
+如果把 `agent.sessionPolicy` 的 factory 注册成 `agent.tool`，`bun run --cwd packages/sdk type-test` 会在编译期失败。
+这类错误不需要等到插件运行或 core resolver 报错。
 
 ## Agent 扩展点
 

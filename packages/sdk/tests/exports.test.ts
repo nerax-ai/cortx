@@ -7,15 +7,19 @@ import {
   AGENT_TOOL,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
+  defineCapabilityContribution,
   defineContributionFactory,
   defineEventObserver,
   defineEventObserverFactory,
+  defineRuntimeCapability,
   defineSessionPolicy,
   defineSessionPolicyFactory,
   defineTool,
   defineToolFactory,
+  registerRuntimeCapability,
   type AgentModelRequestPolicyDecision,
   type AgentToolPolicyDecision,
+  type CortxPluginContext,
   type Tool,
 } from '../src/index';
 
@@ -139,5 +143,64 @@ describe('sdk exports', () => {
       ).onAgentEvent,
     ).toBe('function');
     expect(AGENT_EVENT_OBSERVER).toBe('agent.eventObserver');
+  });
+
+  test('runtime capability helpers register grouped typed contributions', async () => {
+    const registered: Array<{ type: string; id: string; factory: unknown; options?: unknown }> = [];
+    const ctx: CortxPluginContext = {
+      packageName: '@example/capability',
+      manifest: {
+        manifestVersion: 1,
+        id: 'example-capability',
+        name: 'Example capability',
+        version: '0.1.0',
+        runtime: { main: 'dist/index.js' },
+      },
+      logger: testLogger(),
+      storage: {} as never,
+      register(type, id, factory, options) {
+        registered.push({ type, id, factory, options });
+      },
+    };
+    const toolFactory = defineToolFactory(() =>
+      defineTool({
+        name: 'capability_echo',
+        inputSchema: {},
+        execute: async () => ({ success: true, output: 'capability' }),
+      }),
+    );
+    const policyFactory = defineSessionPolicyFactory(() =>
+      defineSessionPolicy({
+        beforeToolCall() {
+          return { action: 'allow' };
+        },
+      }),
+    );
+    const observerFactory = defineEventObserverFactory(() =>
+      defineEventObserver({
+        onAgentEvent() {},
+      }),
+    );
+    const capability = defineRuntimeCapability({
+      id: 'workspace-helper',
+      displayName: 'Workspace helper',
+      contributions: [
+        defineCapabilityContribution(AGENT_TOOL, 'echo', toolFactory, { displayName: 'Echo tool' }),
+        defineCapabilityContribution(AGENT_SESSION_POLICY, 'policy', policyFactory),
+        defineCapabilityContribution(AGENT_EVENT_OBSERVER, 'observer', observerFactory),
+      ],
+    });
+
+    registerRuntimeCapability(ctx, capability);
+
+    expect(registered.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
+      'agent.tool:echo',
+      'agent.sessionPolicy:policy',
+      'agent.eventObserver:observer',
+    ]);
+    expect(registered[0].options).toEqual({ displayName: 'Echo tool' });
+    expect((await toolFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })).name).toBe(
+      'capability_echo',
+    );
   });
 });

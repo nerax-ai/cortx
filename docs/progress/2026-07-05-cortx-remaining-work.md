@@ -21,7 +21,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 - P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
 - P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
-- P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试与文档。
+- P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并进一步补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper；SDK 现在有运行时导出测试、`tsc --noEmit` 编译期 type-test 和官方插件作者文档。
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；server 暴露 `GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动和 `/agent` 选择器 overlay；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
@@ -149,14 +149,14 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 当前状态
 
-底层 extension/policy/tool/event 类型已经拆清楚，core/runtime 边界也比之前稳定。SDK 已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试和文档。
+底层 extension/policy/tool/event 类型已经拆清楚，core/runtime 边界也比之前稳定。SDK 已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper、编译期 type-test 和插件作者文档。
 
 ### 缺口
 
-- helper 已有第一版，但还可以继续打磨更贴近官方插件模板的 `defineRuntimeCapability()` 等组合 helper。
-- 缺 tsd 级别的独立编译期类型测试。
+- helper 已有更完整的第一版，包括 `defineRuntimeCapability()` 等组合 helper；后续还可以继续打磨官方插件模板脚手架。
+- 已有 `tsc --noEmit` 编译期类型测试；后续可按需要升级为 tsd 或更完整的 dtslint 风格套件。
 - 缺 extension schemaVersion 和 migration 策略。
-- 缺官方插件开发手册。
+- 官方插件开发手册已有第一版，后续仍需要更多官方示例包和错误示例。
 - 缺错误示例、推荐组合方式和最小可运行样例。
 
 ### 后续验收

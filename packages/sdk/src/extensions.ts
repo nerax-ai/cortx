@@ -1,5 +1,5 @@
 import type { Logger } from '@nerax-ai/logger';
-import type { InlinePlugin, PluginStorage } from '@nerax-ai/plugin';
+import type { ExtensionOptions, InlinePlugin, PluginContext, PluginStorage } from '@nerax-ai/plugin';
 import type { LanguageMessage, LanguageToolCallContent } from '@synax-ai/sdk';
 import type { AgentEvent, ErrorCode } from './events.js';
 import type { AgentSessionPolicyContribution } from './policy.js';
@@ -233,6 +233,60 @@ export function defineContributionFactory<T extends CortxExtensionType>(
   factory: CortxContributionFactory<T>,
 ): CortxContributionFactory<T> {
   return factory;
+}
+
+export interface CortxCapabilityContribution<T extends CortxExtensionType> {
+  type: T;
+  id: string;
+  factory: CortxContributionFactory<T>;
+  options?: ExtensionOptions;
+}
+
+export type AnyCortxCapabilityContribution = {
+  [T in CortxExtensionType]: CortxCapabilityContribution<T>;
+}[CortxExtensionType];
+
+export interface RuntimeCapabilityDefinition<
+  TContributions extends readonly AnyCortxCapabilityContribution[] = readonly AnyCortxCapabilityContribution[],
+> {
+  id: string;
+  displayName?: string;
+  description?: string;
+  contributions: TContributions;
+  metadata?: Record<string, unknown>;
+}
+
+export type CortxPluginContext = PluginContext<CortxExtensionType, CortxFactoryMap>;
+
+export function defineCapabilityContribution<T extends CortxExtensionType>(
+  type: T,
+  id: string,
+  factory: CortxContributionFactory<T>,
+  options?: ExtensionOptions,
+): CortxCapabilityContribution<T> {
+  return options === undefined ? { type, id, factory } : { type, id, factory, options };
+}
+
+export function defineRuntimeCapability<const TContributions extends readonly AnyCortxCapabilityContribution[]>(
+  definition: RuntimeCapabilityDefinition<TContributions>,
+): RuntimeCapabilityDefinition<TContributions> {
+  return definition;
+}
+
+export function registerRuntimeCapability(
+  ctx: CortxPluginContext,
+  capability: RuntimeCapabilityDefinition,
+): void {
+  for (const contribution of capability.contributions) {
+    registerCapabilityContribution(ctx, contribution);
+  }
+}
+
+function registerCapabilityContribution<T extends CortxExtensionType>(
+  ctx: CortxPluginContext,
+  contribution: CortxCapabilityContribution<T>,
+): void {
+  ctx.register(contribution.type, contribution.id, contribution.factory, contribution.options);
 }
 
 export function defineToolFactory<T extends CortxFactoryMap[typeof AGENT_TOOL]>(factory: T): T {
