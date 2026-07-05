@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { Tabs } from '@base-ui-components/react/tabs';
-import type { AgentSessionSummary, AgentStatus, TokenUsage, ToolCallEntry } from '@cortx/store';
+import type { ActivityEntry, AgentStatus, TokenUsage } from '@cortx/store';
 import type { WebRuntimeSessionInfo } from '../bridge/event-bridge';
+import { activityToInspectorMaps, latestIterationActivity } from '../activity';
 import {
   compactPath,
   compactSessionId,
@@ -18,12 +19,8 @@ interface InspectorPanelProps {
   status: AgentStatus;
   tokenUsage: TokenUsage;
   elapsed: number;
-  toolCalls: Map<string, ToolCallEntry>;
-  agentSessions: Map<string, AgentSessionSummary>;
+  activity: ActivityEntry[];
 }
-
-const EMPTY_TOOL_CALLS = new Map<string, ToolCallEntry>();
-const EMPTY_AGENT_SESSIONS = new Map<string, AgentSessionSummary>();
 
 function StatTile({ label, value }: { label: string; value: string | number }) {
   return (
@@ -60,12 +57,13 @@ export function InspectorPanel({
   status,
   tokenUsage,
   elapsed,
-  toolCalls,
-  agentSessions,
+  activity,
 }: InspectorPanelProps) {
   const [tab, setTab] = useState('tools');
   const tone = statusTone(status);
-  const summary = summarizeInspector(toolCalls, agentSessions);
+  const { toolCalls, agentSessions } = activityToInspectorMaps(activity);
+  const latest = activityToInspectorMaps(latestIterationActivity(activity));
+  const summary = summarizeInspector(latest.toolCalls, latest.agentSessions);
 
   return (
     <aside className="flex h-full min-h-0 flex-col bg-[#f3f3f1]">
@@ -79,8 +77,8 @@ export function InspectorPanel({
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <StatTile label="Tools" value={summary.totalTools} />
-          <StatTile label="Agents" value={summary.totalAgents} />
+          <StatTile label="Turn Tools" value={summary.totalTools} />
+          <StatTile label="Turn Agents" value={summary.totalAgents} />
           <StatTile label="Tokens" value={formatTokenUsage(tokenUsage)} />
           <StatTile label="Elapsed" value={formatElapsed(elapsed)} />
         </div>
@@ -113,10 +111,10 @@ export function InspectorPanel({
           </InspectorTab>
         </Tabs.List>
         <Tabs.Panel value="tools" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          <ToolRegion toolCalls={toolCalls} agentSessions={EMPTY_AGENT_SESSIONS} />
+          <ToolRegion toolCalls={toolCalls} agentSessions={new Map()} />
         </Tabs.Panel>
         <Tabs.Panel value="agents" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          <ToolRegion toolCalls={EMPTY_TOOL_CALLS} agentSessions={agentSessions} />
+          <ToolRegion toolCalls={new Map()} agentSessions={agentSessions} />
         </Tabs.Panel>
       </Tabs.Root>
 

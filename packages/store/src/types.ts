@@ -44,6 +44,24 @@ export interface AgentSessionSummary {
   toolCallCount: number;
 }
 
+export interface ToolActivityEntry {
+  kind: 'tool';
+  id: string;
+  timestamp: number;
+  iteration?: number;
+  entry: ToolCallEntry;
+}
+
+export interface AgentActivityEntry {
+  kind: 'agent';
+  id: string;
+  timestamp: number;
+  iteration?: number;
+  session: AgentSessionSummary;
+}
+
+export type ActivityEntry = ToolActivityEntry | AgentActivityEntry;
+
 /** A pending askUser question or structured runtime request from the agent. */
 export interface PendingQuestion {
   toolCallId: string;
@@ -79,6 +97,8 @@ export interface AgentState {
   error: string | undefined;
   /** Active and completed sub-agent sessions. */
   agentSessions: Map<string, AgentSessionSummary>;
+  /** Chronological tool and sub-agent activity for the conversation surface. */
+  activity: ActivityEntry[];
   /** Pending askUser question, set when status is 'awaiting_user'. */
   pendingQuestion: PendingQuestion | null;
 }
@@ -117,6 +137,22 @@ export interface SerializedAgentSessionSummary {
   toolCallCount: number;
 }
 
+export type SerializedActivityEntry =
+  | {
+      kind: 'tool';
+      id: string;
+      timestamp: number;
+      iteration?: number;
+      entry: SerializedToolCallEntry;
+    }
+  | {
+      kind: 'agent';
+      id: string;
+      timestamp: number;
+      iteration?: number;
+      session: SerializedAgentSessionSummary;
+    };
+
 /** Serializable form of AgentState where Maps become Records. */
 export interface SerializedAgentState {
   sessionId: string;
@@ -133,5 +169,6 @@ export interface SerializedAgentState {
   status: AgentStatus;
   error: string | undefined;
   agentSessions: Record<string, SerializedAgentSessionSummary>;
+  activity: SerializedActivityEntry[];
   pendingQuestion: PendingQuestion | null;
 }

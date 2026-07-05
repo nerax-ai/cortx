@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@cortx/sdk';
+import type { AgentEvent, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { AgentStore } from '@cortx/store';
 import { createAuthClient, getAuthToken, apiFetch, type AuthClient } from './auth';
 
@@ -63,6 +63,16 @@ function normalizeEvent(event: AgentEvent): AgentEvent {
   return { ...event, error: new Error(message) };
 }
 
+function isEnvelope(value: unknown): value is RuntimeAgentEventEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'event' in value &&
+    'timestamp' in value &&
+    typeof (value as { timestamp: unknown }).timestamp === 'number'
+  );
+}
+
 export class EventBridge {
   readonly store: AgentStore;
   private client: AuthClient;
@@ -101,14 +111,15 @@ export class EventBridge {
     this.disconnect();
     this.store.reset(sessionId);
     const token = await getAuthToken(this.client);
-    const url = `${this.client.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?token=${encodeURIComponent(token)}`;
+    const url = `${this.client.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?format=envelope&token=${encodeURIComponent(token)}`;
     this.eventSource = new EventSource(url);
     this.eventSource.onmessage = (e) => {
       try {
         if (!e.data || e.data === '{}') return;
-        const event = normalizeEvent(JSON.parse(e.data) as AgentEvent);
+        const parsed = JSON.parse(e.data) as AgentEvent | RuntimeAgentEventEnvelope;
+        const event = isEnvelope(parsed) ? normalizeEvent(parsed.event) : normalizeEvent(parsed);
         if (event.type) {
-          this.store.dispatch(event);
+          this.store.dispatch(event, isEnvelope(parsed) ? parsed.timestamp : undefined);
         }
       } catch {
         /* ignore parse errors */

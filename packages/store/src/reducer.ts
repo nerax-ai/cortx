@@ -1,5 +1,6 @@
 import type { AgentEvent } from '@cortx/sdk';
 import type {
+  ActivityEntry,
   AgentSessionSummary,
   AgentState,
   TokenUsage,
@@ -19,6 +20,39 @@ export interface AgentReducerResult {
   totalStartTime: number;
 }
 
+function upsertToolActivity(
+  activity: ActivityEntry[],
+  id: string,
+  entry: ToolCallEntry,
+  timestamp: number,
+  iteration: number,
+): ActivityEntry[] {
+  const index = activity.findIndex((item) => item.kind === 'tool' && item.id === id);
+  if (index === -1) return [...activity, { kind: 'tool', id, timestamp, iteration, entry }];
+  const next = [...activity];
+  next[index] = { kind: 'tool', id, timestamp: next[index].timestamp, iteration: next[index].iteration ?? iteration, entry };
+  return next;
+}
+
+function upsertAgentActivity(
+  activity: ActivityEntry[],
+  id: string,
+  session: AgentSessionSummary,
+  timestamp: number,
+  iteration: number,
+): ActivityEntry[] {
+  const index = activity.findIndex((item) => item.kind === 'agent' && item.id === id);
+  if (index === -1) return [...activity, { kind: 'agent', id, timestamp, iteration, session }];
+  const next = [...activity];
+  next[index] = { kind: 'agent', id, timestamp: next[index].timestamp, iteration: next[index].iteration ?? iteration, session };
+  return next;
+}
+
+function elapsedSeconds(start: number, end: number): number {
+  if (start <= 0) return 0;
+  return Math.max(0, (end - start) / 1000);
+}
+
 export function reduceAgentEvent(
   state: AgentState,
   event: AgentEvent,
@@ -33,21 +67,20 @@ export function reduceAgentEvent(
     case 'turn_start': {
       const prev = state.messages;
       let turns = [...prev.turns];
-      const turnDuration = turnStartTime > 0 ? (now - turnStartTime) / 1000 : 0;
+      const turnDuration = elapsedSeconds(turnStartTime, now);
       if (prev.currentText.length > 0) {
         turns = [...turns, { role: 'assistant', content: prev.currentText, timestamp: now, duration: turnDuration } satisfies TurnEntry];
       } else if (turnDuration > 0 && turns.length > 0) {
         const last = turns[turns.length - 1];
         if (!last.duration) turns[turns.length - 1] = { ...last, duration: turnDuration };
       }
-      const prevElapsed = turnStartTime > 0 ? state.elapsed : 0;
       nextState = {
         ...state,
         iteration: event.iteration,
         status: 'running',
         messages: { turns, currentText: '', currentThinking: '' },
         toolCalls: new Map(),
-        totalElapsed: state.totalElapsed + prevElapsed,
+        totalElapsed: state.totalElapsed + turnDuration,
         elapsed: 0,
         error: undefined,
       };
@@ -107,15 +140,17 @@ export function reduceAgentEvent(
           ? [...prev.turns, { role: 'assistant', content: prev.currentText, timestamp: now } satisfies TurnEntry]
           : prev.turns;
       const toolCalls = new Map(state.toolCalls);
-      toolCalls.set(event.toolCall.toolCallId, {
+      const entry = {
         toolName: event.toolCall.toolName,
         input: event.toolCall.input,
         status: 'pending',
-      } satisfies ToolCallEntry);
+      } satisfies ToolCallEntry;
+      toolCalls.set(event.toolCall.toolCallId, entry);
       nextState = {
         ...state,
         messages: { turns, currentText: '', currentThinking: '' },
         toolCalls,
+        activity: upsertToolActivity(state.activity, event.toolCall.toolCallId, entry, now, state.iteration),
       };
       break;
     }
@@ -128,7 +163,17 @@ export function reduceAgentEvent(
           ...entry,
           progress: event.text,
         });
-        nextState = { ...state, toolCalls };
+        nextState = {
+          ...state,
+          toolCalls,
+          activity: upsertToolActivity(
+            state.activity,
+            event.toolCallId,
+            { ...entry, progress: event.text },
+            now,
+            state.iteration,
+          ),
+        };
       }
       break;
     }
@@ -137,18 +182,26 @@ export function reduceAgentEvent(
       const toolCalls = new Map(state.toolCalls);
       const entry = toolCalls.get(event.toolCallId);
       if (entry) {
-        toolCalls.set(event.toolCallId, {
+        const nextEntry = {
           ...entry,
           result: event.result,
           isError: event.isError,
           status: 'complete',
-        });
+        } satisfies ToolCallEntry;
+        toolCalls.set(event.toolCallId, nextEntry);
+        nextState = {
+          ...state,
+          toolCalls,
+          activity: upsertToolActivity(state.activity, event.toolCallId, nextEntry, now, state.iteration),
+        };
+      } else {
+        nextState = { ...state, toolCalls };
       }
-      nextState = { ...state, toolCalls };
       break;
     }
 
     case 'done': {
+      const turnElapsed = elapsedSeconds(turnStartTime, now);
       const usage: TokenUsage = event.usage
         ? {
             inputTokens: state.tokenUsage.inputTokens + event.usage.inputTokens,
@@ -158,14 +211,14 @@ export function reduceAgentEvent(
       const prev = state.messages;
       const turns =
         prev.currentText.length > 0
-          ? [...prev.turns, { role: 'assistant', content: prev.currentText, timestamp: now } satisfies TurnEntry]
+          ? [...prev.turns, { role: 'assistant', content: prev.currentText, timestamp: now, duration: turnElapsed } satisfies TurnEntry]
           : [...prev.turns];
       nextState = {
         ...state,
         status: 'idle',
         messages: { turns, currentText: '', currentThinking: '' },
         tokenUsage: usage,
-        totalElapsed: state.totalElapsed + state.elapsed,
+        totalElapsed: state.totalElapsed + turnElapsed,
         elapsed: 0,
       };
       turnStartTime = 0;
@@ -173,32 +226,40 @@ export function reduceAgentEvent(
     }
 
     case 'error': {
+      const turnElapsed = elapsedSeconds(turnStartTime, now);
       const prev = state.messages;
       const turns =
         prev.currentText.length > 0
-          ? [...prev.turns, { role: 'assistant', content: prev.currentText, timestamp: now } satisfies TurnEntry]
+          ? [...prev.turns, { role: 'assistant', content: prev.currentText, timestamp: now, duration: turnElapsed } satisfies TurnEntry]
           : [...prev.turns];
       nextState = {
         ...state,
         status: 'error',
         messages: { turns, currentText: '', currentThinking: '' },
         error: event.error.message,
+        totalElapsed: state.totalElapsed + turnElapsed,
         elapsed: 0,
       };
+      turnStartTime = 0;
       break;
     }
 
     case 'agent_started': {
       const agentSessions = new Map(state.agentSessions);
-      agentSessions.set(event.toolCallId, {
+      const session = {
         toolCallId: event.toolCallId,
         description: event.description,
         status: 'running',
         isBackground: event.isBackground ?? false,
         iterations: 0,
         toolCallCount: 0,
-      } satisfies AgentSessionSummary);
-      nextState = { ...state, agentSessions };
+      } satisfies AgentSessionSummary;
+      agentSessions.set(event.toolCallId, session);
+      nextState = {
+        ...state,
+        agentSessions,
+        activity: upsertAgentActivity(state.activity, event.toolCallId, session, now, state.iteration),
+      };
       break;
     }
 
@@ -206,11 +267,16 @@ export function reduceAgentEvent(
       const agentSessions = new Map(state.agentSessions);
       const entry = agentSessions.get(event.toolCallId);
       if (entry) {
-        agentSessions.set(event.toolCallId, {
+        const nextSession = {
           ...entry,
           progress: event.text,
-        });
-        nextState = { ...state, agentSessions };
+        } satisfies AgentSessionSummary;
+        agentSessions.set(event.toolCallId, nextSession);
+        nextState = {
+          ...state,
+          agentSessions,
+          activity: upsertAgentActivity(state.activity, event.toolCallId, nextSession, now, state.iteration),
+        };
       }
       break;
     }
@@ -219,13 +285,18 @@ export function reduceAgentEvent(
       const agentSessions = new Map(state.agentSessions);
       const entry = agentSessions.get(event.toolCallId);
       if (entry) {
-        agentSessions.set(event.toolCallId, {
+        const nextSession = {
           ...entry,
           status: event.isError ? 'error' : 'completed',
           iterations: event.iterations,
           toolCallCount: event.toolCallCount,
-        });
-        nextState = { ...state, agentSessions };
+        } satisfies AgentSessionSummary;
+        agentSessions.set(event.toolCallId, nextSession);
+        nextState = {
+          ...state,
+          agentSessions,
+          activity: upsertAgentActivity(state.activity, event.toolCallId, nextSession, now, state.iteration),
+        };
       }
       break;
     }

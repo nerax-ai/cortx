@@ -10,27 +10,42 @@ interface DesktopWorkspaceProps {
   state: AgentState;
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
+  selectedWorkingDirectory: string | null;
+  toolMode: WebWorkspaceToolMode;
+  approvalMode: WebApprovalMode;
   onSend: (message: string) => void;
   onAbort: () => void;
   onResume: () => void;
   onCreateSession: (request: {
     workingDirectory: string;
-    toolMode: WebWorkspaceToolMode;
-    approvalMode: WebApprovalMode;
   }) => void | Promise<void>;
+  onCreateSessionForCurrentProject: () => void | Promise<unknown>;
+  onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
+  onToolModeChange: (mode: WebWorkspaceToolMode) => void;
+  onApprovalModeChange: (mode: WebApprovalMode) => void;
 }
 
 export function DesktopWorkspace({
   state,
   session,
   sessions,
+  selectedWorkingDirectory,
+  toolMode,
+  approvalMode,
   onSend,
   onAbort,
   onResume,
   onCreateSession,
+  onCreateSessionForCurrentProject,
+  onSelectProject,
   onSwitchSession,
+  onToolModeChange,
+  onApprovalModeChange,
 }: DesktopWorkspaceProps) {
+  const willCreateSessionOnSend =
+    Boolean(session) && state.status !== 'running' && (session?.toolMode !== toolMode || session?.approvalMode !== approvalMode);
+
   return (
     <div className={`${surface.page} flex h-screen overflow-hidden`}>
       <div className="hidden w-[252px] shrink-0 md:block">
@@ -38,9 +53,11 @@ export function DesktopWorkspace({
           status={state.status}
           session={session}
           sessions={sessions}
+          selectedWorkingDirectory={selectedWorkingDirectory}
           tokenUsage={state.tokenUsage}
           elapsed={state.totalElapsed}
           onCreateSession={onCreateSession}
+          onSelectProject={onSelectProject}
           onSwitchSession={onSwitchSession}
         />
       </div>
@@ -56,14 +73,22 @@ export function DesktopWorkspace({
         <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_344px]">
           <ChatView
             messages={state.messages}
+            activity={state.activity}
             toolCalls={state.toolCalls}
             agentSessions={state.agentSessions}
             status={state.status}
             iteration={state.iteration}
             error={state.error}
+            toolMode={toolMode}
+            approvalMode={approvalMode}
+            selectedWorkingDirectory={selectedWorkingDirectory}
+            willCreateSessionOnSend={willCreateSessionOnSend}
             onSend={onSend}
             onAbort={onAbort}
             onResume={onResume}
+            onCreateSessionForCurrentProject={onCreateSessionForCurrentProject}
+            onToolModeChange={onToolModeChange}
+            onApprovalModeChange={onApprovalModeChange}
           />
           <div className="hidden min-h-0 border-l border-zinc-200 xl:block">
             <InspectorPanel
@@ -71,8 +96,7 @@ export function DesktopWorkspace({
               status={state.status}
               tokenUsage={state.tokenUsage}
               elapsed={state.totalElapsed}
-              toolCalls={state.toolCalls}
-              agentSessions={state.agentSessions}
+              activity={state.activity}
             />
           </div>
         </div>

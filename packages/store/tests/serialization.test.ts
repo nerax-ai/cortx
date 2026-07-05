@@ -14,6 +14,8 @@ function makeTestState(overrides?: Partial<AgentState>): AgentState {
     status: 'idle',
     error: undefined,
     agentSessions: new Map(),
+    activity: [],
+    pendingQuestion: null,
     ...overrides,
   };
 }
@@ -29,6 +31,7 @@ describe('serialization', () => {
     expect(restored.iteration).toBe(state.iteration);
     expect(restored.toolCalls.size).toBe(0);
     expect(restored.agentSessions.size).toBe(0);
+    expect(restored.activity).toEqual([]);
     expect(restored.status).toBe('idle');
     expect(restored.error).toBeUndefined();
   });
@@ -180,5 +183,43 @@ describe('serialization', () => {
     expect(parsed.agentSessions).toEqual({ tc_1: expect.any(Object) });
     expect(parsed.toolCalls).not.toBeInstanceOf(Map);
     expect(parsed.agentSessions).not.toBeInstanceOf(Map);
+  });
+
+  test('round-trip preserves activity timeline', () => {
+    const state = makeTestState({
+      activity: [
+        {
+          kind: 'tool',
+          id: 'tc_1',
+          timestamp: 100,
+          iteration: 2,
+          entry: {
+            toolName: 'bash',
+            input: { command: 'pwd' },
+            result: '/repo\n',
+            status: 'complete',
+            isError: false,
+          },
+        },
+        {
+          kind: 'agent',
+          id: 'agent_1',
+          timestamp: 200,
+          iteration: 2,
+          session: {
+            toolCallId: 'agent_1',
+            description: 'Review files',
+            status: 'completed',
+            isBackground: false,
+            iterations: 2,
+            toolCallCount: 3,
+          },
+        },
+      ],
+    });
+
+    const restored = deserializeAgentState(serializeAgentState(state));
+
+    expect(restored.activity).toEqual(state.activity);
   });
 });

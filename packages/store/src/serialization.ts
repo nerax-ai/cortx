@@ -5,6 +5,8 @@ import type {
   SerializedToolCallEntry,
   AgentSessionSummary,
   SerializedAgentSessionSummary,
+  ActivityEntry,
+  SerializedActivityEntry,
 } from './types.js';
 
 function safeStringify(value: unknown): string {
@@ -55,6 +57,44 @@ function deserializeSession(s: SerializedAgentSessionSummary): AgentSessionSumma
   return { ...s };
 }
 
+function serializeActivity(entry: ActivityEntry): SerializedActivityEntry {
+  if (entry.kind === 'tool') {
+    return {
+      kind: 'tool',
+      id: entry.id,
+      timestamp: entry.timestamp,
+      iteration: entry.iteration,
+      entry: serializeToolCall(entry.entry),
+    };
+  }
+  return {
+    kind: 'agent',
+    id: entry.id,
+    timestamp: entry.timestamp,
+    iteration: entry.iteration,
+    session: serializeSession(entry.session),
+  };
+}
+
+function deserializeActivity(entry: SerializedActivityEntry): ActivityEntry {
+  if (entry.kind === 'tool') {
+    return {
+      kind: 'tool',
+      id: entry.id,
+      timestamp: entry.timestamp,
+      iteration: entry.iteration,
+      entry: deserializeToolCall(entry.entry),
+    };
+  }
+  return {
+    kind: 'agent',
+    id: entry.id,
+    timestamp: entry.timestamp,
+    iteration: entry.iteration,
+    session: deserializeSession(entry.session),
+  };
+}
+
 /** Convert AgentState to a JSON-safe serialized form. */
 export function serializeAgentState(state: AgentState): SerializedAgentState {
   const toolCalls: Record<string, SerializedToolCallEntry> = {};
@@ -76,6 +116,7 @@ export function serializeAgentState(state: AgentState): SerializedAgentState {
     status: state.status,
     error: state.error,
     agentSessions,
+    activity: state.activity.map(serializeActivity),
     pendingQuestion: state.pendingQuestion,
   };
 }
@@ -101,6 +142,7 @@ export function deserializeAgentState(serialized: SerializedAgentState): AgentSt
     status: serialized.status,
     error: serialized.error,
     agentSessions,
+    activity: (serialized.activity ?? []).map(deserializeActivity),
     pendingQuestion: serialized.pendingQuestion,
   };
 }

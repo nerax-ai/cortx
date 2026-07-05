@@ -15,6 +15,7 @@ describe('AgentStore', () => {
     expect(state.toolCalls.size).toBe(0);
     expect(state.tokenUsage).toEqual({ inputTokens: 0, outputTokens: 0 });
     expect(state.agentSessions.size).toBe(0);
+    expect(state.activity).toEqual([]);
     expect(state.error).toBeUndefined();
     expect(state.sessionId).toMatch(/^sess_/);
   });
@@ -60,6 +61,12 @@ describe('AgentStore', () => {
     expect(tc!.toolName).toBe('bash');
     expect(tc!.status).toBe('pending');
     expect(tc!.input).toBe('{"command":"ls"}');
+    expect(store.getState().activity).toHaveLength(1);
+    expect(store.getState().activity[0]).toMatchObject({
+      kind: 'tool',
+      id: 'tc_1',
+      entry: { toolName: 'bash', status: 'pending' },
+    });
   });
 
   test('dispatch tool_use snapshots currentText into turns', () => {
@@ -87,6 +94,11 @@ describe('AgentStore', () => {
     expect(tc!.status).toBe('complete');
     expect(tc!.result).toBe('output');
     expect(tc!.isError).toBe(false);
+    expect(store.getState().activity[0]).toMatchObject({
+      kind: 'tool',
+      id: 'tc_1',
+      entry: { status: 'complete', result: 'output', isError: false },
+    });
   });
 
   test('dispatch tool_result with error', () => {
@@ -107,6 +119,22 @@ describe('AgentStore', () => {
     expect(store.getState().messages.currentText).toBe('');
     expect(store.getState().messages.turns).toHaveLength(1);
     expect(store.getState().messages.turns[0].content).toBe('final text');
+  });
+
+  test('dispatch can restore elapsed time from event timestamps', () => {
+    const store = new AgentStore();
+    store.dispatch({ type: 'turn_start', iteration: 1 }, 1_000);
+    store.dispatch({ type: 'text_delta', delta: 'timed response' }, 1_500);
+    store.dispatch({ type: 'done', usage: { inputTokens: 1, outputTokens: 1 } }, 3_500);
+
+    const state = store.getState();
+    expect(state.totalElapsed).toBe(2.5);
+    expect(state.elapsed).toBe(0);
+    expect(state.messages.turns[0]).toMatchObject({
+      role: 'assistant',
+      content: 'timed response',
+      duration: 2.5,
+    });
   });
 
   test('dispatch done accumulates token usage across multiple runs', () => {
@@ -135,6 +163,11 @@ describe('AgentStore', () => {
     expect(session!.description).toBe('Research task');
     expect(session!.status).toBe('running');
     expect(session!.isBackground).toBe(false);
+    expect(store.getState().activity[0]).toMatchObject({
+      kind: 'agent',
+      id: 'tc_1',
+      session: { description: 'Research task', status: 'running' },
+    });
   });
 
   test('dispatch agent_progress updates progress', () => {
@@ -206,6 +239,7 @@ describe('AgentStore', () => {
     expect(store.getState().toolCalls.size).toBe(0);
     expect(store.getState().messages.currentText).toBe('');
     expect(store.getState().messages.currentThinking).toBe('');
+    expect(store.getState().activity).toHaveLength(1);
   });
 
   test('full conversation flow', () => {
@@ -224,6 +258,8 @@ describe('AgentStore', () => {
     expect(state.tokenUsage).toEqual({ inputTokens: 50, outputTokens: 25 });
     // User message + assistant text (snapshotted on tool_use)
     expect(state.messages.turns.length).toBeGreaterThanOrEqual(2);
+    expect(state.activity).toHaveLength(1);
+    expect(state.activity[0]).toMatchObject({ kind: 'tool', id: 'tc_1', iteration: 1 });
   });
 });
 

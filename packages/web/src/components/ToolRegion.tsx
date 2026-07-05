@@ -7,7 +7,7 @@ interface ToolRegionProps {
   agentSessions: Map<string, AgentSessionSummary>;
 }
 
-function SubAgentCard({ session }: { session: AgentSessionSummary }) {
+export function SubAgentCard({ session }: { session: AgentSessionSummary }) {
   const statusClass =
     session.status === 'running'
       ? 'border-emerald-200 bg-emerald-50 text-emerald-700'

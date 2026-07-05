@@ -42,6 +42,7 @@ export class AgentStore {
       status: 'idle',
       error: undefined,
       agentSessions: new Map(),
+      activity: [],
       pendingQuestion: null,
     };
   }
@@ -98,10 +99,11 @@ export class AgentStore {
    * Ingest an AgentEvent and update the relevant state slice.
    * Synchronous and lightweight.
    */
-  dispatch(event: AgentEvent): void {
+  dispatch(event: AgentEvent, timestamp?: number): void {
     const result = reduceAgentEvent(this.state, event, {
       turnStartTime: this.turnStartTime,
       totalStartTime: this.totalStartTime,
+      now: timestamp === undefined ? undefined : () => timestamp,
     });
     this.state = result.state;
     this.turnStartTime = result.turnStartTime;
@@ -150,6 +152,7 @@ export class AgentStore {
       status: 'idle',
       error: undefined,
       agentSessions: new Map(),
+      activity: [],
       pendingQuestion: null,
     };
     this.notifySelectors();

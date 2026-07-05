@@ -72,7 +72,15 @@ describe('EventBridge', () => {
     const bridge = new EventBridge(store, 'api-key');
     const session = await bridge.createSession({ workingDirectory: '/repo/cortx', metadata: { source: 'web' } });
     await bridge.connect(session.id);
-    FakeEventSource.instances[0].onmessage?.({ data: JSON.stringify({ type: 'text_delta', delta: 'hi' }) });
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        sequence: 1,
+        timestamp: 1000,
+        sessionId: 'sess_web',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'hi' },
+      }),
+    });
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
 
     await bridge.prompt(session.id, 'hello');
@@ -86,7 +94,7 @@ describe('EventBridge', () => {
     expect(refreshed.isRunning).toBe(true);
     expect(store.getState().sessionId).toBe('sess_web');
     expect(store.getState().messages.currentText).toBe('hi');
-    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_web/events?token=short-token');
+    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_web/events?format=envelope&token=short-token');
     expect(calls.map((call) => call.path)).toEqual([
       '/auth/token',
       '/sessions',

@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { AgentState } from '@cortx/store';
+import { activityToInspectorMaps, latestIterationActivity } from '../src/activity';
 import { DesktopWorkspace } from '../src/components/DesktopWorkspace';
+import { ChatView } from '../src/components/ChatView';
 import { MessageBubble } from '../src/components/MessageBubble';
 import { PromptInput } from '../src/components/PromptInput';
 import { ApprovalDialogBody } from '../src/components/AskUserDialog';
-import { ConnectionOverlay } from '../src/components/ConnectionOverlay';
+import { ConnectionStatus } from '../src/components/ConnectionStatus';
+import { MarkdownContent } from '../src/components/MarkdownContent';
 
 function makeState(overrides: Partial<AgentState> = {}): AgentState {
   return {
@@ -52,19 +55,46 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
         },
       ],
     ]),
+    activity: [
+      {
+        kind: 'tool',
+        id: 'tool_1',
+        timestamp: 3,
+        entry: {
+          toolName: 'read',
+          input: { path: 'packages/web/src/App.tsx' },
+          status: 'pending',
+          progress: 'Reading App.tsx',
+        },
+      },
+      {
+        kind: 'agent',
+        id: 'agent_1',
+        timestamp: 4,
+        session: {
+          toolCallId: 'agent_1',
+          description: 'Review UI states',
+          status: 'running',
+          isBackground: true,
+          iterations: 1,
+          toolCallCount: 1,
+          progress: 'Checking layout',
+        },
+      },
+    ],
     pendingQuestion: null,
     ...overrides,
   };
 }
 
 describe('web desktop UI', () => {
-  test('ConnectionOverlay renders the remote-only connect surface', () => {
-    const html = renderToStaticMarkup(<ConnectionOverlay onConnect={async () => undefined} />);
+  test('ConnectionStatus renders auto-connect state without API key inputs', () => {
+    const html = renderToStaticMarkup(<ConnectionStatus error={null} onRetry={() => undefined} />);
 
-    expect(html).toContain('Cortx Web');
-    expect(html).toContain('API Key');
-    expect(html).toContain('Connect to workspace');
-    expect(html).toContain('remote-only');
+    expect(html).toContain('Cortx');
+    expect(html).toContain('Connecting to runtime');
+    expect(html).not.toContain('API Key');
+    expect(html).not.toContain('Workspace Directory');
   });
 
   test('DesktopWorkspace renders shell, conversation and inspector facts', () => {
@@ -94,24 +124,171 @@ describe('web desktop UI', () => {
             isRunning: true,
             eventCount: 7,
           },
+          {
+            id: 'sess_same_project',
+            createdAt: 1,
+            lastActivityAt: 3,
+            workingDirectory: '/Users/dev/work/cortx',
+            model: 'default',
+            toolMode: 'read-only',
+            approvalMode: 'full-access',
+            isRunning: false,
+            eventCount: 3,
+          },
+          {
+            id: 'sess_other_project',
+            createdAt: 1,
+            lastActivityAt: 2,
+            workingDirectory: '/Users/dev/work/cortx/packages/web',
+            model: 'default',
+            toolMode: 'read-only',
+            approvalMode: 'full-access',
+            isRunning: false,
+            eventCount: 3,
+          },
         ]}
+        selectedWorkingDirectory="/Users/dev/work/cortx"
+        toolMode="all"
+        approvalMode="interactive"
         onSend={() => undefined}
         onAbort={() => undefined}
         onResume={() => undefined}
         onCreateSession={() => undefined}
+        onCreateSessionForCurrentProject={() => undefined}
+        onSelectProject={() => undefined}
         onSwitchSession={() => undefined}
+        onToolModeChange={() => undefined}
+        onApprovalModeChange={() => undefined}
       />,
     );
 
     expect(html).toContain('Cortx');
     expect(html).toContain('Agent workspace');
-    expect(html).toContain('New workspace session');
+    expect(html).toContain('Projects');
+    expect(html).toContain('Add Project');
+    expect(html).toContain('Add project');
     expect(html).toContain('Working');
     expect(html).toContain('work/cortx');
+    expect(html).toContain('2 sessions');
+    expect(html).toContain('read-only');
+    expect(html).toContain('full-access');
     expect(html).toContain('Inspector');
     expect(html).toContain('Tools');
     expect(html).toContain('Agents');
+    expect(html).toContain('Tool call');
+    expect(html).toContain('Sub-agent');
     expect(html).toContain('I will inspect the changed files.');
+  });
+
+  test('ChatView deduplicates sub-agent tool activity in the conversation', () => {
+    const html = renderToStaticMarkup(
+      <ChatView
+        messages={{ turns: [], currentText: '', currentThinking: '' }}
+        activity={[
+          {
+            kind: 'tool',
+            id: 'agent_dup',
+            timestamp: 1,
+            entry: {
+              toolName: 'agent',
+              input: { description: 'Review the project' },
+              status: 'complete',
+              result: 'done',
+            },
+          },
+          {
+            kind: 'agent',
+            id: 'agent_dup',
+            timestamp: 2,
+            session: {
+              toolCallId: 'agent_dup',
+              description: 'Review the project',
+              status: 'completed',
+              isBackground: false,
+              iterations: 2,
+              toolCallCount: 1,
+            },
+          },
+        ]}
+        toolCalls={new Map()}
+        agentSessions={new Map()}
+        status="idle"
+        iteration={0}
+        error={undefined}
+        toolMode="all"
+        approvalMode="interactive"
+        selectedWorkingDirectory="/Users/dev/work/cortx"
+        willCreateSessionOnSend={false}
+        onSend={() => undefined}
+        onAbort={() => undefined}
+        onResume={() => undefined}
+        onCreateSessionForCurrentProject={() => undefined}
+        onToolModeChange={() => undefined}
+        onApprovalModeChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('Sub-agent');
+    expect(html).toContain('Review the project');
+    expect(html).not.toContain('Tool call');
+  });
+
+  test('activity inspector summary counts visible tools and sub-agents once', () => {
+    const activity = [
+      {
+        kind: 'tool',
+        id: 'read_1',
+        timestamp: 1,
+        iteration: 2,
+        entry: { toolName: 'read', input: { path: 'README.md' }, status: 'complete', result: 'ok' },
+      },
+      {
+        kind: 'tool',
+        id: 'agent_1',
+        timestamp: 2,
+        iteration: 2,
+        entry: { toolName: 'agent', input: { description: 'Review' }, status: 'complete', result: 'done' },
+      },
+      {
+        kind: 'agent',
+        id: 'agent_1',
+        timestamp: 3,
+        iteration: 2,
+        session: {
+          toolCallId: 'agent_1',
+          description: 'Review',
+          status: 'completed',
+          isBackground: false,
+          iterations: 1,
+          toolCallCount: 1,
+        },
+      },
+      {
+        kind: 'agent',
+        id: 'old_agent',
+        timestamp: 0,
+        iteration: 1,
+        session: {
+          toolCallId: 'old_agent',
+          description: 'Old review',
+          status: 'completed',
+          isBackground: false,
+          iterations: 1,
+          toolCallCount: 1,
+        },
+      },
+    ] as const;
+
+    const { toolCalls, agentSessions } = activityToInspectorMaps([...activity]);
+    const latest = activityToInspectorMaps(latestIterationActivity([...activity]));
+
+    expect(toolCalls.size).toBe(1);
+    expect(toolCalls.get('read_1')?.toolName).toBe('read');
+    expect(agentSessions.size).toBe(2);
+    expect(agentSessions.get('agent_1')?.description).toBe('Review');
+    expect(latest.toolCalls.size).toBe(1);
+    expect(latest.agentSessions.size).toBe(1);
+    expect(latest.agentSessions.has('old_agent')).toBe(false);
   });
 
   test('MessageBubble distinguishes user and assistant output', () => {
@@ -124,13 +301,63 @@ describe('web desktop UI', () => {
   });
 
   test('PromptInput reflects prompt, follow-up and awaiting-user modes', () => {
-    const prompt = renderToStaticMarkup(<PromptInput onSend={() => undefined} />);
-    const followUp = renderToStaticMarkup(<PromptInput onSend={() => undefined} mode="follow-up" />);
-    const disabled = renderToStaticMarkup(<PromptInput onSend={() => undefined} disabled />);
+    const props = {
+      onSend: () => undefined,
+      toolMode: 'all' as const,
+      approvalMode: 'interactive' as const,
+      selectedWorkingDirectory: '/Users/dev/work/cortx',
+      canChangeModes: true,
+      willCreateSessionOnSend: false,
+      onCreateSession: () => undefined,
+      onToolModeChange: () => undefined,
+      onApprovalModeChange: () => undefined,
+    };
+    const prompt = renderToStaticMarkup(<PromptInput {...props} />);
+    const followUp = renderToStaticMarkup(<PromptInput {...props} mode="follow-up" canChangeModes={false} />);
+    const disabled = renderToStaticMarkup(<PromptInput {...props} disabled canChangeModes={false} />);
 
     expect(prompt).toContain('Prompt');
+    expect(prompt).toContain('Tools');
+    expect(prompt).toContain('Control');
+    expect(prompt).toContain('New session');
     expect(followUp).toContain('Follow-up');
     expect(disabled).toContain('Awaiting answer');
+  });
+
+  test('PromptInput warns when selected controls will create a new session', () => {
+    const html = renderToStaticMarkup(
+      <PromptInput
+        onSend={() => undefined}
+        toolMode="read-only"
+        approvalMode="full-access"
+        selectedWorkingDirectory="/Users/dev/work/cortx"
+        canChangeModes
+        willCreateSessionOnSend
+        onCreateSession={() => undefined}
+        onToolModeChange={() => undefined}
+        onApprovalModeChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('Sending will start a new session');
+  });
+
+  test('MarkdownContent renders common markdown blocks', () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        text={
+          '## Plan\n\n- inspect\n- fix\n\n| Name | Value |\n| --- | ---: |\n| Status | **ok** |\n\n```ts\nconst ok = true;\n```\n\nUse **bold** and [link](https://example.com).'
+        }
+      />,
+    );
+
+    expect(html).toContain('<h2');
+    expect(html).toContain('<ul');
+    expect(html).toContain('<table');
+    expect(html).toContain('<td');
+    expect(html).toContain('<code>const ok = true;</code>');
+    expect(html).toContain('<strong');
+    expect(html).toContain('href="https://example.com"');
   });
 
   test('ApprovalDialogBody renders the pending question and disabled submit state', () => {

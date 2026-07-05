@@ -1,3 +1,5 @@
+import { MarkdownContent } from './MarkdownContent';
+
 interface MessageBubbleProps {
   role: string;
   content: string;
@@ -21,7 +23,7 @@ export function MessageBubble({ role, content, duration }: MessageBubbleProps) {
             : 'max-w-[min(820px,100%)] border-l border-zinc-200 px-4 py-1 text-sm leading-7 text-zinc-800'
         }
       >
-        <div className="whitespace-pre-wrap break-words">{content}</div>
+        <MarkdownContent text={content} />
       </div>
     </article>
   );

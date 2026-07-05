@@ -1,24 +1,39 @@
 import { useRef, useEffect } from 'react';
 import type { AgentState } from '@cortx/store';
-import type { TurnEntry, ToolCallEntry, AgentSessionSummary } from '@cortx/store';
+import type { ActivityEntry, TurnEntry, ToolCallEntry, AgentSessionSummary } from '@cortx/store';
+import type { WebApprovalMode, WebWorkspaceToolMode } from '../bridge/event-bridge';
+import { visibleActivityEntries } from '../activity';
+import { ActivityCard } from './ActivityTimeline';
 import { PromptInput } from './PromptInput';
 import { StreamingText } from './StreamingText';
 import { ThinkingPanel } from './ThinkingPanel';
 import { MessageBubble } from './MessageBubble';
 import type { AgentStatus } from '@cortx/store';
-import { summarizeInspector, surface } from '../design';
+import { surface } from '../design';
 
 interface ChatViewProps {
   messages: AgentState['messages'];
+  activity: ActivityEntry[];
   toolCalls: Map<string, ToolCallEntry>;
   agentSessions: Map<string, AgentSessionSummary>;
   status: AgentStatus;
   iteration: number;
   error: string | undefined;
+  toolMode: WebWorkspaceToolMode;
+  approvalMode: WebApprovalMode;
+  selectedWorkingDirectory: string | null;
+  willCreateSessionOnSend: boolean;
   onSend: (message: string) => void;
   onAbort: () => void;
   onResume: () => void;
+  onCreateSessionForCurrentProject: () => void | Promise<unknown>;
+  onToolModeChange: (mode: WebWorkspaceToolMode) => void;
+  onApprovalModeChange: (mode: WebApprovalMode) => void;
 }
+
+type TimelineEntry =
+  | { kind: 'message'; key: string; timestamp: number; index: number; turn: TurnEntry }
+  | { kind: 'activity'; key: string; timestamp: number; index: number; activity: ActivityEntry };
 
 function ErrorBanner({ message }: { message: string }) {
   return (
@@ -40,44 +55,49 @@ function EmptyConversation() {
       </div>
       <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">What should Cortx work on?</h1>
       <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-600">
-        Start with a concrete request. The runtime will stream assistant output here while tools, approvals and sub-agents stay visible in the inspector.
+        Start with a concrete request. Assistant output, tool calls and sub-agent runs will stay in this conversation.
       </p>
     </div>
   );
 }
 
-function MobileActivityStrip({
-  toolCalls,
-  agentSessions,
-}: {
-  toolCalls: Map<string, ToolCallEntry>;
-  agentSessions: Map<string, AgentSessionSummary>;
-}) {
-  const summary = summarizeInspector(toolCalls, agentSessions);
-  if (summary.totalTools === 0 && summary.totalAgents === 0) return null;
-
-  return (
-    <div className={`mx-auto max-w-3xl rounded-lg px-3 py-2 text-xs xl:hidden ${surface.panel}`}>
-      <div className="flex flex-wrap items-center gap-3 text-zinc-500">
-        <span className="text-zinc-800">Activity</span>
-        <span>{summary.pendingTools} pending tools</span>
-        <span>{summary.completedTools} complete</span>
-        <span>{summary.runningAgents} running agents</span>
-      </div>
-    </div>
-  );
+function buildTimeline(messages: AgentState['messages'], activity: ActivityEntry[]): TimelineEntry[] {
+  return [
+    ...messages.turns.map((turn, index) => ({
+      kind: 'message' as const,
+      key: `message:${turn.timestamp}:${index}`,
+      timestamp: turn.timestamp,
+      index,
+      turn,
+    })),
+    ...visibleActivityEntries(activity).map((entry, index) => ({
+      kind: 'activity' as const,
+      key: `activity:${entry.kind}:${entry.id}`,
+      timestamp: entry.timestamp,
+      index: messages.turns.length + index,
+      activity: entry,
+    })),
+  ].sort((a, b) => a.timestamp - b.timestamp || a.index - b.index);
 }
 
 export function ChatView({
   messages,
+  activity,
   toolCalls,
   agentSessions,
   status,
   iteration,
   error,
+  toolMode,
+  approvalMode,
+  selectedWorkingDirectory,
+  willCreateSessionOnSend,
   onSend,
   onAbort,
   onResume,
+  onCreateSessionForCurrentProject,
+  onToolModeChange,
+  onApprovalModeChange,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -85,22 +105,35 @@ export function ChatView({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.currentText, messages.turns.length, toolCalls.size, error]);
+  }, [messages.currentText, messages.turns.length, activity, toolCalls.size, agentSessions.size, error]);
 
   const hasConversation =
-    messages.turns.length > 0 || Boolean(messages.currentText) || Boolean(messages.currentThinking) || Boolean(error);
+    messages.turns.length > 0 ||
+    activity.length > 0 ||
+    Boolean(messages.currentText) ||
+    Boolean(messages.currentThinking) ||
+    Boolean(error);
+  const timeline = buildTimeline(messages, activity);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-[#fbfbfa]">
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         {hasConversation ? (
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-8 sm:px-6 lg:px-8">
-            {messages.turns.map((turn: TurnEntry, i: number) => (
-              <MessageBubble key={`${turn.timestamp}-${i}`} role={turn.role} content={turn.content} duration={turn.duration} />
-            ))}
+            {timeline.map((entry) =>
+              entry.kind === 'message' ? (
+                <MessageBubble
+                  key={entry.key}
+                  role={entry.turn.role}
+                  content={entry.turn.content}
+                  duration={entry.turn.duration}
+                />
+              ) : (
+                <ActivityCard key={entry.key} entry={entry.activity} />
+              ),
+            )}
             {messages.currentThinking && <ThinkingPanel content={messages.currentThinking} />}
             {messages.currentText && <StreamingText text={messages.currentText} />}
-            <MobileActivityStrip toolCalls={toolCalls} agentSessions={agentSessions} />
             {error && <ErrorBanner message={error} />}
           </div>
         ) : (
@@ -137,6 +170,14 @@ export function ChatView({
         onSend={onSend}
         disabled={status === 'awaiting_user'}
         mode={status === 'running' ? 'follow-up' : 'prompt'}
+        toolMode={toolMode}
+        approvalMode={approvalMode}
+        selectedWorkingDirectory={selectedWorkingDirectory}
+        canChangeModes={status !== 'running' && status !== 'awaiting_user'}
+        willCreateSessionOnSend={willCreateSessionOnSend}
+        onCreateSession={onCreateSessionForCurrentProject}
+        onToolModeChange={onToolModeChange}
+        onApprovalModeChange={onApprovalModeChange}
       />
     </section>
   );

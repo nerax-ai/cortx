@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Collapsible } from '@base-ui-components/react/collapsible';
 import type { ToolCallEntry } from '@cortx/store';
 import { surface, truncateMiddle } from '../design';
@@ -30,6 +31,7 @@ function truncate(str: string, max = 80): string {
 export function ToolCard({ entry }: ToolCardProps) {
   const isPending = entry.status === 'pending';
   const isError = entry.isError === true;
+  const [open, setOpen] = useState(isPending || isError);
   const statusLabel = isPending ? 'pending' : isError ? 'error' : 'done';
   const statusClass = isPending
     ? 'border-amber-200 bg-amber-50 text-amber-700'
@@ -41,8 +43,12 @@ export function ToolCard({ entry }: ToolCardProps) {
   const resultStr = entry.result != null ? formatValue(entry.result) : null;
   const summary = entry.progress || inputStr || resultStr || 'No details yet';
 
+  useEffect(() => {
+    if (isPending || isError) setOpen(true);
+  }, [isError, isPending]);
+
   return (
-    <Collapsible.Root defaultOpen={isPending || isError} className={`overflow-hidden rounded-lg text-sm ${surface.panel}`}>
+    <Collapsible.Root open={open} onOpenChange={setOpen} className={`overflow-hidden rounded-lg text-sm ${surface.panel}`}>
       <Collapsible.Trigger
         className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-zinc-50 ${surface.focus}`}
       >
