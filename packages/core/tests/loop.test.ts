@@ -133,6 +133,35 @@ describe('agentLoop (streaming)', () => {
     expect(done.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
   });
 
+  test('done preserves provider cache and reasoning usage', async () => {
+    const language = mockLanguage([
+      [
+        { type: 'text-start', id: 't1' },
+        { type: 'text-delta', id: 't1', delta: 'cached' },
+        { type: 'text-end', id: 't1' },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: {
+            inputTokens: { total: 100, noCache: 60, cacheRead: 30, cacheWrite: 10 },
+            outputTokens: { total: 20, reasoning: 5 },
+          },
+        } as any,
+      ],
+    ]);
+    const events = [];
+    for await (const e of agentLoop({ language, model: 'test', messages: [] })) events.push(e);
+    const done = events.find((e) => e.type === 'done') as any;
+    expect(done.usage).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 20,
+      noCacheInputTokens: 60,
+      cacheReadTokens: 30,
+      cacheCreationTokens: 10,
+      reasoningTokens: 5,
+    });
+  });
+
   test('abort before start yields error', async () => {
     const language = mockLanguage([]);
     const controller = new AgentLoopController();

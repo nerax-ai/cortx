@@ -78,6 +78,40 @@ async function readFirstSseJson(
   return { id, data: JSON.parse(data) as RuntimeAgentEventEnvelope };
 }
 
+async function readSseUntil(
+  url: string,
+  headers: HeadersInit,
+  needle: string,
+  timeoutMs = 1_000,
+): Promise<string> {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
+  const res = await fetch(url, { headers, signal: ctrl.signal });
+  expect(res.status).toBe(200);
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('SSE response has no body');
+
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (!text.includes(needle)) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch (error) {
+    if (!text.includes(needle)) throw error;
+  } finally {
+    clearTimeout(timeout);
+    await reader.cancel().catch(() => undefined);
+    ctrl.abort();
+    reader.releaseLock();
+  }
+
+  if (!text.includes(needle)) throw new Error(`SSE stream did not include ${needle}`);
+  return text;
+}
+
 describe('server routes', () => {
   let server: ReturnType<typeof Bun.serve> | undefined;
   let handle: ServerRuntimeHandle | undefined;
@@ -126,6 +160,59 @@ describe('server routes', () => {
     const body = await res.json();
     expect(body.sessionId).toBeTruthy();
     expect(body.session.metadata).toMatchObject({ source: 'test' });
+  });
+
+  test('updates session controls without creating a new session', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolMode: 'none', approvalMode: 'deny' }),
+    });
+    expect(createRes.status).toBe(201);
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+
+    const updateRes = await fetch(`${BASE}/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolMode: 'read-only', approvalMode: 'interactive' }),
+    });
+    expect(updateRes.status).toBe(200);
+    await expect(updateRes.json()).resolves.toMatchObject({
+      session: {
+        id: sessionId,
+        toolMode: 'read-only',
+        approvalMode: 'interactive',
+      },
+    });
+  });
+
+  test('lists workspace directories for project selection', async () => {
+    const fixtureDir = mkdtempSync(join(process.cwd(), '.tmp-cortx-server-workspace-'));
+    serverFixtureDirs.push(fixtureDir);
+    mkdirSync(join(fixtureDir, 'packages'), { recursive: true });
+    writeFileSync(join(fixtureDir, 'README.md'), 'not a directory', 'utf8');
+
+    const res = await fetch(`${BASE}/workspaces/directories?path=${encodeURIComponent(fixtureDir)}`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      roots: string[];
+      current: string;
+      parent?: string;
+      entries: Array<{ name: string; path: string }>;
+    };
+    expect(body.current).toBe(fixtureDir);
+    expect(body.entries).toContainEqual({ name: 'packages', path: join(fixtureDir, 'packages') });
+    expect(body.entries.map((entry) => entry.name)).not.toContain('README.md');
+    expect(body.roots.length).toBeGreaterThan(0);
+
+    const outside = mkdtempSync(join(tmpdir(), 'cortx-server-workspace-outside-'));
+    try {
+      const denied = await fetch(`${BASE}/workspaces/directories?path=${encodeURIComponent(outside)}`, { headers });
+      expect(denied.status).toBe(400);
+      await expect(denied.json()).resolves.toMatchObject({ kind: 'invalid_workspace' });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   test('launches an inline AgentSpec through the server endpoint', async () => {
@@ -421,6 +508,21 @@ describe('server routes', () => {
     });
   });
 
+  test('SSE stream sends a replay-complete heartbeat immediately', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
+
+    const text = await readSseUntil(`${BASE}/sessions/${sessionId}/events?format=envelope`, headers, 'data: {}');
+
+    expect(text).toContain('data: {}');
+  });
+
   test('delete session', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
     const { sessionId } = (await createRes.json()) as { sessionId: string };
@@ -601,6 +703,30 @@ describe('server scoped API keys', () => {
       });
       expect(crossPrompt.status).toBe(403);
 
+      mkdirSync(join(rootA, 'src'), { recursive: true });
+      mkdirSync(join(rootB, 'src'), { recursive: true });
+      const dirsA = await handle.app.request(`/workspaces/directories?path=${encodeURIComponent(rootA)}`, {
+        headers: { Authorization: 'Bearer key-a' },
+      });
+      expect(dirsA.status).toBe(200);
+      await expect(dirsA.json()).resolves.toMatchObject({
+        current: rootA,
+        entries: expect.arrayContaining([{ name: 'src', path: join(rootA, 'src') }]),
+      });
+
+      const crossDirs = await handle.app.request(`/workspaces/directories?path=${encodeURIComponent(rootB)}`, {
+        headers: { Authorization: 'Bearer key-a' },
+      });
+      expect(crossDirs.status).toBe(403);
+      await expect(crossDirs.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const crossUpdate = await handle.app.request(`/sessions/${sessionB.id}`, {
+        method: 'PATCH',
+        headers: headersA,
+        body: JSON.stringify({ toolMode: 'none' }),
+      });
+      expect(crossUpdate.status).toBe(403);
+
       const ownGet = await handle.app.request(`/sessions/${sessionB.id}`, {
         headers: { Authorization: 'Bearer key-b' },
       });
@@ -654,6 +780,32 @@ describe('server scoped API keys', () => {
       });
       expect(escalatedApproval.status).toBe(403);
       await expect(escalatedApproval.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const sessionRes = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDirectory: rootA }),
+      });
+      expect(sessionRes.status).toBe(201);
+      const { session } = (await sessionRes.json()) as { session: { id: string } };
+
+      const escalatedUpdate = await handle.app.request(`/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolMode: 'all' }),
+      });
+      expect(escalatedUpdate.status).toBe(403);
+      await expect(escalatedUpdate.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const narrowedUpdate = await handle.app.request(`/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolMode: 'none', approvalMode: 'deny' }),
+      });
+      expect(narrowedUpdate.status).toBe(200);
+      await expect(narrowedUpdate.json()).resolves.toMatchObject({
+        session: { id: session.id, toolMode: 'none', approvalMode: 'deny' },
+      });
 
       const narrowerSession = await handle.app.request('/sessions', {
         method: 'POST',
@@ -779,6 +931,54 @@ describe('server scoped API keys', () => {
       handle.dispose();
       rmSync(rootA, { recursive: true, force: true });
       rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps AgentSpec discovery scoped away from broad workspace browse roots', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'cortx-server-broad-root-'));
+    const rootA = join(parent, 'project-a');
+    const rootB = join(parent, 'project-b');
+    const agentsA = join(rootA, 'agents');
+    const agentsB = join(rootB, 'agents');
+    mkdirSync(agentsA, { recursive: true });
+    mkdirSync(agentsB, { recursive: true });
+    writeFileSync(join(agentsA, 'reviewer.json'), JSON.stringify({ name: 'project-a-reviewer', prompt: 'review a' }), 'utf8');
+    writeFileSync(join(agentsB, 'builder.json'), JSON.stringify({ name: 'project-b-builder', prompt: 'build b' }), 'utf8');
+
+    const defaultHandle = createServerRuntime({
+      ...config,
+      apiKey: 'admin-key',
+      defaultWorkingDirectory: rootA,
+      allowedWorkspaceRoots: [parent],
+      skillPackRegistryPath: join(parent, 'default-packs.json'),
+    });
+    const configuredHandle = createServerRuntime({
+      ...config,
+      apiKey: 'admin-key',
+      defaultWorkingDirectory: rootA,
+      allowedWorkspaceRoots: [parent],
+      agentSpecRoots: [rootB],
+      skillPackRegistryPath: join(parent, 'configured-packs.json'),
+    });
+
+    try {
+      const defaultList = await defaultHandle.app.request('/agent-specs', {
+        headers: { Authorization: 'Bearer admin-key' },
+      });
+      expect(defaultList.status).toBe(200);
+      const defaultSpecs = ((await defaultList.json()) as { agentSpecs: Array<{ name: string }> }).agentSpecs;
+      expect(defaultSpecs.map((item) => item.name)).toEqual(['project-a-reviewer']);
+
+      const configuredList = await configuredHandle.app.request('/agent-specs', {
+        headers: { Authorization: 'Bearer admin-key' },
+      });
+      expect(configuredList.status).toBe(200);
+      const configuredSpecs = ((await configuredList.json()) as { agentSpecs: Array<{ name: string }> }).agentSpecs;
+      expect(configuredSpecs.map((item) => item.name)).toEqual(['project-b-builder']);
+    } finally {
+      defaultHandle.dispose();
+      configuredHandle.dispose();
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 });

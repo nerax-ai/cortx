@@ -1,5 +1,5 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentDurableRunStore, Logger } from '@cortx/sdk';
+import type { AgentDurableRunStore, ContextUsageSource, Logger } from '@cortx/sdk';
 import type { CortxRegistry, PluginConfig } from '@cortx/runtime';
 import type { WorkspaceToolMode } from '@cortx/runtime';
 import type { RuntimeApprovalMode } from '@cortx/runtime';
@@ -18,10 +18,13 @@ export interface ServerConfig {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   registry?: CortxRegistry;
   plugins?: PluginConfig[];
   defaultWorkingDirectory?: string;
   allowedWorkspaceRoots?: string[];
+  agentSpecRoots?: string[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
   logger?: Logger;
@@ -36,6 +39,8 @@ export interface SessionInfo {
   workingDirectory: string;
   model: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
   skillPacks?: string[];

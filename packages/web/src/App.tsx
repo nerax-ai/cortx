@@ -7,6 +7,7 @@ import {
   type WebApprovalMode,
   type WebEventConnectionState,
   type WebRuntimeSessionInfo,
+  type WebWorkspaceDirectoryListing,
   type WebSkillPackInfo,
   type WebSkillPackInstallRequest,
   type WebWorkspaceToolMode,
@@ -60,16 +61,28 @@ export function App() {
         [...existing].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0] ??
         await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' });
       await bridge.connect(target.id);
-      const [nextSessions, discoveredAgentSpecs, installedSkillPacks] = await Promise.all([
-        bridge.listSessions(),
-        bridge.listAgentSpecs(),
-        bridge.listSkillPacks(),
-      ]);
+      const nextSessions = await bridge.listSessions();
       activateSession(target);
       setSessions(nextSessions);
-      setAgentSpecs(discoveredAgentSpecs);
-      setSkillPacks(installedSkillPacks);
       setConnected(true);
+      void bridge
+        .listAgentSpecs()
+        .then((discoveredAgentSpecs) => {
+          if (bridgeRef.current === bridge) setAgentSpecs(discoveredAgentSpecs);
+        })
+        .catch((err) => {
+          if (bridgeRef.current === bridge) setConnectionError(err instanceof Error ? err.message : String(err));
+        });
+      void bridge
+        .listSkillPacks()
+        .then((installedSkillPacks) => {
+          if (bridgeRef.current !== bridge) return;
+          setSkillPacks(installedSkillPacks);
+          setSelectedSkillPackIds((current) => current.filter((id) => installedSkillPacks.some((pack) => pack.id === id)));
+        })
+        .catch((err) => {
+          if (bridgeRef.current === bridge) setConnectionError(err instanceof Error ? err.message : String(err));
+        });
     } catch (err) {
       bridge.disconnect();
       bridgeRef.current = null;
@@ -83,6 +96,16 @@ export function App() {
     setSelectedWorkingDirectory(next.workingDirectory);
     setToolMode(next.toolMode);
     setApprovalMode(next.approvalMode);
+    setSelectedSkillPackIds(next.skillPacks ?? []);
+  }
+
+  function rememberSession(next: WebRuntimeSessionInfo) {
+    setSession((current) => (current?.id === next.id ? next : current));
+    setSessions((current) =>
+      current.some((item) => item.id === next.id)
+        ? current.map((item) => (item.id === next.id ? next : item))
+        : [next, ...current],
+    );
   }
 
   async function refreshSessions() {
@@ -100,6 +123,11 @@ export function App() {
     const installed = await bridgeRef.current.listSkillPacks();
     setSkillPacks(installed);
     setSelectedSkillPackIds((current) => current.filter((id) => installed.some((pack) => pack.id === id)));
+  }
+
+  async function listWorkspaceDirectories(path?: string): Promise<WebWorkspaceDirectoryListing> {
+    if (!bridgeRef.current) throw new Error('Not connected');
+    return bridgeRef.current.listWorkspaceDirectories(path);
   }
 
   function selectedSkillPacksForRequest(): string[] | undefined {
@@ -172,23 +200,59 @@ export function App() {
     await Promise.all([refreshSkillPacks(), refreshAgentSpecs()]);
   }
 
+  async function updateActiveSession(request: {
+    toolMode?: WebWorkspaceToolMode;
+    approvalMode?: WebApprovalMode;
+    skillPacks?: string[];
+  }) {
+    if (!session || !bridgeRef.current) return null;
+    const updated = await bridgeRef.current.updateSession(session.id, request);
+    activateSession(updated);
+    rememberSession(updated);
+    return updated;
+  }
+
+  async function handleToolModeChange(mode: WebWorkspaceToolMode) {
+    const previous = session?.toolMode ?? toolMode;
+    setToolMode(mode);
+    try {
+      await updateActiveSession({ toolMode: mode });
+    } catch (err) {
+      setToolMode(previous);
+      setConnectionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleApprovalModeChange(mode: WebApprovalMode) {
+    const previous = session?.approvalMode ?? approvalMode;
+    setApprovalMode(mode);
+    try {
+      await updateActiveSession({ approvalMode: mode });
+    } catch (err) {
+      setApprovalMode(previous);
+      setConnectionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleSkillPackSelectionChange(ids: string[]) {
+    const previous = session?.skillPacks ?? selectedSkillPackIds;
+    setSelectedSkillPackIds(ids);
+    try {
+      await updateActiveSession({ skillPacks: ids });
+      await refreshAgentSpecs();
+    } catch (err) {
+      setSelectedSkillPackIds(previous);
+      setConnectionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function sendPrompt(message: string) {
     if (!session || !bridgeRef.current) return;
     if (state.status === 'running') {
       await bridgeRef.current.followUp(session.id, message);
       return;
     }
-    let target = session;
-    const sessionPackIds = session.skillPacks ?? [];
-    const selectedPacksChanged =
-      sessionPackIds.length !== selectedSkillPackIds.length ||
-      sessionPackIds.some((id) => !selectedSkillPackIds.includes(id));
-    if (session.toolMode !== toolMode || session.approvalMode !== approvalMode || selectedPacksChanged) {
-      const created = await createSessionForCurrentProject();
-      if (!created) return;
-      target = created;
-    }
-    await bridgeRef.current.prompt(target.id, message);
+    await bridgeRef.current.prompt(session.id, message);
     await refreshSessions();
   }
 
@@ -258,13 +322,14 @@ export function App() {
         onRecoverEventStream={handleRecoverEventStream}
         onCreateSession={createWorkspaceSession}
         onCreateSessionForCurrentProject={createSessionForCurrentProject}
+        onBrowseWorkspaceDirectories={listWorkspaceDirectories}
         onLaunchAgentSpec={launchAgentSpec}
         onInstallSkillPack={installSkillPack}
-        onSkillPackSelectionChange={setSelectedSkillPackIds}
+        onSkillPackSelectionChange={handleSkillPackSelectionChange}
         onSelectProject={selectProject}
         onSwitchSession={switchSession}
-        onToolModeChange={setToolMode}
-        onApprovalModeChange={setApprovalMode}
+        onToolModeChange={handleToolModeChange}
+        onApprovalModeChange={handleApprovalModeChange}
       />
       {state.status === 'awaiting_user' && state.pendingQuestion && (
         <AskUserDialog pendingQuestion={state.pendingQuestion} onSubmit={handleAnswer} />

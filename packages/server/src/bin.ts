@@ -2,8 +2,9 @@ import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
+import type { ContextUsageSource } from '@cortx/sdk';
 import { existsSync } from 'fs';
-import { dirname, resolve } from 'path';
+import { delimiter, dirname, parse, resolve } from 'path';
 import {
   FileDurableRunStore,
   type CortxFactoryMap,
@@ -19,8 +20,10 @@ interface CortxConfig {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
   workingDirectory?: string;
   allowedWorkspaceRoots?: string[];
+  agentSpecRoots?: string[];
   apiKeys?: ServerAuthKey[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
@@ -53,6 +56,37 @@ function findProjectRoot(start: string): string {
   }
 }
 
+function readEnvPathList(name: string): string[] {
+  const value = process.env[name];
+  if (!value?.trim()) return [];
+  return value
+    .split(delimiter)
+    .map((path) => path.trim())
+    .filter(Boolean);
+}
+
+function readPositiveEnvNumber(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+function modelContextWindowFromSynax(synax: Synax, model: string): number | undefined {
+  const found = synax.listModels().find((entry) => entry.id === model || entry.name === model);
+  const context = found?.limits?.context;
+  return typeof context === 'number' && Number.isFinite(context) && context > 0 ? Math.floor(context) : undefined;
+}
+
+function resolveContextWindow(config: CortxConfig, synax: Synax): { tokens?: number; source?: ContextUsageSource } {
+  const envContext = readPositiveEnvNumber('CORTX_CONTEXT_WINDOW_TOKENS');
+  if (envContext !== undefined) return { tokens: envContext, source: 'configured' };
+  if (config.contextWindowTokens !== undefined) return { tokens: config.contextWindowTokens, source: 'configured' };
+  const modelContext = modelContextWindowFromSynax(synax, config.model);
+  if (modelContext !== undefined) return { tokens: modelContext, source: 'model_metadata' };
+  return {};
+}
+
 async function main() {
   const config = await loadServerConfig();
   if (!config) {
@@ -83,10 +117,12 @@ async function main() {
   }
 
   const defaultWorkingDirectory = resolve(config.workingDirectory ?? findProjectRoot(process.cwd()));
-  const allowedWorkspaceRoots = [...new Set([
-    defaultWorkingDirectory,
-    ...(config.allowedWorkspaceRoots ?? []),
-  ].map((path) => resolve(path)))];
+  const configuredRoots = [...readEnvPathList('CORTX_WORKSPACE_ROOTS'), ...(config.allowedWorkspaceRoots ?? [])];
+  const browseRoots = configuredRoots.length ? configuredRoots : [parse(defaultWorkingDirectory).root];
+  const allowedWorkspaceRoots = [...new Set([...browseRoots, defaultWorkingDirectory].map((path) => resolve(path)))];
+  const configuredAgentSpecRoots = [...readEnvPathList('CORTX_AGENT_SPEC_ROOTS'), ...(config.agentSpecRoots ?? [])];
+  const agentSpecRoots = [...new Set((configuredAgentSpecRoots.length ? configuredAgentSpecRoots : [defaultWorkingDirectory]).map((path) => resolve(path)))];
+  const contextWindow = resolveContextWindow(config, synax);
 
   const handle = createServerRuntime({
     apiKey,
@@ -94,11 +130,14 @@ async function main() {
     model: config.model,
     system: config.system,
     maxIterations: config.maxIterations,
+    contextWindowTokens: contextWindow.tokens,
+    contextWindowSource: contextWindow.source,
     registry,
     plugins: config.agentPlugins,
     apiKeys: config.apiKeys,
     defaultWorkingDirectory,
     allowedWorkspaceRoots,
+    agentSpecRoots,
     toolMode: config.toolMode ?? 'all',
     approvalMode: config.approvalMode ?? 'interactive',
     durableStore: new FileDurableRunStore(process.env.CORTX_DURABLE_DIR || resolve(defaultWorkingDirectory, '.cortx', 'runtime')),
@@ -110,15 +149,34 @@ async function main() {
 
   const port = Number(process.env.PORT) || 3000;
 
-  Bun.serve({ port, fetch: handle.app.fetch, idleTimeout: 255 });
+  const server = Bun.serve({ port, fetch: handle.app.fetch, idleTimeout: 255 });
 
   console.log(`\n  cortx web server`);
   console.log(`  ─────────────────`);
   console.log(`  API:   http://localhost:${port}`);
   console.log(`  Key:   ${apiKey}`);
   console.log(`  Model: ${config.model}\n`);
+  console.log(`  Context: ${contextWindow.tokens ? `${contextWindow.tokens} tokens (${contextWindow.source})` : 'unknown'}\n`);
   console.log(`  Workspace: ${defaultWorkingDirectory}`);
   console.log(`  Roots: ${allowedWorkspaceRoots.join(', ')}\n`);
+  console.log(`  AgentSpecs: ${agentSpecRoots.join(', ')}\n`);
+
+  const keepAlive = setInterval(() => {}, 60 * 60 * 1000);
+
+  await new Promise<void>((resolve) => {
+    let closing = false;
+    const close = async () => {
+      if (closing) return;
+      closing = true;
+      clearInterval(keepAlive);
+      server.stop();
+      handle.dispose();
+      await log.close();
+      resolve();
+    };
+    process.on('SIGINT', close);
+    process.on('SIGTERM', close);
+  });
 }
 
 main().catch(async (e) => {

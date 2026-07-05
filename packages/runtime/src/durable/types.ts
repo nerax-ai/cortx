@@ -1,4 +1,4 @@
-import type { AgentDurableRunStore, RuntimeAgentEventEnvelope } from '@cortx/sdk';
+import type { AgentDurableRunStore, ContextUsageSource, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode, RuntimeSessionMetadata } from '../session.js';
 import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
@@ -16,6 +16,8 @@ export interface RuntimeSessionSnapshot {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;

@@ -1,4 +1,5 @@
 import type { AgentState } from '@cortx/store';
+import type { ContextUsageSummary } from '../context-usage';
 import type {
   WebAgentSpecInfo,
   WebApprovalMode,
@@ -6,6 +7,7 @@ import type {
   WebRuntimeSessionInfo,
   WebSkillPackInfo,
   WebSkillPackInstallRequest,
+  WebWorkspaceDirectoryListing,
   WebWorkspaceToolMode,
 } from '../bridge/event-bridge';
 import { surface } from '../design';
@@ -34,6 +36,7 @@ interface DesktopWorkspaceProps {
     skillPacks?: string[];
   }) => void | Promise<void>;
   onCreateSessionForCurrentProject: () => void | Promise<unknown>;
+  onBrowseWorkspaceDirectories: (path?: string) => Promise<WebWorkspaceDirectoryListing>;
   onLaunchAgentSpec: (path: string) => void | Promise<void>;
   onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
   onSkillPackSelectionChange: (ids: string[]) => void;
@@ -41,6 +44,30 @@ interface DesktopWorkspaceProps {
   onSwitchSession: (sessionId: string) => void | Promise<void>;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
   onApprovalModeChange: (mode: WebApprovalMode) => void;
+}
+
+function contextUsageForSession(state: AgentState, session: WebRuntimeSessionInfo | null): ContextUsageSummary | undefined {
+  if (state.contextUsage) {
+    const windowTokens = state.contextUsage.windowTokens ?? session?.contextWindowTokens;
+    return {
+      ...state.contextUsage,
+      windowTokens,
+      windowSource: state.contextUsage.windowSource ?? session?.contextWindowSource,
+      model: state.contextUsage.model ?? session?.model,
+      percentUsed:
+        state.contextUsage.percentUsed ??
+        (state.contextUsage.usedTokens !== undefined && windowTokens !== undefined && windowTokens > 0
+          ? (state.contextUsage.usedTokens / windowTokens) * 100
+          : undefined),
+    };
+  }
+  if (!session) return undefined;
+  return {
+    windowTokens: session.contextWindowTokens,
+    windowSource: session.contextWindowSource,
+    model: session.model,
+    breakdown: [],
+  };
 }
 
 export function DesktopWorkspace({
@@ -60,6 +87,7 @@ export function DesktopWorkspace({
   onRecoverEventStream,
   onCreateSession,
   onCreateSessionForCurrentProject,
+  onBrowseWorkspaceDirectories,
   onLaunchAgentSpec,
   onInstallSkillPack,
   onSkillPackSelectionChange,
@@ -68,13 +96,7 @@ export function DesktopWorkspace({
   onToolModeChange,
   onApprovalModeChange,
 }: DesktopWorkspaceProps) {
-  const willCreateSessionOnSend =
-    Boolean(session) &&
-    state.status !== 'running' &&
-    (session?.toolMode !== toolMode ||
-      session?.approvalMode !== approvalMode ||
-      (session?.skillPacks ?? []).length !== selectedSkillPackIds.length ||
-      (session?.skillPacks ?? []).some((id) => !selectedSkillPackIds.includes(id)));
+  const contextUsage = contextUsageForSession(state, session);
 
   return (
     <div className={`${surface.page} flex h-screen overflow-hidden`}>
@@ -90,6 +112,7 @@ export function DesktopWorkspace({
           tokenUsage={state.tokenUsage}
           elapsed={state.totalElapsed}
           onCreateSession={onCreateSession}
+          onBrowseWorkspaceDirectories={onBrowseWorkspaceDirectories}
           onLaunchAgentSpec={onLaunchAgentSpec}
           onInstallSkillPack={onInstallSkillPack}
           onSkillPackSelectionChange={onSkillPackSelectionChange}
@@ -114,13 +137,13 @@ export function DesktopWorkspace({
             activity={state.activity}
             toolCalls={state.toolCalls}
             agentSessions={state.agentSessions}
+            contextUsage={contextUsage}
             status={state.status}
             iteration={state.iteration}
             error={state.error}
             toolMode={toolMode}
             approvalMode={approvalMode}
             selectedWorkingDirectory={selectedWorkingDirectory}
-            willCreateSessionOnSend={willCreateSessionOnSend}
             onSend={onSend}
             onAbort={onAbort}
             onResume={onResume}

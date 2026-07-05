@@ -46,6 +46,19 @@ function sessionBody(isRunning = false) {
   };
 }
 
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function waitForCondition(condition: () => boolean, timeoutMs = 200): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (condition()) return;
+    await flushAsyncWork();
+  }
+  throw new Error('Timed out waiting for condition');
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   (globalThis as unknown as { EventSource?: unknown }).EventSource = originalEventSource;
@@ -54,16 +67,27 @@ afterEach(() => {
 
 describe('EventBridge', () => {
   test('uses the runtime session API and dispatches SSE events into the store', async () => {
-    const calls: Array<{ path: string; auth: string | null; body?: unknown }> = [];
+    const calls: Array<{ path: string; method: string; auth: string | null; body?: unknown }> = [];
     globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input), 'http://web');
       calls.push({
         path: url.pathname,
+        method: init?.method ?? 'GET',
         auth: new Headers(init?.headers).get('Authorization'),
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
       if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
       if (url.pathname === '/sessions' && init?.method === 'POST') return jsonResponse(sessionBody());
+      if (url.pathname === '/sessions/sess_web' && init?.method === 'PATCH') {
+        return jsonResponse({
+          session: {
+            ...sessionBody().session,
+            toolMode: 'read-only',
+            approvalMode: 'deny',
+            skillPacks: ['review-pack'],
+          },
+        });
+      }
       if (url.pathname === '/sessions/sess_web') return jsonResponse(sessionBody(true));
       return jsonResponse({ ok: true });
     }) as typeof fetch;
@@ -90,8 +114,14 @@ describe('EventBridge', () => {
     await bridge.answer(session.id, 'tc_1', 'yes');
     await bridge.abort(session.id);
     await bridge.resume(session.id);
+    const updated = await bridge.updateSession(session.id, {
+      toolMode: 'read-only',
+      approvalMode: 'deny',
+      skillPacks: ['review-pack'],
+    });
     const refreshed = await bridge.getSession(session.id);
 
+    expect(updated).toMatchObject({ toolMode: 'read-only', approvalMode: 'deny', skillPacks: ['review-pack'] });
     expect(refreshed.isRunning).toBe(true);
     expect(store.getState().sessionId).toBe('sess_web');
     expect(store.getState().messages.currentText).toBe('hi');
@@ -106,8 +136,13 @@ describe('EventBridge', () => {
       '/sessions/sess_web/abort',
       '/sessions/sess_web/resume',
       '/sessions/sess_web',
+      '/sessions/sess_web',
     ]);
     expect(calls[1].body).toEqual({ workingDirectory: '/repo/cortx', metadata: { source: 'web' } });
+    expect(calls[8]).toMatchObject({
+      method: 'PATCH',
+      body: { toolMode: 'read-only', approvalMode: 'deny', skillPacks: ['review-pack'] },
+    });
     expect(calls[0].auth).toBe('Bearer api-key');
     expect(calls.slice(1).every((call) => call.auth === 'Bearer short-token')).toBe(true);
   });
@@ -173,6 +208,60 @@ describe('EventBridge', () => {
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
 
     expect(phases).toEqual(['connecting', 'replaying', 'live']);
+  });
+
+  test('reconciles stale running replay state with stopped runtime session on heartbeat', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push(url.pathname);
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_stale') {
+        return jsonResponse({
+          session: {
+            ...sessionBody(false).session,
+            id: 'sess_stale',
+            eventCount: 3,
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    const bridge = new EventBridge(store, 'api-key');
+    await bridge.connect('sess_stale');
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        sequence: 1,
+        timestamp: 1000,
+        sessionId: 'sess_stale',
+        runId: 1,
+        event: { type: 'turn_start', iteration: 1 },
+      }),
+    });
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        sequence: 2,
+        timestamp: 1200,
+        sessionId: 'sess_stale',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'partial replay' },
+      }),
+    });
+    expect(store.getState().status).toBe('running');
+
+    FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+    await waitForCondition(() => store.getState().status === 'idle');
+
+    expect(calls).toContain('/sessions/sess_stale');
+    expect(store.getState().status).toBe('idle');
+    expect(store.getState().messages.currentText).toBe('');
+    expect(store.getState().messages.turns.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'partial replay',
+    });
   });
 
   test('launches AgentSpec assets through the server bridge', async () => {
@@ -317,6 +406,40 @@ describe('EventBridge', () => {
     ]);
     expect(calls[1].auth).toBe('Bearer short-token');
     expect(calls[2].body).toEqual({ path: 'examples/review-pack', id: 'review-pack' });
+  });
+
+  test('lists workspace directories through the server bridge', async () => {
+    const calls: Array<{ path: string; search: string; auth: string | null }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push({
+        path: url.pathname,
+        search: url.search,
+        auth: new Headers(init?.headers).get('Authorization'),
+      });
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/workspaces/directories') {
+        return jsonResponse({
+          roots: ['/repo'],
+          current: url.searchParams.get('path') ?? '/repo',
+          parent: '/repo',
+          entries: [{ name: 'cortx', path: '/repo/cortx' }],
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key');
+    const listing = await bridge.listWorkspaceDirectories('/repo/cortx');
+
+    expect(listing).toMatchObject({
+      roots: ['/repo'],
+      current: '/repo/cortx',
+      entries: [{ name: 'cortx', path: '/repo/cortx' }],
+    });
+    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/workspaces/directories']);
+    expect(calls[1].search).toBe('?path=%2Frepo%2Fcortx');
+    expect(calls[1].auth).toBe('Bearer short-token');
   });
 
   test('surfaces typed server errors', async () => {

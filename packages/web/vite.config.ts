@@ -10,6 +10,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/sessions': 'http://localhost:3000',
+      '/agent-specs': 'http://localhost:3000',
+      '/skill-packs': 'http://localhost:3000',
+      '/workspaces': 'http://localhost:3000',
       '/auth': 'http://localhost:3000',
       '/health': 'http://localhost:3000',
     },

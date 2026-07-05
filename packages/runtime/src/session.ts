@@ -1,4 +1,4 @@
-import type { AgentEvent, LanguageMessage, Tool } from '@cortx/sdk';
+import type { AgentEvent, ContextUsageSource, LanguageMessage, Tool } from '@cortx/sdk';
 import type { Cortx, PluginConfig, CortxRegistry } from '@cortx/core';
 import type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 import type { SubAgentSessionStore } from './capabilities/sub-agent/session-store.js';
@@ -18,6 +18,8 @@ export interface RuntimeSessionInfo {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
@@ -34,6 +36,7 @@ export interface RuntimeSessionCreateRequest {
   model?: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
   tools?: Tool[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
@@ -45,6 +48,26 @@ export interface RuntimeSessionCreateRequest {
   metadata?: RuntimeSessionMetadata;
 }
 
+export interface RuntimeSessionUpdateRequest {
+  toolMode?: WorkspaceToolMode;
+  approvalMode?: RuntimeApprovalMode;
+  contextWindowTokens?: number;
+  capabilities?: RuntimeDefaultCapabilities;
+  skillPaths?: string[];
+  skillPacks?: string[];
+  metadata?: RuntimeSessionMetadata;
+}
+
+export interface RuntimeSessionContextMetadata {
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
+  systemPromptTokens: number;
+  toolDefinitionTokens: number;
+  toolCount: number;
+  skillSummaryTokens: number;
+  skillCount: number;
+}
+
 export interface ManagedRuntimeSession {
   id: string;
   cortx: Cortx;
@@ -54,11 +77,17 @@ export interface ManagedRuntimeSession {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
+  requestedCapabilities: RuntimeDefaultCapabilities;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   skillPacks?: string[];
+  requestTools: Tool[];
+  registry?: CortxRegistry;
+  plugins?: PluginConfig[];
   events: AgentEvent[];
   eventEnvelopes: import('@cortx/sdk').RuntimeAgentEventEnvelope[];
   subscribers: Set<(event: AgentEvent) => void>;
@@ -69,6 +98,7 @@ export interface ManagedRuntimeSession {
   runId: number;
   nextEventSequence: number;
   agentSessions: SubAgentSessionStore;
+  contextMetadata: RuntimeSessionContextMetadata;
   metadata?: RuntimeSessionMetadata;
 }
 

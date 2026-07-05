@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react';
 
+type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+type HeadingTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+
 type MarkdownBlock =
   | { type: 'paragraph'; text: string }
-  | { type: 'heading'; level: 1 | 2 | 3; text: string }
+  | { type: 'heading'; level: HeadingLevel; text: string }
   | { type: 'code'; language: string; code: string }
   | { type: 'list'; ordered: boolean; items: string[] }
   | { type: 'table'; headers: string[]; rows: string[][] }
@@ -98,11 +101,11 @@ function parseMarkdown(text: string): MarkdownBlock[] {
       continue;
     }
 
-    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
     if (heading) {
       flushParagraph();
       flushList();
-      blocks.push({ type: 'heading', level: heading[1].length as 1 | 2 | 3, text: heading[2] });
+      blocks.push({ type: 'heading', level: heading[1].length as HeadingLevel, text: heading[2] });
       continue;
     }
 
@@ -173,6 +176,15 @@ function inline(text: string): ReactNode[] {
   return nodes;
 }
 
+function headingClass(level: HeadingLevel): string {
+  if (level === 1) return 'text-xl font-semibold tracking-tight text-zinc-950';
+  if (level === 2) return 'text-lg font-semibold tracking-tight text-zinc-950';
+  if (level === 3) return 'text-base font-semibold text-zinc-900';
+  if (level === 4) return 'text-sm font-semibold text-zinc-900';
+  if (level === 5) return 'text-sm font-medium text-zinc-800';
+  return 'text-xs font-semibold uppercase tracking-[0.08em] text-zinc-600';
+}
+
 export function MarkdownContent({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const blocks = parseMarkdown(text);
 
@@ -180,13 +192,8 @@ export function MarkdownContent({ text, streaming = false }: { text: string; str
     <div className="space-y-3 break-words">
       {blocks.map((block, index) => {
         if (block.type === 'heading') {
-          const className =
-            block.level === 1
-              ? 'text-xl font-semibold tracking-tight text-zinc-950'
-              : block.level === 2
-                ? 'text-lg font-semibold tracking-tight text-zinc-950'
-                : 'text-base font-semibold text-zinc-900';
-          const Tag = (`h${block.level}`) as 'h1' | 'h2' | 'h3';
+          const Tag = (`h${block.level}`) as HeadingTag;
+          const className = headingClass(block.level);
           return <Tag key={index} className={className}>{inline(block.text)}</Tag>;
         }
         if (block.type === 'code') {

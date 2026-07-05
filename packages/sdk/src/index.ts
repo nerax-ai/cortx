@@ -8,7 +8,12 @@ export type { SideEffects, Tool, ToolContext, ToolResult } from './tools.js';
 export { defineTool } from './tools.js';
 
 export type {
+  AgentDoneUsage,
   AgentEvent,
+  ContextUsageBreakdownEntry,
+  ContextUsageBreakdownKey,
+  ContextUsageFacts,
+  ContextUsageSource,
   ErrorCode,
   RuntimeAgentEventEnvelope,
   RuntimeUserRequest,

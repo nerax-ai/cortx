@@ -8,6 +8,7 @@ import { MessageBubble } from '../src/components/MessageBubble';
 import { PromptInput } from '../src/components/PromptInput';
 import { ApprovalDialogBody } from '../src/components/AskUserDialog';
 import { ConnectionStatus } from '../src/components/ConnectionStatus';
+import { ContextUsagePanel } from '../src/components/ContextUsageButton';
 import { MarkdownContent } from '../src/components/MarkdownContent';
 import { WorkspaceHeader } from '../src/components/WorkspaceHeader';
 
@@ -38,6 +39,21 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
       ],
     ]),
     tokenUsage: { inputTokens: 1530, outputTokens: 220 },
+    contextUsage: {
+      usedTokens: 1530,
+      windowTokens: 200000,
+      windowSource: 'model_metadata',
+      model: 'default',
+      percentUsed: 0.765,
+      cacheHitRate: 20,
+      breakdown: [
+        { key: 'messages', label: '消息', tokens: 700, source: 'runtime_estimate', count: 2 },
+        { key: 'tools', label: '系统工具', tokens: 500, source: 'runtime_estimate', count: 4 },
+        { key: 'skills', label: '技能', tokens: 200, source: 'runtime_estimate', count: 1 },
+        { key: 'system_prompt', label: '系统提示词', tokens: 100, source: 'runtime_estimate' },
+        { key: 'other', label: '其他', tokens: 30, source: 'provider' },
+      ],
+    },
     totalElapsed: 65,
     elapsed: 5,
     status: 'running',
@@ -182,6 +198,11 @@ describe('web desktop UI', () => {
         onRecoverEventStream={() => undefined}
         onCreateSession={() => undefined}
         onCreateSessionForCurrentProject={() => undefined}
+        onBrowseWorkspaceDirectories={async () => ({
+          roots: ['/Users/dev/work/cortx'],
+          current: '/Users/dev/work/cortx',
+          entries: [],
+        })}
         onLaunchAgentSpec={() => undefined}
         onInstallSkillPack={() => undefined}
         onSkillPackSelectionChange={() => undefined}
@@ -203,6 +224,7 @@ describe('web desktop UI', () => {
     expect(html).toContain('Install Skill Pack');
     expect(html).toContain('Install pack');
     expect(html).toContain('Add Project');
+    expect(html).toContain('Browse');
     expect(html).toContain('Add project');
     expect(html).toContain('Working');
     expect(html).toContain('Live');
@@ -217,6 +239,49 @@ describe('web desktop UI', () => {
     expect(html).toContain('Tool call');
     expect(html).toContain('Sub-agent');
     expect(html).toContain('I will inspect the changed files.');
+    expect(html).toContain('Context');
+  });
+
+  test('ContextUsagePanel renders runtime context facts without local estimation', () => {
+    const summary = makeState().contextUsage;
+    const html = renderToStaticMarkup(<ContextUsagePanel summary={summary!} />);
+
+    expect(html).toContain('上下文容量');
+    expect(html).toContain('default');
+    expect(html).toContain('模型配置');
+    expect(html).toContain('消息');
+    expect(html).toContain('系统工具');
+    expect(html).toContain('技能');
+    expect(html).toContain('系统提示词');
+    expect(html).toContain('缓存命中率');
+    expect(html).toContain('20%');
+  });
+
+  test('ContextUsagePanel bases row percentages on explainable context totals', () => {
+    const html = renderToStaticMarkup(
+      <ContextUsagePanel
+        summary={{
+          usedTokens: 398,
+          windowTokens: 128_000,
+          windowSource: 'model_metadata',
+          model: 'default',
+          percentUsed: 0.3109375,
+          cacheHitRate: 78.7,
+          breakdown: [
+            { key: 'messages', label: '消息', tokens: 259, source: 'runtime_estimate', count: 6 },
+            { key: 'tools', label: '系统工具', tokens: 876, source: 'runtime_estimate', count: 9 },
+            { key: 'skills', label: '技能', tokens: 500, source: 'runtime_estimate', count: 42 },
+            { key: 'system_prompt', label: '系统提示词', tokens: 24, source: 'runtime_estimate' },
+            { key: 'other', label: '其他', tokens: 0, source: 'provider' },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain('15.6%');
+    expect(html).toContain('52.8%');
+    expect(html).toContain('30.1%');
+    expect(html).not.toContain('100%');
   });
 
   test('WorkspaceHeader renders recover action for degraded event streams', () => {
@@ -319,7 +384,6 @@ describe('web desktop UI', () => {
         toolMode="all"
         approvalMode="interactive"
         selectedWorkingDirectory="/Users/dev/work/cortx"
-        willCreateSessionOnSend={false}
         onSend={() => undefined}
         onAbort={() => undefined}
         onResume={() => undefined}
@@ -408,7 +472,6 @@ describe('web desktop UI', () => {
       approvalMode: 'interactive' as const,
       selectedWorkingDirectory: '/Users/dev/work/cortx',
       canChangeModes: true,
-      willCreateSessionOnSend: false,
       onCreateSession: () => undefined,
       onToolModeChange: () => undefined,
       onApprovalModeChange: () => undefined,
@@ -425,7 +488,7 @@ describe('web desktop UI', () => {
     expect(disabled).toContain('Awaiting answer');
   });
 
-  test('PromptInput warns when selected controls will create a new session', () => {
+  test('PromptInput treats mode controls as current-session settings', () => {
     const html = renderToStaticMarkup(
       <PromptInput
         onSend={() => undefined}
@@ -433,14 +496,15 @@ describe('web desktop UI', () => {
         approvalMode="full-access"
         selectedWorkingDirectory="/Users/dev/work/cortx"
         canChangeModes
-        willCreateSessionOnSend
         onCreateSession={() => undefined}
         onToolModeChange={() => undefined}
         onApprovalModeChange={() => undefined}
       />,
     );
 
-    expect(html).toContain('Sending will start a new session');
+    expect(html).toContain('Read only');
+    expect(html).toContain('Full access');
+    expect(html).not.toContain('Sending will start a new session');
   });
 
   test('MarkdownContent renders common markdown blocks', () => {
@@ -459,6 +523,23 @@ describe('web desktop UI', () => {
     expect(html).toContain('<code>const ok = true;</code>');
     expect(html).toContain('<strong');
     expect(html).toContain('href="https://example.com"');
+  });
+
+  test('MarkdownContent renders all markdown heading levels', () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        text={'# One\n## Two\n### Three\n#### Four\n##### Five\n###### Six\n\n#### Screenshot case'}
+      />,
+    );
+
+    expect(html).toContain('<h1');
+    expect(html).toContain('<h2');
+    expect(html).toContain('<h3');
+    expect(html).toContain('<h4');
+    expect(html).toContain('<h5');
+    expect(html).toContain('<h6');
+    expect(html).toContain('Screenshot case');
+    expect(html).not.toContain('#### Screenshot case');
   });
 
   test('ApprovalDialogBody renders the pending question and disabled submit state', () => {

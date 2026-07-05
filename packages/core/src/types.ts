@@ -6,6 +6,7 @@ import type {
   AgentTracer,
   Logger,
   AgentEvent,
+  AgentDoneUsage,
   Tool,
   ErrorCode,
   CortxExtensionType,
@@ -13,7 +14,7 @@ import type {
 } from '@cortx/sdk';
 import type { PluginRegistry } from '@nerax-ai/plugin';
 
-export type { AgentEvent, ErrorCode, CortxExtensionType, CortxFactoryMap };
+export type { AgentDoneUsage, AgentEvent, ErrorCode, CortxExtensionType, CortxFactoryMap };
 
 export type DeliveryMode = 'all' | 'one-at-a-time';
 

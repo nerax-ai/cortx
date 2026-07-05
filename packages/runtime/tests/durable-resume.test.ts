@@ -3,11 +3,13 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentEvent } from '@cortx/sdk';
+import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION, type AgentEvent } from '@cortx/sdk';
 import {
   CortxRuntime,
   FileDurableRunStore,
   MemoryDurableRunStore,
+  RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+  RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
 } from '../src/index';
 
@@ -166,6 +168,197 @@ describe('runtime durable resume', () => {
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed from disk' });
     first.dispose();
     second.dispose();
+  });
+
+  test('restored legacy done envelopes are enriched with context usage facts', async () => {
+    const durableDir = join(tmpDir, 'durable');
+    const sessionId = 'legacy-context-session';
+    const store = new FileDurableRunStore(durableDir);
+    await store.saveCheckpoint({
+      schemaVersion: AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
+      sessionId,
+      runId: 1,
+      iteration: 1,
+      kind: 'turn_start',
+      state: {
+        phase: 'model',
+        terminal: false,
+        lastEvent: { type: 'turn_start', iteration: 1 },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'restore usage facts' }] }],
+      },
+    });
+    await store.saveRuntimeSession({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: sessionId,
+      createdAt: 1,
+      lastActivityAt: 2,
+      workingDirectory: tmpDir,
+      model: 'test-model',
+      system: 'System prompt',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      runId: 1,
+      nextEventSequence: 1,
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 1,
+      timestamp: 2,
+      sessionId,
+      runId: 1,
+      event: { type: 'done', usage: { inputTokens: 100, outputTokens: 5 } },
+    });
+
+    const runtime = new CortxRuntime({
+      language: textLanguage('unused'),
+      model: 'test-model',
+      system: 'System prompt',
+      contextWindowTokens: 2000,
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore: new FileDurableRunStore(durableDir),
+    });
+
+    await runtime.restoreDurableSessions({ autoResume: false });
+    const history = runtime.getEventEnvelopeHistory(sessionId);
+    const done = history.find((event) => event.event.type === 'done')?.event;
+
+    expect(runtime.getLocalState(sessionId).getMessages()).toHaveLength(1);
+    expect(done).toMatchObject({
+      type: 'done',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 5,
+        context: {
+          usedTokens: 100,
+          windowTokens: 2000,
+          windowSource: 'configured',
+          percentUsed: 5,
+          model: 'test-model',
+        },
+      },
+    });
+    expect(done?.type === 'done' ? done.usage?.context?.breakdown.map((row) => row.key) : []).toEqual([
+      'messages',
+      'tools',
+      'skills',
+      'system_prompt',
+      'other',
+    ]);
+    runtime.dispose();
+  });
+
+  test('restores terminal and empty sessions while marking interrupted replay recoverable', async () => {
+    const durableDir = join(tmpDir, 'durable-all-sessions');
+    const store = new FileDurableRunStore(durableDir);
+    await store.saveRuntimeSession({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: 'empty-session',
+      createdAt: 1,
+      lastActivityAt: 1,
+      workingDirectory: tmpDir,
+      model: 'test',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      runId: 0,
+      nextEventSequence: 0,
+    });
+    await store.saveRuntimeSession({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: 'terminal-session',
+      createdAt: 2,
+      lastActivityAt: 3,
+      workingDirectory: tmpDir,
+      model: 'test',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      runId: 1,
+      nextEventSequence: 1,
+    });
+    await store.saveCheckpoint({
+      schemaVersion: AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
+      sessionId: 'terminal-session',
+      runId: 1,
+      iteration: 1,
+      kind: 'terminal',
+      state: {
+        phase: 'completion',
+        terminal: true,
+        lastEvent: { type: 'done', usage: { inputTokens: 1, outputTokens: 1 } },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'done session' }] }],
+      },
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 1,
+      timestamp: 3,
+      sessionId: 'terminal-session',
+      runId: 1,
+      event: { type: 'done', usage: { inputTokens: 1, outputTokens: 1 } },
+    });
+    await store.saveRuntimeSession({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: 'interrupted-session',
+      createdAt: 4,
+      lastActivityAt: 5,
+      workingDirectory: tmpDir,
+      model: 'test',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      runId: 1,
+      nextEventSequence: 1,
+    });
+    await store.saveCheckpoint({
+      schemaVersion: AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
+      sessionId: 'interrupted-session',
+      runId: 1,
+      iteration: 1,
+      kind: 'turn_start',
+      state: {
+        phase: 'turn',
+        terminal: false,
+        lastEvent: { type: 'turn_start', iteration: 1 },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'interrupted session' }] }],
+      },
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 1,
+      timestamp: 5,
+      sessionId: 'interrupted-session',
+      runId: 1,
+      event: { type: 'turn_start', iteration: 1 },
+    });
+
+    const runtime = new CortxRuntime({
+      language: textLanguage('unused'),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore: new FileDurableRunStore(durableDir),
+    });
+
+    const restored = await runtime.restoreDurableSessions({ autoResume: false });
+
+    expect(restored.map((session) => session.id).sort()).toEqual([
+      'empty-session',
+      'interrupted-session',
+      'terminal-session',
+    ]);
+    expect(runtime.getLocalState('terminal-session').getMessages()).toHaveLength(1);
+    expect(runtime.getEventEnvelopeHistory('empty-session')).toHaveLength(0);
+    expect(runtime.getEventEnvelopeHistory('terminal-session').at(-1)?.event).toMatchObject({ type: 'done' });
+    expect(runtime.getEventEnvelopeHistory('interrupted-session').at(-1)?.event).toMatchObject({
+      type: 'error',
+      code: 'client_error',
+    });
+    runtime.dispose();
   });
 
   test('unsupported checkpoint schema emits a typed client error event', async () => {

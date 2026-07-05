@@ -1,4 +1,4 @@
-import type { AgentEvent, RuntimeAgentEventEnvelope } from '@cortx/sdk';
+import type { AgentEvent, ContextUsageSource, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { AgentStore } from '@cortx/store';
 import { createAuthClient, getAuthToken, apiFetch, type AuthClient } from './auth';
 
@@ -33,6 +33,8 @@ export interface WebRuntimeSessionInfo {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
   capabilities?: Record<string, unknown>;
@@ -48,8 +50,17 @@ export interface WebCreateSessionRequest {
   model?: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
   toolMode?: WebWorkspaceToolMode;
   approvalMode?: WebApprovalMode;
+  skillPacks?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface WebUpdateSessionRequest {
+  toolMode?: WebWorkspaceToolMode;
+  approvalMode?: WebApprovalMode;
+  contextWindowTokens?: number;
   skillPacks?: string[];
   metadata?: Record<string, unknown>;
 }
@@ -88,6 +99,18 @@ export interface WebSkillPackInfo {
 export interface WebSkillPackInstallRequest {
   path: string;
   id?: string;
+}
+
+export interface WebWorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface WebWorkspaceDirectoryListing {
+  roots: string[];
+  current: string;
+  parent?: string;
+  entries: WebWorkspaceDirectoryEntry[];
 }
 
 export class EventBridgeError extends Error {
@@ -161,6 +184,16 @@ export class EventBridge {
     return data.session;
   }
 
+  async updateSession(sessionId: string, request: WebUpdateSessionRequest): Promise<WebRuntimeSessionInfo> {
+    const res = await apiFetch(this.client, `/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(request),
+    });
+    await throwIfError(res, 'Update session failed');
+    const data = (await res.json()) as { session: WebRuntimeSessionInfo };
+    return data.session;
+  }
+
   async getSession(sessionId: string): Promise<WebRuntimeSessionInfo> {
     const res = await apiFetch(this.client, `/sessions/${encodeURIComponent(sessionId)}`);
     await throwIfError(res, 'Get session failed');
@@ -209,6 +242,13 @@ export class EventBridge {
     return data.skillPack;
   }
 
+  async listWorkspaceDirectories(path?: string): Promise<WebWorkspaceDirectoryListing> {
+    const query = path ? `?path=${encodeURIComponent(path)}` : '';
+    const res = await apiFetch(this.client, `/workspaces/directories${query}`);
+    await throwIfError(res, 'List workspace directories failed');
+    return (await res.json()) as WebWorkspaceDirectoryListing;
+  }
+
   async connect(sessionId: string): Promise<void> {
     this.disconnect();
     this.activeSessionId = sessionId;
@@ -246,6 +286,7 @@ export class EventBridge {
     try {
       if (!data || data === '{}') {
         this.emitConnection({ phase: 'live', sessionId, message: 'Live event stream' });
+        void this.reconcileRuntimeStatus(sessionId);
         return;
       }
       const parsed = JSON.parse(data) as AgentEvent | RuntimeAgentEventEnvelope;
@@ -263,6 +304,18 @@ export class EventBridge {
       }
     } catch {
       /* ignore parse errors */
+    }
+  }
+
+  private async reconcileRuntimeStatus(sessionId: string): Promise<void> {
+    const status = this.store.getState().status;
+    if (status !== 'running' && status !== 'awaiting_user') return;
+    try {
+      const session = await this.getSession(sessionId);
+      if (this.activeSessionId !== sessionId) return;
+      this.store.syncRuntimeStatus({ sessionId, isRunning: session.isRunning });
+    } catch {
+      /* Status reconciliation is best-effort; the SSE reconnect path remains authoritative. */
     }
   }
 

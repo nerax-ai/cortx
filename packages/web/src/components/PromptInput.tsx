@@ -1,6 +1,8 @@
 import { useState, useRef, type KeyboardEvent } from 'react';
 import type { WebApprovalMode, WebWorkspaceToolMode } from '../bridge/event-bridge';
 import { compactPath, surface } from '../design';
+import type { ContextUsageSummary } from '../context-usage';
+import { ContextUsageButton } from './ContextUsageButton';
 import { ControlButton } from './ControlButton';
 
 interface PromptInputProps {
@@ -10,8 +12,8 @@ interface PromptInputProps {
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
   selectedWorkingDirectory: string | null;
+  contextUsage?: ContextUsageSummary;
   canChangeModes: boolean;
-  willCreateSessionOnSend: boolean;
   onCreateSession: () => void | Promise<unknown>;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
   onApprovalModeChange: (mode: WebApprovalMode) => void;
@@ -24,8 +26,8 @@ export function PromptInput({
   toolMode,
   approvalMode,
   selectedWorkingDirectory,
+  contextUsage,
   canChangeModes,
-  willCreateSessionOnSend,
   onCreateSession,
   onToolModeChange,
   onApprovalModeChange,
@@ -116,19 +118,17 @@ export function PromptInput({
               <option value="deny">Deny writes</option>
             </select>
           </label>
-          <button
-            type="button"
-            disabled={!selectedWorkingDirectory || !canChangeModes}
-            onClick={() => void onCreateSession()}
-            className={`ml-auto h-7 rounded-md border border-zinc-200 px-2 text-xs text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-300 ${surface.focus}`}
-          >
-            New session
-          </button>
-          {willCreateSessionOnSend && (
-            <span className="basis-full px-1 text-[11px] text-amber-700">
-              Sending will start a new session for this project with the selected controls.
-            </span>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {contextUsage && <ContextUsageButton summary={contextUsage} />}
+            <button
+              type="button"
+              disabled={!selectedWorkingDirectory || !canChangeModes}
+              onClick={() => void onCreateSession()}
+              className={`h-7 rounded-md border border-zinc-200 px-2 text-xs text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-300 ${surface.focus}`}
+            >
+              New session
+            </button>
+          </div>
         </div>
       </div>
     </div>

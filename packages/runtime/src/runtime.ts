@@ -1,8 +1,13 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type {
   AgentDurableRunStore,
+  AgentDoneUsage,
   AgentEvent,
+  AgentRunCheckpoint,
   AgentRuntimeExtensions,
+  ContextUsageBreakdownEntry,
+  ContextUsageFacts,
+  ContextUsageSource,
   LanguageMessage,
   Logger,
   RuntimeAgentEventEnvelope,
@@ -26,6 +31,7 @@ import {
   createSkillExtensions,
   createSubAgentTool,
   discoverSkills,
+  renderSkillSummary,
 } from './capabilities/index.js';
 import { loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
 import { resolveSkillPackReferences } from './assets/skill-pack-registry.js';
@@ -40,9 +46,11 @@ import {
 import type {
   ManagedRuntimeSession,
   RuntimeApprovalMode,
+  RuntimeSessionContextMetadata,
   RuntimeSessionCreateRequest,
   RuntimeSessionInfo,
   RuntimeSessionLocalState,
+  RuntimeSessionUpdateRequest,
 } from './session.js';
 
 export interface CortxRuntimeOptions {
@@ -51,6 +59,8 @@ export interface CortxRuntimeOptions {
   model: string;
   system?: string;
   maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
   registry?: CortxRegistry;
   plugins?: PluginConfig[];
   tools?: Tool[];
@@ -79,6 +89,42 @@ export interface RestoreDurableSessionsOptions {
   autoResume?: boolean;
 }
 
+interface RuntimeSkillMounts {
+  skillPaths?: string[];
+  skillPacks?: string[];
+}
+
+interface RuntimeCortxHostInput {
+  id: string;
+  workingDirectory: string;
+  model: string;
+  system?: string;
+  maxIterations?: number;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
+  toolMode: WorkspaceToolMode;
+  approvalMode: RuntimeApprovalMode;
+  requestedCapabilities: RuntimeDefaultCapabilities;
+  skillPaths?: string[];
+  requestTools: Tool[];
+  registry?: CortxRegistry;
+  plugins?: PluginConfig[];
+  agentSessions: SubAgentSessionStore;
+  onAgentEvent(event: AgentEvent): void;
+}
+
+interface RuntimeCortxHost {
+  cortx: Cortx;
+  capabilities: RuntimeDefaultCapabilities;
+  contextMetadata: RuntimeSessionContextMetadata;
+}
+
+interface RuntimeOfficialExtensions {
+  extensions: AgentRuntimeExtensions;
+  skillCount: number;
+  skillSummaryTokens: number;
+}
+
 function createSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -97,12 +143,22 @@ function parseOptionalStringArray(value: unknown, field: string): string[] | und
   throw new RuntimeError('invalid_request', `${field} must be an array of strings`, { [field]: value });
 }
 
+function parseOptionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
+  throw new RuntimeError('invalid_request', `${field} must be a positive number`, { [field]: value });
+}
+
 function eventError(error: unknown): AgentEvent {
   return {
     type: 'error',
     error: error instanceof Error ? error : new Error(String(error)),
     code: 'stream_error',
   };
+}
+
+function isTerminalEvent(event: AgentEvent | undefined): boolean {
+  return event?.type === 'done' || event?.type === 'error';
 }
 
 function parentAttributionFor(session: ManagedRuntimeSession, event: AgentEvent): RuntimeAgentEventEnvelope['parent'] {
@@ -127,6 +183,126 @@ function requireApprovalForExternalTool(tool: Tool): Tool {
   };
 }
 
+const CHARS_PER_ESTIMATED_TOKEN = 4;
+
+function estimateTextTokens(value: string | undefined): number {
+  const normalized = value?.replace(/\s+/g, ' ').trim() ?? '';
+  return normalized ? Math.ceil(normalized.length / CHARS_PER_ESTIMATED_TOKEN) : 0;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    const result = JSON.stringify(value);
+    return result === undefined ? String(value) : result;
+  } catch {
+    return String(value);
+  }
+}
+
+function estimateJsonTokens(value: unknown): number {
+  return estimateTextTokens(safeJson(value));
+}
+
+function estimateToolDefinitionTokens(tools: Tool[]): number {
+  return tools.reduce(
+    (total, tool) =>
+      total +
+      estimateJsonTokens({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        sideEffects: tool.sideEffects,
+      }),
+    0,
+  );
+}
+
+function estimateMessageTokens(messages: LanguageMessage[]): number {
+  return estimateJsonTokens(messages);
+}
+
+function percent(numerator: number | undefined, denominator: number | undefined): number | undefined {
+  if (numerator === undefined || denominator === undefined || denominator <= 0) return undefined;
+  return Math.max(0, Math.min(100, (numerator / denominator) * 100));
+}
+
+function usageToken(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function contextInputTokens(usage: AgentDoneUsage): number | undefined {
+  const inputTokens = usageToken(usage.inputTokens);
+  const cacheReadTokens = usageToken(usage.cacheReadTokens);
+  const cacheCreationTokens = usageToken(usage.cacheCreationTokens);
+  const noCacheInputTokens =
+    usage.noCacheInputTokens === undefined ? undefined : usageToken(usage.noCacheInputTokens);
+  const total =
+    noCacheInputTokens === undefined
+      ? inputTokens + cacheReadTokens + cacheCreationTokens
+      : Math.max(inputTokens, noCacheInputTokens + cacheReadTokens + cacheCreationTokens);
+  return total > 0 ? total : undefined;
+}
+
+function readPositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+function readModelLimit(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const limits = record.limits;
+  if (limits && typeof limits === 'object') {
+    const context = readPositiveNumber((limits as Record<string, unknown>).context);
+    if (context !== undefined) return context;
+  }
+  const metadata = record.metadata;
+  if (metadata && typeof metadata === 'object') {
+    const limitsFromMetadata = readModelLimit({ limits: (metadata as Record<string, unknown>).limits });
+    if (limitsFromMetadata !== undefined) return limitsFromMetadata;
+  }
+  return undefined;
+}
+
+function resolveLanguageModelContextWindow(language: LanguageClient, model: string): number | undefined {
+  const source = language as unknown as {
+    listModels?: () => unknown[];
+    listModelCatalog?: () => unknown[];
+    getModel?: (model: string) => unknown;
+    models?: unknown[];
+    modelCatalog?: unknown[];
+  };
+  let direct: unknown;
+  try {
+    direct = source.getModel?.(model);
+  } catch {
+    direct = undefined;
+  }
+  const directLimit = readModelLimit(direct);
+  if (directLimit !== undefined) return directLimit;
+  const list = (fn: (() => unknown[]) | undefined): unknown[] => {
+    if (typeof fn !== 'function') return [];
+    try {
+      return fn();
+    } catch {
+      return [];
+    }
+  };
+  const candidates = [
+    ...list(source.listModels?.bind(source)),
+    ...list(source.listModelCatalog?.bind(source)),
+    ...(Array.isArray(source.models) ? source.models : []),
+    ...(Array.isArray(source.modelCatalog) ? source.modelCatalog : []),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const record = candidate as Record<string, unknown>;
+    if (record.id !== model && record.name !== model) continue;
+    const limit = readModelLimit(record);
+    if (limit !== undefined) return limit;
+  }
+  return undefined;
+}
+
 export class CortxRuntime {
   private readonly sessions = new Map<string, ManagedRuntimeSession>();
   private readonly appName: string;
@@ -134,6 +310,8 @@ export class CortxRuntime {
   private readonly model: string;
   private readonly system?: string;
   private readonly maxIterations?: number;
+  private readonly contextWindowTokens?: number;
+  private readonly contextWindowSource?: ContextUsageSource;
   private readonly registry?: CortxRegistry;
   private readonly plugins?: PluginConfig[];
   private readonly tools: Tool[];
@@ -155,6 +333,8 @@ export class CortxRuntime {
     this.model = options.model;
     this.system = options.system;
     this.maxIterations = options.maxIterations;
+    this.contextWindowTokens = parseOptionalPositiveInteger(options.contextWindowTokens, 'contextWindowTokens');
+    this.contextWindowSource = options.contextWindowSource;
     this.registry = options.registry;
     this.plugins = options.plugins;
     this.tools = options.tools ?? [];
@@ -186,91 +366,64 @@ export class CortxRuntime {
 
     const model = request.model ?? this.model;
     const maxIterations = request.maxIterations ?? this.maxIterations;
+    const requestedContextWindowTokens = parseOptionalPositiveInteger(request.contextWindowTokens, 'contextWindowTokens');
+    const modelContextWindowTokens = resolveLanguageModelContextWindow(this.language, model);
+    const contextWindowTokens = requestedContextWindowTokens ?? this.contextWindowTokens ?? modelContextWindowTokens;
+    const contextWindowSource: ContextUsageSource | undefined =
+      requestedContextWindowTokens !== undefined
+        ? 'configured'
+        : this.contextWindowTokens !== undefined
+          ? this.contextWindowSource ?? 'configured'
+          : modelContextWindowTokens !== undefined
+          ? 'model_metadata'
+          : undefined;
     const toolMode = parseWorkspaceToolMode(request.toolMode, this.toolMode);
     const approvalMode = parseApprovalMode(request.approvalMode, this.approvalMode);
     const requestedCapabilities = request.capabilities ?? this.capabilities;
-    const capabilities =
-      approvalMode === 'full-access'
-        ? { ...requestedCapabilities, approval: false }
-        : requestedCapabilities;
-    const requestedSkillPaths = parseOptionalStringArray(request.skillPaths, 'skillPaths');
-    const requestedSkillPacks = parseOptionalStringArray(request.skillPacks, 'skillPacks');
-    const installedSkillPacks = await resolveSkillPackReferences(requestedSkillPacks, {
-      registryPath: this.skillPackRegistryPath,
-    });
-    const resolvedSkillPaths = [
-      ...(requestedSkillPaths ?? []),
-      ...installedSkillPacks.flatMap((pack) => pack.skillPaths),
-    ];
-    const skillPaths = resolvedSkillPaths.length ? resolvedSkillPaths : undefined;
+    const { skillPaths, skillPacks } = await this.resolveRequestedSkillMounts(request);
     const system = request.system ?? this.system;
     const agentSessions = new SubAgentSessionStore();
-    const toolApprovalRequirements = new WeakMap<Tool, boolean>();
-    const runtimeTools = this.tools.map((tool) => {
-      const wrapped = requireApprovalForExternalTool(tool);
-      toolApprovalRequirements.set(wrapped, true);
-      return wrapped;
-    });
-    const workspaceTools = createWorkspaceTools(workspace.workingDirectory, toolMode);
-    for (const tool of workspaceTools) toolApprovalRequirements.set(tool, workspaceToolNeedsApproval(tool));
-    const requestTools = (request.tools ?? []).map((tool) => {
-      const wrapped = requireApprovalForExternalTool(tool);
-      toolApprovalRequirements.set(wrapped, true);
-      return wrapped;
-    });
-    const mountedTools = [...runtimeTools, ...workspaceTools, ...requestTools];
-    const officialExtensions = await this.createOfficialExtensions({
-      workingDirectory: workspace.workingDirectory,
-      capabilities,
-      skillPaths,
-      needsToolApproval: (tool) => (tool ? toolApprovalRequirements.get(tool) ?? true : true),
-    });
     let session: ManagedRuntimeSession;
-    if (capabilities.subAgents !== false) {
-      const subAgentTool = createSubAgentTool({
-        language: this.language,
-        model,
-        registry: request.registry ?? this.registry,
-        plugins: request.plugins ?? this.plugins,
-        agentSessions,
-        getTools: () => mountedTools,
-        getExtensions: () => officialExtensions,
-        onAgentEvent: (event) => this.broadcast(session, event),
-      });
-      toolApprovalRequirements.set(subAgentTool, true);
-      mountedTools.push(subAgentTool);
-    }
-    const cortx = new Cortx(this.language, {
-      appName: this.appName,
+    const host = await this.createCortxHost({
+      id,
+      workingDirectory: workspace.workingDirectory,
       model,
       system,
       maxIterations,
-      registry: request.registry ?? this.registry,
-      plugins: request.plugins ?? this.plugins,
-      tools: mountedTools,
-      extensions: officialExtensions,
-      workingDirectory: workspace.workingDirectory,
-      sessionId: id,
-      durableStore: this.durableStore,
-      askUser: approvalMode === 'deny' ? async () => 'no' : undefined,
-      logger: this.logger,
+      contextWindowTokens,
+      contextWindowSource,
+      toolMode,
+      approvalMode,
+      requestedCapabilities,
+      skillPaths,
+      requestTools: request.tools ?? [],
+      registry: request.registry,
+      plugins: request.plugins,
+      agentSessions,
+      onAgentEvent: (event) => this.broadcast(session, event),
     });
 
     const now = Date.now();
     session = {
       id,
-      cortx,
+      cortx: host.cortx,
       createdAt: now,
       lastActivityAt: now,
       workingDirectory: workspace.workingDirectory,
       model,
       system,
       maxIterations,
+      contextWindowTokens,
+      contextWindowSource,
       toolMode,
       approvalMode,
-      capabilities,
+      requestedCapabilities,
+      capabilities: host.capabilities,
       skillPaths,
-      skillPacks: requestedSkillPacks,
+      skillPacks,
+      requestTools: request.tools ?? [],
+      registry: request.registry,
+      plugins: request.plugins,
       events: [],
       eventEnvelopes: [],
       subscribers: new Set(),
@@ -281,10 +434,11 @@ export class CortxRuntime {
       runId: 0,
       nextEventSequence: 0,
       agentSessions,
+      contextMetadata: host.contextMetadata,
       metadata: request.metadata,
     };
 
-    cortx.onAgentEvent = (event: AgentEvent) => {
+    host.cortx.onAgentEvent = (event: AgentEvent) => {
       this.broadcast(session, event);
     };
 
@@ -307,9 +461,10 @@ export class CortxRuntime {
     for (const snapshot of await store.listRuntimeSessions()) {
       if (this.sessions.has(snapshot.id)) continue;
       const checkpoint = await this.durableStore?.loadCheckpoint(snapshot.id);
-      if (!checkpoint || checkpoint.schemaVersion !== AGENT_RUN_CHECKPOINT_SCHEMA_VERSION || checkpoint.state.terminal) {
-        continue;
-      }
+      const resumableCheckpoint =
+        checkpoint && checkpoint.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && !checkpoint.state.terminal
+          ? checkpoint
+          : undefined;
 
       const info = await this.createSession({
         id: snapshot.id,
@@ -325,18 +480,21 @@ export class CortxRuntime {
         metadata: snapshot.metadata,
       });
       const session = this.requireSession(info.id);
+      if (checkpoint?.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && checkpoint.state.messages?.length) {
+        session.cortx.replaceMessages(checkpoint.state.messages);
+      }
       session.createdAt = snapshot.createdAt;
       session.lastActivityAt = snapshot.lastActivityAt;
       session.runId = snapshot.runId;
       session.nextEventSequence = snapshot.nextEventSequence;
       session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
       if (store.listEventEnvelopes) {
-        this.restoreSessionEventHistory(session, await store.listEventEnvelopes(snapshot.id));
+        this.restoreSessionEventHistory(session, await store.listEventEnvelopes(snapshot.id), resumableCheckpoint);
       }
       await this.persistRuntimeSession(session);
       restored.push(this.info(session));
 
-      if (options.autoResume) {
+      if (options.autoResume && resumableCheckpoint) {
         await this.resume(session.id);
       }
     }
@@ -367,6 +525,65 @@ export class CortxRuntime {
 
   getSession(sessionId: string): RuntimeSessionInfo {
     return this.info(this.requireSession(sessionId));
+  }
+
+  async updateSession(sessionId: string, request: RuntimeSessionUpdateRequest = {}): Promise<RuntimeSessionInfo> {
+    const session = this.requireSession(sessionId);
+    if (session.isRunning) {
+      throw new RuntimeError('session_busy', 'Cannot update session controls while the agent is running');
+    }
+
+    const toolMode = parseWorkspaceToolMode(request.toolMode, session.toolMode);
+    const approvalMode = parseApprovalMode(request.approvalMode, session.approvalMode);
+    const requestedContextWindowTokens = parseOptionalPositiveInteger(request.contextWindowTokens, 'contextWindowTokens');
+    const contextWindowTokens = requestedContextWindowTokens ?? session.contextWindowTokens;
+    const contextWindowSource: ContextUsageSource | undefined =
+      requestedContextWindowTokens !== undefined ? 'configured' : session.contextWindowSource;
+    const requestedCapabilities = request.capabilities ?? session.requestedCapabilities;
+    let skillPaths = session.skillPaths;
+    let skillPacks = session.skillPacks;
+    if (request.skillPaths !== undefined || request.skillPacks !== undefined) {
+      const resolved = await this.resolveRequestedSkillMounts(request);
+      skillPaths = resolved.skillPaths;
+      skillPacks = resolved.skillPacks;
+    }
+
+    const messages = session.cortx.messages;
+    const host = await this.createCortxHost({
+      id: session.id,
+      workingDirectory: session.workingDirectory,
+      model: session.model,
+      system: session.system,
+      maxIterations: session.maxIterations,
+      contextWindowTokens,
+      contextWindowSource,
+      toolMode,
+      approvalMode,
+      requestedCapabilities,
+      skillPaths,
+      requestTools: session.requestTools,
+      registry: session.registry,
+      plugins: session.plugins,
+      agentSessions: session.agentSessions,
+      onAgentEvent: (event) => this.broadcast(session, event),
+    });
+    host.cortx.replaceMessages(messages);
+
+    session.cortx = host.cortx;
+    session.lastActivityAt = Date.now();
+    session.contextWindowTokens = contextWindowTokens;
+    session.contextWindowSource = contextWindowSource;
+    session.toolMode = toolMode;
+    session.approvalMode = approvalMode;
+    session.requestedCapabilities = requestedCapabilities;
+    session.capabilities = host.capabilities;
+    session.contextMetadata = host.contextMetadata;
+    session.skillPaths = skillPaths;
+    session.skillPacks = skillPacks;
+    if (request.metadata !== undefined) session.metadata = request.metadata;
+    this.resetIdleTimer(session);
+    await this.persistRuntimeSession(session);
+    return this.info(session);
   }
 
   getEventHistory(sessionId: string): AgentEvent[] {
@@ -498,15 +715,16 @@ export class CortxRuntime {
   private broadcast(session: ManagedRuntimeSession, event: AgentEvent): void {
     if (!this.sessions.has(session.id)) return;
     session.lastActivityAt = Date.now();
+    const enrichedEvent = this.enrichEvent(session, event);
     const envelope: RuntimeAgentEventEnvelope = {
       sequence: ++session.nextEventSequence,
       timestamp: session.lastActivityAt,
       sessionId: session.id,
       runId: session.runId,
-      event,
-      parent: parentAttributionFor(session, event),
+      event: enrichedEvent,
+      parent: parentAttributionFor(session, enrichedEvent),
     };
-    session.events.push(event);
+    session.events.push(enrichedEvent);
     session.eventEnvelopes.push(envelope);
     if (session.events.length > this.maxEventsPerSession) {
       session.events.splice(0, session.events.length - this.maxEventsPerSession);
@@ -516,13 +734,89 @@ export class CortxRuntime {
     }
     void this.persistRuntimeSession(session);
     void this.persistEventEnvelope(envelope);
-    void this.persistSubAgentSession(session, event);
+    void this.persistSubAgentSession(session, enrichedEvent);
     for (const subscriber of session.subscribers) {
-      this.safeNotify(() => subscriber(event));
+      this.safeNotify(() => subscriber(enrichedEvent));
     }
     for (const subscriber of session.envelopeSubscribers) {
       this.safeNotify(() => subscriber(envelope));
     }
+  }
+
+  private enrichEvent(session: ManagedRuntimeSession, event: AgentEvent): AgentEvent {
+    if (event.type !== 'done' || !event.usage) return event;
+    return {
+      ...event,
+      usage: {
+        ...event.usage,
+        context: this.createContextUsageFacts(session, event.usage, event.usage.context),
+      },
+    };
+  }
+
+  private createContextUsageFacts(
+    session: ManagedRuntimeSession,
+    usage: AgentDoneUsage,
+    existing?: ContextUsageFacts,
+  ): ContextUsageFacts {
+    const messagesTokens = estimateMessageTokens(session.cortx.messages);
+    const metadata = session.contextMetadata;
+    const baseBreakdown: ContextUsageBreakdownEntry[] = existing?.breakdown?.length ? existing.breakdown : [
+      {
+        key: 'messages',
+        label: '消息',
+        tokens: messagesTokens,
+        source: 'runtime_estimate',
+        count: session.cortx.messages.length,
+      },
+      {
+        key: 'tools',
+        label: '系统工具',
+        tokens: metadata.toolDefinitionTokens,
+        source: 'runtime_estimate',
+        count: metadata.toolCount,
+      },
+      {
+        key: 'skills',
+        label: '技能',
+        tokens: metadata.skillSummaryTokens,
+        source: 'runtime_estimate',
+        count: metadata.skillCount,
+      },
+      {
+        key: 'system_prompt',
+        label: '系统提示词',
+        tokens: metadata.systemPromptTokens,
+        source: 'runtime_estimate',
+      },
+    ];
+    const knownTokens = baseBreakdown
+      .filter((row) => row.key !== 'other')
+      .reduce((total, row) => total + row.tokens, 0);
+    const usedTokens = contextInputTokens(usage) ?? (knownTokens || undefined);
+    const otherTokens = Math.max(0, (usedTokens ?? 0) - knownTokens);
+    const existingOther = baseBreakdown.find((row) => row.key === 'other');
+    const breakdown: ContextUsageBreakdownEntry[] = [
+      ...baseBreakdown.filter((row) => row.key !== 'other'),
+      {
+        key: 'other',
+        label: existingOther?.label ?? '其他',
+        tokens: otherTokens,
+        source: usedTokens === undefined ? 'unknown' : 'provider',
+        description:
+          existingOther?.description ??
+          'Provider-reported input tokens not attributed to runtime-known messages, tools, skills, or system prompt.',
+      },
+    ];
+    return {
+      usedTokens,
+      windowTokens: metadata.contextWindowTokens,
+      windowSource: metadata.contextWindowSource,
+      model: session.model,
+      percentUsed: percent(usedTokens, metadata.contextWindowTokens),
+      cacheHitRate: percent(usage.cacheReadTokens, usedTokens),
+      breakdown,
+    };
   }
 
   private resetIdleTimer(session: ManagedRuntimeSession): void {
@@ -600,6 +894,8 @@ export class CortxRuntime {
       model: session.model,
       system: session.system,
       maxIterations: session.maxIterations,
+      contextWindowTokens: session.contextWindowTokens,
+      contextWindowSource: session.contextWindowSource,
       toolMode: session.toolMode,
       approvalMode: session.approvalMode,
       capabilities: session.capabilities,
@@ -625,9 +921,11 @@ export class CortxRuntime {
       model: session.model,
       system: session.system,
       maxIterations: session.maxIterations,
+      contextWindowTokens: session.contextWindowTokens,
+      contextWindowSource: session.contextWindowSource,
       toolMode: session.toolMode,
       approvalMode: session.approvalMode,
-      capabilities: session.capabilities,
+      capabilities: session.requestedCapabilities,
       skillPaths: session.skillPaths,
       skillPacks: session.skillPacks,
       runId: session.runId,
@@ -636,16 +934,37 @@ export class CortxRuntime {
     };
   }
 
-  private restoreSessionEventHistory(session: ManagedRuntimeSession, snapshots: RuntimeEventEnvelopeSnapshot[]): void {
+  private restoreSessionEventHistory(
+    session: ManagedRuntimeSession,
+    snapshots: RuntimeEventEnvelopeSnapshot[],
+    resumableCheckpoint?: AgentRunCheckpoint,
+  ): void {
     const bounded = snapshots.slice(-this.maxEventsPerSession);
     session.eventEnvelopes = bounded.map((snapshot) => ({
       sequence: snapshot.sequence,
       timestamp: snapshot.timestamp,
       sessionId: snapshot.sessionId,
       runId: snapshot.runId,
-      event: snapshot.event,
-      parent: snapshot.parent,
+      event: this.enrichEvent(session, snapshot.event),
+      parent: parentAttributionFor(session, snapshot.event) ?? snapshot.parent,
     }));
+    if (resumableCheckpoint && !isTerminalEvent(session.eventEnvelopes.at(-1)?.event)) {
+      const sequence = Math.max(session.nextEventSequence, session.eventEnvelopes.at(-1)?.sequence ?? 0) + 1;
+      session.eventEnvelopes.push({
+        sequence,
+        timestamp: Date.now(),
+        sessionId: session.id,
+        runId: session.runId,
+        event: {
+          type: 'error',
+          code: 'client_error',
+          error: new Error('Previous run was interrupted. Use resume to continue from the last checkpoint, or send a new prompt to start a new turn.'),
+        },
+      });
+    }
+    if (session.eventEnvelopes.length > this.maxEventsPerSession) {
+      session.eventEnvelopes.splice(0, session.eventEnvelopes.length - this.maxEventsPerSession);
+    }
     session.events = session.eventEnvelopes.map((envelope) => envelope.event);
     const lastSequence = session.eventEnvelopes.at(-1)?.sequence ?? 0;
     session.nextEventSequence = Math.max(session.nextEventSequence, lastSequence);
@@ -695,20 +1014,120 @@ export class CortxRuntime {
     }
   }
 
+  private async resolveRequestedSkillMounts(request: {
+    skillPaths?: unknown;
+    skillPacks?: unknown;
+  }): Promise<RuntimeSkillMounts> {
+    const requestedSkillPaths = parseOptionalStringArray(request.skillPaths, 'skillPaths');
+    const requestedSkillPacks = parseOptionalStringArray(request.skillPacks, 'skillPacks');
+    const installedSkillPacks = await resolveSkillPackReferences(requestedSkillPacks, {
+      registryPath: this.skillPackRegistryPath,
+    });
+    const resolvedSkillPaths = [
+      ...(requestedSkillPaths ?? []),
+      ...installedSkillPacks.flatMap((pack) => pack.skillPaths),
+    ];
+    return {
+      skillPaths: resolvedSkillPaths.length ? resolvedSkillPaths : undefined,
+      skillPacks: requestedSkillPacks,
+    };
+  }
+
+  private async createCortxHost(input: RuntimeCortxHostInput): Promise<RuntimeCortxHost> {
+    const capabilities =
+      input.approvalMode === 'full-access'
+        ? { ...input.requestedCapabilities, approval: false }
+        : input.requestedCapabilities;
+    const toolApprovalRequirements = new WeakMap<Tool, boolean>();
+    const runtimeTools = this.tools.map((tool) => {
+      const wrapped = requireApprovalForExternalTool(tool);
+      toolApprovalRequirements.set(wrapped, true);
+      return wrapped;
+    });
+    const workspaceTools = createWorkspaceTools(input.workingDirectory, input.toolMode);
+    for (const tool of workspaceTools) toolApprovalRequirements.set(tool, workspaceToolNeedsApproval(tool));
+    const requestTools = input.requestTools.map((tool) => {
+      const wrapped = requireApprovalForExternalTool(tool);
+      toolApprovalRequirements.set(wrapped, true);
+      return wrapped;
+    });
+    const mountedTools = [...runtimeTools, ...workspaceTools, ...requestTools];
+    const officialExtensions = await this.createOfficialExtensions({
+      workingDirectory: input.workingDirectory,
+      capabilities,
+      skillPaths: input.skillPaths,
+      needsToolApproval: (tool) => (tool ? toolApprovalRequirements.get(tool) ?? true : true),
+    });
+    const extensions = officialExtensions.extensions;
+
+    if (capabilities.subAgents !== false) {
+      const subAgentTool = createSubAgentTool({
+        language: this.language,
+        model: input.model,
+        registry: input.registry ?? this.registry,
+        plugins: input.plugins ?? this.plugins,
+        agentSessions: input.agentSessions,
+        getTools: () => mountedTools,
+        getExtensions: () => extensions,
+        onAgentEvent: input.onAgentEvent,
+      });
+      toolApprovalRequirements.set(subAgentTool, true);
+      mountedTools.push(subAgentTool);
+    }
+    const allModelTools = [...mountedTools, ...extensions.tools];
+    const contextMetadata: RuntimeSessionContextMetadata = {
+      contextWindowTokens: input.contextWindowTokens,
+      contextWindowSource: input.contextWindowSource,
+      systemPromptTokens: estimateTextTokens(input.system),
+      toolDefinitionTokens: estimateToolDefinitionTokens(allModelTools),
+      toolCount: allModelTools.length,
+      skillSummaryTokens: officialExtensions.skillSummaryTokens,
+      skillCount: officialExtensions.skillCount,
+    };
+
+    const cortx = new Cortx(this.language, {
+      appName: this.appName,
+      model: input.model,
+      system: input.system,
+      maxIterations: input.maxIterations,
+      registry: input.registry ?? this.registry,
+      plugins: input.plugins ?? this.plugins,
+      tools: mountedTools,
+      extensions,
+      workingDirectory: input.workingDirectory,
+      sessionId: input.id,
+      durableStore: this.durableStore,
+      askUser: input.approvalMode === 'deny' ? async () => 'no' : undefined,
+      logger: this.logger,
+    });
+    cortx.onAgentEvent = input.onAgentEvent;
+    return { cortx, capabilities, contextMetadata };
+  }
+
   private async createOfficialExtensions(input: {
     workingDirectory: string;
     capabilities: RuntimeDefaultCapabilities;
     skillPaths?: string[];
     needsToolApproval?: (tool: Tool | undefined, input: Record<string, unknown>) => boolean;
-  }): Promise<AgentRuntimeExtensions> {
+  }): Promise<RuntimeOfficialExtensions> {
     const sets: AgentRuntimeExtensions[] = [createEmptyAgentRuntimeExtensions()];
+    let skillCount = 0;
+    let skillSummaryTokens = 0;
     if (input.capabilities.skills !== false) {
       const skills = await discoverSkills(input.workingDirectory, { skillPaths: input.skillPaths }, this.logger);
-      if (skills.length) sets.push(createSkillExtensions(skills));
+      if (skills.length) {
+        skillCount = skills.length;
+        skillSummaryTokens = estimateTextTokens(renderSkillSummary(skills));
+        sets.push(createSkillExtensions(skills));
+      }
     }
     if (input.capabilities.approval !== false) {
       sets.push(createDefaultSafetyExtensions({ needsApproval: input.needsToolApproval }));
     }
-    return mergeAgentRuntimeExtensions(...sets);
+    return {
+      extensions: mergeAgentRuntimeExtensions(...sets),
+      skillCount,
+      skillSummaryTokens,
+    };
   }
 }

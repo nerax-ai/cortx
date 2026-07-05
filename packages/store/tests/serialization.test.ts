@@ -9,6 +9,7 @@ function makeTestState(overrides?: Partial<AgentState>): AgentState {
     iteration: 0,
     toolCalls: new Map(),
     tokenUsage: { inputTokens: 0, outputTokens: 0 },
+    contextUsage: undefined,
     totalElapsed: 0,
     elapsed: 0,
     status: 'idle',
@@ -124,6 +125,29 @@ describe('serialization', () => {
     expect(restored.totalElapsed).toBe(12);
     expect(restored.elapsed).toBe(5);
     expect(restored.status).toBe('running');
+  });
+
+  test('round-trip preserves context usage facts', () => {
+    const state = makeTestState({
+      contextUsage: {
+        usedTokens: 1200,
+        windowTokens: 200000,
+        windowSource: 'model_metadata',
+        percentUsed: 0.6,
+        cacheHitRate: 25,
+        model: 'claude',
+        breakdown: [
+          { key: 'messages', label: '消息', tokens: 700, source: 'runtime_estimate', count: 4 },
+          { key: 'tools', label: '系统工具', tokens: 200, source: 'runtime_estimate', count: 6 },
+          { key: 'skills', label: '技能', tokens: 100, source: 'runtime_estimate', count: 1 },
+          { key: 'system_prompt', label: '系统提示词', tokens: 80, source: 'runtime_estimate' },
+          { key: 'other', label: '其他', tokens: 120, source: 'provider' },
+        ],
+      },
+    });
+
+    const restored = deserializeAgentState(serializeAgentState(state));
+    expect(restored.contextUsage).toEqual(state.contextUsage);
   });
 
   test('round-trip preserves error state', () => {

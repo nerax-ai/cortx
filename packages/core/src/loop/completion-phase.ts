@@ -1,5 +1,5 @@
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import type { AgentEvent } from '../types.js';
+import type { AgentDoneUsage, AgentEvent } from '../types.js';
 import type { LanguageMessage } from '@cortx/sdk';
 import { messageText } from '../message-helpers.js';
 import { emitPhaseEvent, type AgentLoopPhaseInput } from './pipeline.js';
@@ -17,6 +17,18 @@ export interface CompletionPhaseInput extends AgentLoopPhaseInput {
   autoContinueLimit: number;
   messages: LanguageMessage[];
   iteration: number;
+}
+
+function normalizeLanguageTokenUsage(usage: LanguageTokenUsage): AgentDoneUsage {
+  const result: AgentDoneUsage = {
+    inputTokens: usage.inputTokens.total ?? 0,
+    outputTokens: usage.outputTokens.total ?? 0,
+  };
+  if (usage.inputTokens.noCache !== undefined) result.noCacheInputTokens = usage.inputTokens.noCache;
+  if (usage.inputTokens.cacheRead !== undefined) result.cacheReadTokens = usage.inputTokens.cacheRead;
+  if (usage.inputTokens.cacheWrite !== undefined) result.cacheCreationTokens = usage.inputTokens.cacheWrite;
+  if (usage.outputTokens.reasoning !== undefined) result.reasoningTokens = usage.outputTokens.reasoning;
+  return result;
 }
 
 export async function* runCompletionPhase(
@@ -70,9 +82,7 @@ export async function* runCompletionPhase(
   yield await emitPhaseEvent(runtime, 'turn', iteration, turnEnd);
   const done: AgentEvent = {
     type: 'done',
-    usage: usage
-      ? { inputTokens: usage.inputTokens.total ?? 0, outputTokens: usage.outputTokens.total ?? 0 }
-      : undefined,
+    usage: usage ? normalizeLanguageTokenUsage(usage) : undefined,
   };
   yield await emitPhaseEvent(runtime, 'completion', iteration, done);
   return { action: 'done', autoContinueCount };

@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@cortx/sdk';
+import type { AgentDoneUsage, AgentEvent } from '@cortx/sdk';
 import type {
   ActivityEntry,
   AgentSessionSummary,
@@ -51,6 +51,27 @@ function upsertAgentActivity(
 function elapsedSeconds(start: number, end: number): number {
   if (start <= 0) return 0;
   return Math.max(0, (end - start) / 1000);
+}
+
+function addOptionalTokenField(current: number | undefined, next: number | undefined): number | undefined {
+  if (next === undefined) return current;
+  return (current ?? 0) + next;
+}
+
+function addTokenUsage(current: TokenUsage, next: AgentDoneUsage): TokenUsage {
+  const usage: TokenUsage = {
+    inputTokens: current.inputTokens + next.inputTokens,
+    outputTokens: current.outputTokens + next.outputTokens,
+  };
+  const noCacheInputTokens = addOptionalTokenField(current.noCacheInputTokens, next.noCacheInputTokens);
+  const cacheReadTokens = addOptionalTokenField(current.cacheReadTokens, next.cacheReadTokens);
+  const cacheCreationTokens = addOptionalTokenField(current.cacheCreationTokens, next.cacheCreationTokens);
+  const reasoningTokens = addOptionalTokenField(current.reasoningTokens, next.reasoningTokens);
+  if (noCacheInputTokens !== undefined) usage.noCacheInputTokens = noCacheInputTokens;
+  if (cacheReadTokens !== undefined) usage.cacheReadTokens = cacheReadTokens;
+  if (cacheCreationTokens !== undefined) usage.cacheCreationTokens = cacheCreationTokens;
+  if (reasoningTokens !== undefined) usage.reasoningTokens = reasoningTokens;
+  return usage;
 }
 
 export function reduceAgentEvent(
@@ -202,12 +223,7 @@ export function reduceAgentEvent(
 
     case 'done': {
       const turnElapsed = elapsedSeconds(turnStartTime, now);
-      const usage: TokenUsage = event.usage
-        ? {
-            inputTokens: state.tokenUsage.inputTokens + event.usage.inputTokens,
-            outputTokens: state.tokenUsage.outputTokens + event.usage.outputTokens,
-          }
-        : state.tokenUsage;
+      const usage: TokenUsage = event.usage ? addTokenUsage(state.tokenUsage, event.usage) : state.tokenUsage;
       const prev = state.messages;
       const turns =
         prev.currentText.length > 0
@@ -218,6 +234,7 @@ export function reduceAgentEvent(
         status: 'idle',
         messages: { turns, currentText: '', currentThinking: '' },
         tokenUsage: usage,
+        contextUsage: event.usage?.context ?? state.contextUsage,
         totalElapsed: state.totalElapsed + turnElapsed,
         elapsed: 0,
       };

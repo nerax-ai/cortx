@@ -224,8 +224,8 @@ describe('runtime resource pressure guardrails', () => {
     const restored = await runtime.restoreDurableSessions();
 
     expect(restored.map((session) => session.id)).toEqual(['durable-session']);
-    expect(runtime.getEventEnvelopeHistory('durable-session').map((event) => event.sequence)).toEqual([8, 9, 10]);
-    expect(runtime.getEventHistory('durable-session').map((event) => event.type)).toEqual(['text', 'text', 'text']);
+    expect(runtime.getEventEnvelopeHistory('durable-session').map((event) => event.sequence)).toEqual([9, 10, 12]);
+    expect(runtime.getEventHistory('durable-session').map((event) => event.type)).toEqual(['text', 'text', 'error']);
     runtime.dispose();
   });
 

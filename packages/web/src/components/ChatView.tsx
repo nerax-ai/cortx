@@ -3,6 +3,7 @@ import type { AgentState } from '@cortx/store';
 import type { ActivityEntry, TurnEntry, ToolCallEntry, AgentSessionSummary } from '@cortx/store';
 import type { WebApprovalMode, WebWorkspaceToolMode } from '../bridge/event-bridge';
 import { visibleActivityEntries } from '../activity';
+import type { ContextUsageSummary } from '../context-usage';
 import { ActivityCard } from './ActivityTimeline';
 import { PromptInput } from './PromptInput';
 import { StreamingText } from './StreamingText';
@@ -16,13 +17,13 @@ interface ChatViewProps {
   activity: ActivityEntry[];
   toolCalls: Map<string, ToolCallEntry>;
   agentSessions: Map<string, AgentSessionSummary>;
+  contextUsage?: ContextUsageSummary;
   status: AgentStatus;
   iteration: number;
   error: string | undefined;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
   selectedWorkingDirectory: string | null;
-  willCreateSessionOnSend: boolean;
   onSend: (message: string) => void;
   onAbort: () => void;
   onResume: () => void;
@@ -85,13 +86,13 @@ export function ChatView({
   activity,
   toolCalls,
   agentSessions,
+  contextUsage,
   status,
   iteration,
   error,
   toolMode,
   approvalMode,
   selectedWorkingDirectory,
-  willCreateSessionOnSend,
   onSend,
   onAbort,
   onResume,
@@ -114,7 +115,6 @@ export function ChatView({
     Boolean(messages.currentThinking) ||
     Boolean(error);
   const timeline = buildTimeline(messages, activity);
-
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-[#fbfbfa]">
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -173,8 +173,8 @@ export function ChatView({
         toolMode={toolMode}
         approvalMode={approvalMode}
         selectedWorkingDirectory={selectedWorkingDirectory}
+        contextUsage={contextUsage}
         canChangeModes={status !== 'running' && status !== 'awaiting_user'}
-        willCreateSessionOnSend={willCreateSessionOnSend}
         onCreateSession={onCreateSessionForCurrentProject}
         onToolModeChange={onToolModeChange}
         onApprovalModeChange={onApprovalModeChange}

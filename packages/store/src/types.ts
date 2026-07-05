@@ -31,7 +31,13 @@ export interface TurnEntry {
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  noCacheInputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  reasoningTokens?: number;
 }
+
+export type ContextUsageState = import('@cortx/sdk').ContextUsageFacts;
 
 /** Summary of a sub-agent session. */
 export interface AgentSessionSummary {
@@ -87,6 +93,8 @@ export interface AgentState {
   toolCalls: Map<string, ToolCallEntry>;
   /** Cumulative token usage from done events. */
   tokenUsage: TokenUsage;
+  /** Latest provider/runtime context facts from done events. */
+  contextUsage: ContextUsageState | undefined;
   /** Total elapsed seconds across all turns in the session. */
   totalElapsed: number;
   /** Elapsed seconds since the last turn_start. 0 when idle. */
@@ -164,6 +172,7 @@ export interface SerializedAgentState {
   iteration: number;
   toolCalls: Record<string, SerializedToolCallEntry>;
   tokenUsage: TokenUsage;
+  contextUsage?: ContextUsageState;
   totalElapsed: number;
   elapsed: number;
   status: AgentStatus;

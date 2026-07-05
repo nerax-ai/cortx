@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import type { AgentStatus, TokenUsage } from '@cortx/store';
 import { compactPath, compactSessionId, formatElapsed, formatTokenUsage, statusTone, surface } from '../design';
-import type { WebAgentSpecInfo, WebRuntimeSessionInfo, WebSkillPackInfo, WebSkillPackInstallRequest } from '../bridge/event-bridge';
+import type {
+  WebAgentSpecInfo,
+  WebRuntimeSessionInfo,
+  WebSkillPackInfo,
+  WebSkillPackInstallRequest,
+  WebWorkspaceDirectoryListing,
+} from '../bridge/event-bridge';
 
 interface SessionSidebarProps {
   status: AgentStatus;
@@ -17,6 +23,7 @@ interface SessionSidebarProps {
     workingDirectory: string;
     skillPacks?: string[];
   }) => void | Promise<void>;
+  onBrowseWorkspaceDirectories: (path?: string) => Promise<WebWorkspaceDirectoryListing>;
   onLaunchAgentSpec: (path: string) => void | Promise<void>;
   onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
   onSkillPackSelectionChange: (ids: string[]) => void;
@@ -72,6 +79,7 @@ export function SessionSidebar({
   tokenUsage,
   elapsed,
   onCreateSession,
+  onBrowseWorkspaceDirectories,
   onLaunchAgentSpec,
   onInstallSkillPack,
   onSkillPackSelectionChange,
@@ -84,14 +92,17 @@ export function SessionSidebar({
   const [skillPackId, setSkillPackId] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [isInstallingPack, setIsInstallingPack] = useState(false);
+  const [isDirectoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const [directoryListing, setDirectoryListing] = useState<WebWorkspaceDirectoryListing | null>(null);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [launchingSpecPath, setLaunchingSpecPath] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [skillPackError, setSkillPackError] = useState<string | null>(null);
   const projects = groupSessions(sessions);
 
-  async function submitProject() {
-    const workingDirectory = projectPath.trim();
+  async function createProjectFromPath(workingDirectory: string) {
     if (!workingDirectory || isAdding) return;
     setIsAdding(true);
     setProjectError(null);
@@ -101,11 +112,35 @@ export function SessionSidebar({
         skillPacks: selectedSkillPackIds.length ? selectedSkillPackIds : undefined,
       });
       setProjectPath('');
+      setDirectoryPickerOpen(false);
     } catch (err) {
       setProjectError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAdding(false);
     }
+  }
+
+  async function submitProject() {
+    await createProjectFromPath(projectPath.trim());
+  }
+
+  async function loadDirectories(path?: string) {
+    setDirectoryLoading(true);
+    setDirectoryError(null);
+    try {
+      const listing = await onBrowseWorkspaceDirectories(path);
+      setDirectoryListing(listing);
+      setProjectPath(listing.current);
+    } catch (err) {
+      setDirectoryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDirectoryLoading(false);
+    }
+  }
+
+  async function openDirectoryPicker() {
+    setDirectoryPickerOpen(true);
+    await loadDirectories();
   }
 
   async function submitSkillPack() {
@@ -370,15 +405,21 @@ export function SessionSidebar({
         }}
       >
         <div className="text-xs font-medium text-zinc-500">Add Project</div>
-        <input
-          value={projectPath}
-          onChange={(e) => {
-            setProjectPath(e.target.value);
-            if (projectError) setProjectError(null);
-          }}
-          placeholder="Directory path on server"
-          className={`h-9 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
-        />
+        <div className="flex gap-2">
+          <input
+            value={projectPath}
+            readOnly
+            placeholder="Choose a directory"
+            className={`h-9 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
+          />
+          <button
+            type="button"
+            onClick={() => void openDirectoryPicker()}
+            className={`h-9 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 hover:bg-zinc-50 ${surface.focus}`}
+          >
+            Browse
+          </button>
+        </div>
         {projectError && (
           <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
             {projectError}
@@ -392,6 +433,109 @@ export function SessionSidebar({
           {isAdding ? 'Adding...' : 'Add project'}
         </button>
       </form>
+
+      {isDirectoryPickerOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/25 p-4">
+          <div className="flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl">
+            <div className="border-b border-zinc-200 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-zinc-950">Select Project Directory</div>
+                  <div className="mt-1 truncate font-mono text-xs text-zinc-500">
+                    {directoryListing?.current ?? 'Loading...'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDirectoryPickerOpen(false)}
+                  className={`rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 ${surface.focus}`}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)]">
+              <div className="border-b border-zinc-200 bg-zinc-50 p-3 md:border-b-0 md:border-r">
+                <div className="mb-2 text-xs font-medium text-zinc-500">Roots</div>
+                <div className="space-y-1">
+                  {(directoryListing?.roots ?? []).map((root) => (
+                    <button
+                      key={root}
+                      type="button"
+                      title={root}
+                      onClick={() => void loadDirectories(root)}
+                      className={`w-full rounded-md px-2 py-1.5 text-left font-mono text-[11px] text-zinc-600 hover:bg-white hover:text-zinc-950 ${surface.focus}`}
+                    >
+                      <span className="block truncate">{compactPath(root)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-h-0 overflow-y-auto p-3">
+                {directoryError && (
+                  <div className="mb-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                    {directoryError}
+                  </div>
+                )}
+                {directoryLoading ? (
+                  <div className="rounded-md border border-dashed border-zinc-200 px-3 py-8 text-center text-xs text-zinc-500">
+                    Loading directories...
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {directoryListing?.parent && (
+                      <button
+                        type="button"
+                        onClick={() => void loadDirectories(directoryListing.parent)}
+                        className={`w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-left text-xs text-zinc-700 hover:bg-white ${surface.focus}`}
+                      >
+                        ..
+                      </button>
+                    )}
+                    {(directoryListing?.entries ?? []).map((entry) => (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        title={entry.path}
+                        onClick={() => void loadDirectories(entry.path)}
+                        className={`w-full rounded-md border border-transparent px-3 py-2 text-left text-xs text-zinc-700 hover:border-zinc-200 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
+                      >
+                        <div className="truncate font-medium">{entry.name}</div>
+                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">{entry.path}</div>
+                      </button>
+                    ))}
+                    {!directoryListing?.entries.length && !directoryListing?.parent && (
+                      <div className="rounded-md border border-dashed border-zinc-200 px-3 py-8 text-center text-xs text-zinc-500">
+                        No folders
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setDirectoryPickerOpen(false)}
+                className={`h-8 rounded-md border border-zinc-200 px-3 text-xs text-zinc-700 hover:bg-zinc-50 ${surface.focus}`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!directoryListing?.current || isAdding}
+                onClick={() => directoryListing?.current && void createProjectFromPath(directoryListing.current)}
+                className={`h-8 rounded-md bg-zinc-950 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 ${surface.focus}`}
+              >
+                {isAdding ? 'Adding...' : 'Use this directory'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

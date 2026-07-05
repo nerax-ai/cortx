@@ -84,6 +84,8 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     model: value.model,
     system: typeof value.system === 'string' ? value.system : undefined,
     maxIterations: typeof value.maxIterations === 'number' ? value.maxIterations : undefined,
+    contextWindowTokens: typeof value.contextWindowTokens === 'number' ? value.contextWindowTokens : undefined,
+    contextWindowSource: parseContextWindowSource(value.contextWindowSource),
     toolMode: parseToolMode(value.toolMode),
     approvalMode: parseApprovalMode(value.approvalMode),
     capabilities: isObject(value.capabilities) ? { ...DEFAULT_RUNTIME_CAPABILITIES, ...value.capabilities } : { skills: false, subAgents: false, approval: false },
@@ -207,6 +209,20 @@ function parseToolMode(value: unknown): RuntimeSessionSnapshot['toolMode'] {
 function parseApprovalMode(value: unknown): RuntimeSessionSnapshot['approvalMode'] {
   if (value === 'deny' || value === 'interactive' || value === 'full-access') return value;
   return 'deny';
+}
+
+function parseContextWindowSource(value: unknown): RuntimeSessionSnapshot['contextWindowSource'] {
+  if (
+    value === 'provider' ||
+    value === 'runtime_exact' ||
+    value === 'runtime_estimate' ||
+    value === 'configured' ||
+    value === 'model_metadata' ||
+    value === 'unknown'
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function isSubAgentStatus(value: unknown): value is RuntimeSubAgentSessionSnapshot['status'] {

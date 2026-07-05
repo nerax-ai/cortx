@@ -37,6 +37,7 @@ export class AgentStore {
       iteration: 0,
       toolCalls: new Map(),
       tokenUsage: { inputTokens: 0, outputTokens: 0 },
+      contextUsage: undefined,
       totalElapsed: 0,
       elapsed: 0,
       status: 'idle',
@@ -135,6 +136,35 @@ export class AgentStore {
   }
 
   /**
+   * Reconcile UI-derived state with runtime session metadata after event replay.
+   * Event history can end mid-run when a process was restarted or a stream was
+   * truncated; the runtime session is the source of truth for whether it is
+   * still busy.
+   */
+  syncRuntimeStatus(input: { sessionId?: string; isRunning: boolean }): void {
+    if (input.sessionId && input.sessionId !== this.state.sessionId) return;
+
+    if (input.isRunning) {
+      if (this.state.status === 'idle' || this.state.status === 'error') {
+        this.state = { ...this.state, status: 'running', error: undefined };
+        this.notifySelectors();
+      }
+      return;
+    }
+
+    if (this.state.status === 'running') {
+      this.dispatch({ type: 'done' });
+      return;
+    }
+
+    if (this.state.status === 'awaiting_user') {
+      this.state = { ...this.state, status: 'idle', pendingQuestion: null };
+      this.turnStartTime = 0;
+      this.notifySelectors();
+    }
+  }
+
+  /**
    * Reset the store to initial state.
    * Generates a new session ID unless one is provided.
    */
@@ -147,6 +177,7 @@ export class AgentStore {
       iteration: 0,
       toolCalls: new Map(),
       tokenUsage: { inputTokens: 0, outputTokens: 0 },
+      contextUsage: undefined,
       totalElapsed: 0,
       elapsed: 0,
       status: 'idle',

@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { readdir, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import {
@@ -21,6 +22,7 @@ import {
   type RuntimeApprovalMode,
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
+  type RuntimeSessionUpdateRequest,
   type WorkspaceToolMode,
 } from '@cortx/runtime';
 import type { ServerConfig } from './types.js';
@@ -30,6 +32,18 @@ export interface ServerRuntimeHandle {
   app: Hono;
   runtime: CortxRuntime;
   dispose(): void;
+}
+
+interface WorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+interface WorkspaceDirectoryListing {
+  roots: string[];
+  current: string;
+  parent?: string;
+  entries: WorkspaceDirectoryEntry[];
 }
 
 function serializeEvent(event: AgentEvent): string {
@@ -109,6 +123,12 @@ function getSkillPackRegistryPath(config: ServerConfig): string {
 
 function getPrincipalAllowedWorkspaceRoots(config: ServerConfig, principal: AuthPrincipal | undefined): string[] {
   return principal?.allowedWorkspaceRoots?.length ? principal.allowedWorkspaceRoots : getServerAllowedWorkspaceRoots(config);
+}
+
+function getAgentSpecDiscoveryRoots(config: ServerConfig, principal: AuthPrincipal | undefined): string[] {
+  if (config.agentSpecRoots?.length) return config.agentSpecRoots.map((root) => resolve(root));
+  if (principal?.allowedWorkspaceRoots?.length) return principal.allowedWorkspaceRoots.map((root) => resolve(root));
+  return [resolve(getDefaultWorkingDirectory(config))];
 }
 
 async function authorizeWorkspace(
@@ -229,6 +249,14 @@ async function buildAuthorizedSessionRequest(
   ) as RuntimeSessionCreateRequest;
 }
 
+function buildAuthorizedSessionUpdateRequest(c: Context, body: Record<string, unknown>): RuntimeSessionUpdateRequest {
+  const principal = getAuthPrincipal(c);
+  const request = { ...body } as RuntimeSessionUpdateRequest;
+  if (principal?.toolMode) assertWithinToolScope(request.toolMode, principal.toolMode, principal);
+  if (principal?.approvalMode) assertWithinApprovalScope(request.approvalMode, principal.approvalMode, principal);
+  return request;
+}
+
 async function assertSessionAccess(c: Context, config: ServerConfig, session: RuntimeSessionInfo): Promise<void> {
   await authorizeWorkspace(config, getAuthPrincipal(c), session.workingDirectory);
 }
@@ -261,7 +289,7 @@ async function listAuthorizedSessions(runtime: CortxRuntime, c: Context, config:
 async function listAuthorizedAgentSpecs(c: Context, config: ServerConfig): Promise<DiscoveredAgentSpec[]> {
   const principal = getAuthPrincipal(c);
   const discovered = await discoverAgentSpecs({
-    roots: getPrincipalAllowedWorkspaceRoots(config, principal),
+    roots: getAgentSpecDiscoveryRoots(config, principal),
     installedSkillPackRegistryPath: getSkillPackRegistryPath(config),
     strict: false,
   });
@@ -292,6 +320,56 @@ async function listAuthorizedSkillPacks(c: Context, config: ServerConfig): Promi
     }
   }
   return visible;
+}
+
+async function tryAuthorizeDirectory(
+  c: Context,
+  config: ServerConfig,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    const workspace = await authorizeWorkspace(config, getAuthPrincipal(c), path);
+    const info = await stat(workspace.workingDirectory);
+    if (!info.isDirectory()) return undefined;
+    return workspace.workingDirectory;
+  } catch (error) {
+    if (isRuntimeError(error) && (error.kind === 'permission_denied' || error.kind === 'invalid_workspace')) {
+      return undefined;
+    }
+    return undefined;
+  }
+}
+
+async function listWorkspaceDirectories(c: Context, config: ServerConfig): Promise<WorkspaceDirectoryListing> {
+  const principal = getAuthPrincipal(c);
+  const roots = getPrincipalAllowedWorkspaceRoots(config, principal).map((root) => resolve(root));
+  const requested = c.req.query('path');
+  const workspace = await authorizeWorkspace(config, principal, requested || roots[0]);
+  const current = workspace.workingDirectory;
+  let currentInfo: Awaited<ReturnType<typeof stat>>;
+  try {
+    currentInfo = await stat(current);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new RuntimeError('invalid_workspace', `workspace path is not accessible: ${current}`, { cause: message });
+  }
+  if (!currentInfo.isDirectory()) {
+    throw new RuntimeError('invalid_workspace', `workspace path is not a directory: ${current}`, { requested: current });
+  }
+  const parentPath = dirname(current);
+  const parent = parentPath === current ? undefined : await tryAuthorizeDirectory(c, config, parentPath);
+  const children = await readdir(current, { withFileTypes: true });
+  const entries: WorkspaceDirectoryEntry[] = [];
+
+  for (const child of children) {
+    if (!child.isDirectory() && !child.isSymbolicLink()) continue;
+    const childPath = resolve(current, child.name);
+    const authorized = await tryAuthorizeDirectory(c, config, childPath);
+    if (authorized) entries.push({ name: child.name, path: authorized });
+  }
+
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  return { roots, current, parent, entries };
 }
 
 async function installSkillPackFromBody(c: Context, config: ServerConfig, body: Record<string, unknown>): Promise<InstalledSkillPack> {
@@ -366,6 +444,8 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     model: config.model,
     system: config.system,
     maxIterations: config.maxIterations,
+    contextWindowTokens: config.contextWindowTokens,
+    contextWindowSource: config.contextWindowSource,
     registry: config.registry,
     plugins: config.plugins,
     defaultWorkingDirectory: config.defaultWorkingDirectory,
@@ -451,6 +531,15 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     }
   });
 
+  app.get('/workspaces/directories', async (c) => {
+    try {
+      return c.json(await listWorkspaceDirectories(c, config));
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
   // List sessions
   app.get('/sessions', async (c) => {
     try {
@@ -466,6 +555,19 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     const id = c.req.param('id');
     try {
       return c.json({ session: await getAuthorizedSession(runtime, c, config, id) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.patch('/sessions/:id', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await getAuthorizedSession(runtime, c, config, id);
+      const body = await readOptionalJson(c);
+      const session = await runtime.updateSession(id, buildAuthorizedSessionUpdateRequest(c, body));
+      return c.json({ session });
     } catch (error) {
       const response = errorResponse(error);
       return c.json(response.body, response.status);
@@ -578,6 +680,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
           id: useEnvelope ? String(envelope.sequence) : String(++sequence),
         });
       }
+      await stream.writeSSE({ data: '{}' });
 
       // Subscribe to new events
       const unsub = useEnvelope

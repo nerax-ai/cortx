@@ -134,6 +134,111 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
+  test('enriches done events with runtime context usage facts', async () => {
+    const skillDir = join(tmpDir, '.cortx', 'skills', 'review');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: review\ndescription: Review code changes\n---\nUse severity ordered findings.',
+    );
+    const runtime = new CortxRuntime({
+      language: mockLanguage([
+        [
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'ok' },
+          { type: 'text-end', id: 't1' },
+          {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: {
+              inputTokens: { total: 1000, noCache: 700, cacheRead: 200, cacheWrite: 100 },
+              outputTokens: { total: 50, reasoning: 10 },
+            },
+          },
+        ] as LanguageStreamPart[],
+      ]),
+      model: 'test-model',
+      system: 'You are Cortx.',
+      contextWindowTokens: 2000,
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: true, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession();
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    await runtime.prompt(session.id, 'hello');
+    const done = (await waitForEvent(events, 'done')) as Extract<AgentEvent, { type: 'done' }>;
+
+    expect(done.usage).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 50,
+      cacheReadTokens: 200,
+      cacheCreationTokens: 100,
+      reasoningTokens: 10,
+    });
+    expect(done.usage?.context).toMatchObject({
+      usedTokens: 1000,
+      windowTokens: 2000,
+      windowSource: 'configured',
+      percentUsed: 50,
+      cacheHitRate: 20,
+      model: 'test-model',
+    });
+    expect(done.usage?.context?.breakdown.map((row) => row.key)).toEqual([
+      'messages',
+      'tools',
+      'skills',
+      'system_prompt',
+      'other',
+    ]);
+    expect(done.usage?.context?.breakdown.find((row) => row.key === 'skills')?.count).toBe(1);
+    expect(runtime.getSession(session.id).contextWindowTokens).toBe(2000);
+    runtime.dispose();
+  });
+
+  test('counts provider cache-read input toward context window usage', async () => {
+    const runtime = new CortxRuntime({
+      language: mockLanguage([
+        [
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'ok' },
+          { type: 'text-end', id: 't1' },
+          {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: {
+              inputTokens: { total: 398, cacheRead: 1472 },
+              outputTokens: { total: 133 },
+            },
+          },
+        ] as LanguageStreamPart[],
+      ]),
+      model: 'test-model',
+      contextWindowTokens: 128_000,
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession();
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    await runtime.prompt(session.id, 'hello');
+    const done = (await waitForEvent(events, 'done')) as Extract<AgentEvent, { type: 'done' }>;
+
+    expect(done.usage?.context).toMatchObject({
+      usedTokens: 1870,
+      windowTokens: 128_000,
+      cacheHitRate: 78.71657754010695,
+    });
+    expect(done.usage?.context?.percentUsed).toBeCloseTo(1.4609375);
+    runtime.dispose();
+  });
+
   test('creates independent sessions and replays bounded event history', async () => {
     const runtime = new CortxRuntime({
       language: mockLanguage([textParts('one'), textParts('two')]),
@@ -333,6 +438,82 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
+  test('updates current session controls without replacing the session or history', async () => {
+    const seenToolNames: string[][] = [];
+    const seenMessages: LanguageMessage[][] = [];
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* (request: { tools?: Array<{ name: string }>; messages: LanguageMessage[] }) {
+          seenToolNames.push((request.tools ?? []).map((tool) => tool.name));
+          seenMessages.push(request.messages);
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+          };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      approvalMode: 'interactive',
+      capabilities: { skills: false, subAgents: false, approval: true },
+    });
+    const session = await runtime.createSession({ id: 'controls-session', approvalMode: 'full-access' });
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    await runtime.prompt(session.id, 'first');
+    await waitForEvent(events, 'done');
+    expect(runtime.getSession(session.id)).toMatchObject({
+      id: 'controls-session',
+      approvalMode: 'full-access',
+      capabilities: { approval: false },
+    });
+    expect(seenToolNames[0]).not.toContain('read');
+
+    events.length = 0;
+    const updated = await runtime.updateSession(session.id, {
+      toolMode: 'read-only',
+      approvalMode: 'interactive',
+    });
+    expect(updated).toMatchObject({
+      id: 'controls-session',
+      toolMode: 'read-only',
+      approvalMode: 'interactive',
+      capabilities: { approval: true },
+    });
+
+    await runtime.prompt(session.id, 'second');
+    await waitForEvent(events, 'done');
+
+    expect(runtime.listSessions().map((item) => item.id)).toEqual(['controls-session']);
+    expect(seenToolNames[1]).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']));
+    expect(seenToolNames[1]).not.toContain('write');
+    expect(JSON.stringify(seenMessages[1])).toContain('first');
+    runtime.dispose();
+  });
+
+  test('rejects session control updates while a run is active', async () => {
+    const runtime = new CortxRuntime({
+      language: delayedLanguage(100),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+    });
+    const session = await runtime.createSession();
+
+    await runtime.prompt(session.id, 'running');
+    await expect(runtime.updateSession(session.id, { toolMode: 'all' })).rejects.toMatchObject({
+      kind: 'session_busy',
+    });
+
+    await runtime.abort(session.id);
+    runtime.dispose();
+  });
+
   test('throws typed errors for missing sessions and invalid requests', async () => {
     const runtime = new CortxRuntime({
       language: mockLanguage([textParts('ok')]),
@@ -361,6 +542,15 @@ describe('CortxRuntime sessions', () => {
       details: { toolMode: 'everything' },
     });
     await expect(runtime.createSession({ approvalMode: 'ask' as never })).rejects.toMatchObject({
+      kind: 'invalid_request',
+      details: { approvalMode: 'ask' },
+    });
+    const session = await runtime.createSession();
+    await expect(runtime.updateSession(session.id, { toolMode: 'everything' as never })).rejects.toMatchObject({
+      kind: 'invalid_request',
+      details: { toolMode: 'everything' },
+    });
+    await expect(runtime.updateSession(session.id, { approvalMode: 'ask' as never })).rejects.toMatchObject({
       kind: 'invalid_request',
       details: { approvalMode: 'ask' },
     });

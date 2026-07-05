@@ -37,6 +37,42 @@ export interface RuntimeAgentEventEnvelope {
   };
 }
 
+export type ContextUsageBreakdownKey = 'messages' | 'tools' | 'skills' | 'system_prompt' | 'other';
+export type ContextUsageSource = 'provider' | 'runtime_exact' | 'runtime_estimate' | 'configured' | 'model_metadata' | 'unknown';
+
+export interface ContextUsageBreakdownEntry {
+  key: ContextUsageBreakdownKey;
+  label: string;
+  tokens: number;
+  source: ContextUsageSource;
+  count?: number;
+  description?: string;
+}
+
+export interface ContextUsageFacts {
+  /** Tokens consumed by the current model request context. Usually provider-reported input tokens. */
+  usedTokens?: number;
+  /** Model context window. Comes from explicit runtime config first, then Synax model metadata when available. */
+  windowTokens?: number;
+  windowSource?: ContextUsageSource;
+  model?: string;
+  /** Percentage in the 0..100 range. */
+  percentUsed?: number;
+  /** Cache hit rate for this request, in the 0..100 range. */
+  cacheHitRate?: number;
+  breakdown: ContextUsageBreakdownEntry[];
+}
+
+export interface AgentDoneUsage {
+  inputTokens: number;
+  outputTokens: number;
+  noCacheInputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  context?: ContextUsageFacts;
+}
+
 // AgentEvent lives in the SDK so runtime extensions, tools, and hosts share one event contract.
 export type AgentEvent =
   | { type: 'turn_start'; iteration: number }
@@ -52,7 +88,7 @@ export type AgentEvent =
   | { type: 'follow_up'; message: string }
   | { type: 'context_overflow'; messages: LanguageMessage[] }
   | { type: 'error'; error: Error; code?: ErrorCode }
-  | { type: 'done'; usage?: { inputTokens: number; outputTokens: number } }
+  | { type: 'done'; usage?: AgentDoneUsage }
   | { type: 'agent_started'; toolCallId: string; description: string; isBackground?: boolean }
   | { type: 'agent_progress'; toolCallId: string; text: string }
   | { type: 'agent_completed'; toolCallId: string; output: string; iterations: number; toolCallCount: number; isError?: boolean }

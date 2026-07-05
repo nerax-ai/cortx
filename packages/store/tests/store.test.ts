@@ -145,6 +145,47 @@ describe('AgentStore', () => {
     expect(store.getState().tokenUsage).toEqual({ inputTokens: 150, outputTokens: 100 });
   });
 
+  test('dispatch done stores cache usage and latest context facts', () => {
+    const store = new AgentStore();
+    store.dispatch({
+      type: 'done',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 30,
+        cacheCreationTokens: 10,
+        context: {
+          usedTokens: 100,
+          windowTokens: 1000,
+          windowSource: 'model_metadata',
+          percentUsed: 10,
+          cacheHitRate: 30,
+          model: 'test-model',
+          breakdown: [
+            { key: 'messages', label: '消息', tokens: 40, source: 'runtime_estimate' },
+            { key: 'tools', label: '系统工具', tokens: 30, source: 'runtime_estimate' },
+            { key: 'skills', label: '技能', tokens: 20, source: 'runtime_estimate' },
+            { key: 'system_prompt', label: '系统提示词', tokens: 10, source: 'runtime_estimate' },
+            { key: 'other', label: '其他', tokens: 0, source: 'provider' },
+          ],
+        },
+      },
+    });
+
+    expect(store.getState().tokenUsage).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 30,
+      cacheCreationTokens: 10,
+    });
+    expect(store.getState().contextUsage).toMatchObject({
+      usedTokens: 100,
+      windowTokens: 1000,
+      cacheHitRate: 30,
+      model: 'test-model',
+    });
+  });
+
   test('dispatch error sets error status and message', () => {
     const store = new AgentStore();
     store.dispatch({ type: 'text_delta', delta: 'partial' });
@@ -378,6 +419,43 @@ describe('AgentStore setSessionId', () => {
     const store = new AgentStore();
     store.setSessionId('restored_id');
     expect(store.getState().sessionId).toBe('restored_id');
+  });
+});
+
+describe('AgentStore syncRuntimeStatus', () => {
+  test('flushes stale running replay when the runtime session is stopped', () => {
+    const store = new AgentStore();
+    store.reset('sess_replayed');
+    store.dispatch({ type: 'turn_start', iteration: 1 }, 1_000);
+    store.dispatch({ type: 'text_delta', delta: 'restored partial answer' }, 1_500);
+
+    store.syncRuntimeStatus({ sessionId: 'sess_replayed', isRunning: false });
+
+    const state = store.getState();
+    expect(state.status).toBe('idle');
+    expect(state.messages.currentText).toBe('');
+    expect(state.messages.turns.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'restored partial answer',
+    });
+  });
+
+  test('clears stale pending questions when the runtime session is stopped', () => {
+    const store = new AgentStore();
+    store.reset('sess_replayed');
+    store.dispatch({
+      type: 'user_request',
+      request: {
+        requestId: 'approval_1',
+        kind: 'tool_approval',
+        prompt: 'Approve write?',
+        allowedResponses: ['yes', 'no'],
+      },
+    });
+
+    store.syncRuntimeStatus({ sessionId: 'sess_replayed', isRunning: false });
+
+    expect(store.getState()).toMatchObject({ status: 'idle', pendingQuestion: null });
   });
 });
 
