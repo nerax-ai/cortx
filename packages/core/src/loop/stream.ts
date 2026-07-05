@@ -2,7 +2,7 @@ import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
 import type { AgentEvent, ErrorCode, LanguageMessage, LanguageToolCallContent, Tool } from '@cortx/sdk';
 import { emitPhaseEvent, withAbortSignal, withTurnDeadline, type AgentLoopRuntime } from './pipeline.js';
-import { classifyAgentError } from './errors.js';
+import { budgetExceededError, classifyAgentError } from './errors.js';
 
 export interface StreamModelInput {
   runtime: AgentLoopRuntime;
@@ -24,6 +24,22 @@ export interface StreamModelOutput {
 }
 
 export const classifyError = classifyAgentError;
+
+const CHARS_PER_ESTIMATED_TOKEN = 4;
+
+function estimateOutputTokens(text: string, thinking: string): number {
+  const visibleChars = text.length + thinking.length;
+  return visibleChars === 0 ? 0 : Math.ceil(visibleChars / CHARS_PER_ESTIMATED_TOKEN);
+}
+
+function assertWithinStreamingBudget(runtime: AgentLoopRuntime, nextText: string, nextThinking: string): void {
+  const tokenBudget = runtime.limits?.tokenBudget;
+  if (tokenBudget === undefined) return;
+  if (estimateOutputTokens(nextText, nextThinking) <= tokenBudget) return;
+  const error = budgetExceededError(tokenBudget);
+  if (!runtime.abortController.signal.aborted) runtime.abortController.abort(error);
+  throw error;
+}
 
 export async function* streamModel(input: StreamModelInput): AsyncGenerator<AgentEvent, StreamModelOutput> {
   const { runtime, language, model, messages, maxOutputTokens, temperature, tools, iteration } = input;
@@ -58,11 +74,15 @@ export async function* streamModel(input: StreamModelInput): AsyncGenerator<Agen
     if (next.done) break;
     const part = next.value;
     if (part.type === 'text-delta') {
-      textBuffer += part.delta;
+      const nextText = textBuffer + part.delta;
+      assertWithinStreamingBudget(runtime, nextText, thinkingBuffer);
+      textBuffer = nextText;
       const event: AgentEvent = { type: 'text_delta', delta: part.delta };
       yield await emitPhaseEvent(runtime, 'model', iteration, event);
     } else if (part.type === 'reasoning-delta') {
-      thinkingBuffer += part.delta;
+      const nextThinking = thinkingBuffer + part.delta;
+      assertWithinStreamingBudget(runtime, textBuffer, nextThinking);
+      thinkingBuffer = nextThinking;
       const event: AgentEvent = { type: 'thinking_delta', delta: part.delta };
       yield await emitPhaseEvent(runtime, 'model', iteration, event);
     } else if (part.type === 'tool-input-start') {

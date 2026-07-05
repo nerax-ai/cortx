@@ -408,6 +408,44 @@ describe('conformance: session and events', () => {
     expect((events.at(-1) as Extract<AgentEvent, { type: 'error' }>).error.message).toContain('Token budget exceeded');
   });
 
+  test('streaming token budget preempts long visible output and aborts the provider signal', async () => {
+    let signalAborted = false;
+    const events = await collectEvents({
+      language: {
+        stream: async function* (_request: unknown, options?: { signal?: AbortSignal }) {
+          options?.signal?.addEventListener(
+            'abort',
+            () => {
+              signalAborted = true;
+            },
+            { once: true },
+          );
+          yield { type: 'text-start', id: 't1' } as const;
+          yield { type: 'text-delta', id: 't1', delta: 'abcd' } as const;
+          yield { type: 'text-delta', id: 't1', delta: 'efgh' } as const;
+          yield { type: 'text-delta', id: 't1', delta: 'ijkl' } as const;
+          yield { type: 'text-delta', id: 't1', delta: 'mnop' } as const;
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: { inputTokens: { total: 0 }, outputTokens: { total: 4 } },
+          } as const;
+        },
+      } as any,
+      model: 'test',
+      messages: [{ role: 'user', content: 'stream budget' }],
+      limits: { tokenBudget: 2 },
+    });
+
+    expect(signalAborted).toBe(true);
+    expect(events.map((event) => event.type)).toEqual(['turn_start', 'text_delta', 'text_delta', 'error']);
+    expect(events.filter((event) => event.type === 'text_delta').map((event) => event.delta)).toEqual(['abcd', 'efgh']);
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'budget_exceeded' });
+    expect((events.at(-1) as Extract<AgentEvent, { type: 'error' }>).error.message).toContain(
+      'during model streaming',
+    );
+  });
+
   test('turn timeout stops a slow model stream with a typed terminal error', async () => {
     const events = await collectEvents({
       language: {

@@ -13,6 +13,7 @@ export function classifyAgentError(error: unknown): ErrorCode {
     (err as { statusCode?: number; status?: number })?.statusCode ??
     (err as { statusCode?: number; status?: number })?.status ??
     0;
+  if (code === 'budget_exceeded') return 'budget_exceeded';
   if (code === 'timeout') return 'timeout';
   if (code === 'user_abort' || name === 'aborterror' || msg.includes('aborted')) return 'user_abort';
   if (
@@ -37,4 +38,10 @@ export function normalizeAgentError(error: unknown, code?: ErrorCode): AgentEven
 
 export function userAbortError(reason?: string): Error & { code: 'user_abort' } {
   return Object.assign(new Error(reason ?? 'aborted'), { code: 'user_abort' as const });
+}
+
+export function budgetExceededError(tokenBudget: number): Error & { code: 'budget_exceeded' } {
+  return Object.assign(new Error(`Token budget exceeded (${tokenBudget}) during model streaming`), {
+    code: 'budget_exceeded' as const,
+  });
 }

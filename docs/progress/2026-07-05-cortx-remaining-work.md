@@ -30,17 +30,18 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
 - P2 server 权限边界：server 已支持多 API key principal、短 token 继承 principal scope、按 token workspace roots 过滤 session list，并在 session action/SSE/AgentSpec file launch 前做 scope 检查；tool/control mode scope 也不能被 request body 越权。
+- P2 streaming-time token budget preemption：core 现在会在 text/thinking streaming delta 期间用 dependency-free 估算 guard 检查 `limits.tokenBudget`，超出时触发 `budget_exceeded` 并 abort provider signal；provider finish 后的精确 usage 检查仍保留。
 
 仍然没有被这轮完全关闭的项：
 
 - TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连和真实视觉/终端交互；approval + abort/resume + sub-agent 的跨层协议已有自动 smoke，但还没有真实 provider 和真人 UI 回归。
-- 完整 SaaS 级多用户权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强；其中 file-backed event replay 已具备默认 bounded retention，server 已具备本地产品阶段的 token-scoped workspace/mode 授权边界。
+- 完整 SaaS 级多用户权限模型、长会话压测、数据库/压缩/归档策略仍属于后续运维级增强；其中 file-backed event replay 已具备默认 bounded retention，server 已具备本地产品阶段的 token-scoped workspace/mode 授权边界，streaming-time token budget 也已有估算型提前停止 guard。
 - `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`819 pass / 0 fail / 2390 expect`
+- 当前全量测试：`bun test` 通过，`820 pass / 0 fail / 2395 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -216,7 +217,7 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 - Runtime event history 已 bounded，真实 file-backed durable event envelope store、snapshot migration layer、event retention window 已落地；数据库/压缩/归档策略仍可作为更高阶后端增强。
 - Long-running session 的内存、timer、pending request、sub-agent store 需要压测。
-- Streaming token budget 目前仍以后验 usage 为主，缺 streaming-time preemption。
+- Streaming token budget 现在已有 text/thinking delta 估算型 preemption；后续如果需要更精确的流式预算，需要引入 provider-aware/tokenizer-aware accounting，而不是把当前估算 guard 当成 billing-grade usage。
 - Server 已有多 token / 多 workspace root 的本地产品级授权边界，但完整多用户账号、审计、TLS、组织权限仍未做。
 
 ### 后续验收
@@ -230,7 +231,7 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 1. 做一次真人端到端 dogfood：TUI local、TUI remote、Web remote。
 2. 基于 dogfood 修 TUI 体验和 Web 基础产品能力。
-3. 补长会话压测、streaming-time token preemption 和多用户权限模型。
+3. 补长会话压测和多用户权限模型；streaming-time token budget 已有估算型 preemption，后续只需在需要 billing-grade 精度时再做 tokenizer/provider-aware accounting。
 4. 打磨 SDK helper、类型测试、官方插件开发手册。
 5. 产品化 AgentSpec / SkillPack 的完整 asset manager、manifest migration/发布策略、selector polish 和更多官方示例入口。
 
