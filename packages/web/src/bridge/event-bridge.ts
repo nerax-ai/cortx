@@ -72,6 +72,24 @@ export interface WebAgentSpecInfo {
   metadata?: Record<string, unknown>;
 }
 
+export interface WebSkillPackInfo {
+  id: string;
+  sourcePath: string;
+  installedAt: number;
+  path: string;
+  name?: string;
+  version?: string;
+  description?: string;
+  skillPaths: string[];
+  agentSpecPaths: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface WebSkillPackInstallRequest {
+  path: string;
+  id?: string;
+}
+
 export class EventBridgeError extends Error {
   constructor(
     message: string,
@@ -172,6 +190,23 @@ export class EventBridge {
     await throwIfError(res, 'Launch AgentSpec failed');
     const data = (await res.json()) as { session: WebRuntimeSessionInfo };
     return data.session;
+  }
+
+  async listSkillPacks(): Promise<WebSkillPackInfo[]> {
+    const res = await apiFetch(this.client, '/skill-packs');
+    await throwIfError(res, 'List SkillPacks failed');
+    const data = (await res.json()) as { skillPacks: WebSkillPackInfo[] };
+    return data.skillPacks;
+  }
+
+  async installSkillPack(request: WebSkillPackInstallRequest): Promise<WebSkillPackInfo> {
+    const res = await apiFetch(this.client, '/skill-packs/install', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+    await throwIfError(res, 'Install SkillPack failed');
+    const data = (await res.json()) as { skillPack: WebSkillPackInfo };
+    return data.skillPack;
   }
 
   async connect(sessionId: string): Promise<void> {

@@ -159,6 +159,19 @@ describe('web desktop UI', () => {
             approvalMode: 'deny',
           },
         ]}
+        skillPacks={[
+          {
+            id: 'review-pack',
+            name: 'Review Pack',
+            version: '0.1.0',
+            sourcePath: '/Users/dev/work/cortx/examples/skill-packs/review',
+            installedAt: 42,
+            path: '/Users/dev/work/cortx/examples/skill-packs/review',
+            skillPaths: ['/Users/dev/work/cortx/examples/skill-packs/review/skills'],
+            agentSpecPaths: ['/Users/dev/work/cortx/examples/skill-packs/review/agents'],
+          },
+        ]}
+        selectedSkillPackIds={['review-pack']}
         selectedWorkingDirectory="/Users/dev/work/cortx"
         toolMode="all"
         approvalMode="interactive"
@@ -170,6 +183,8 @@ describe('web desktop UI', () => {
         onCreateSession={() => undefined}
         onCreateSessionForCurrentProject={() => undefined}
         onLaunchAgentSpec={() => undefined}
+        onInstallSkillPack={() => undefined}
+        onSkillPackSelectionChange={() => undefined}
         onSelectProject={() => undefined}
         onSwitchSession={() => undefined}
         onToolModeChange={() => undefined}
@@ -183,6 +198,10 @@ describe('web desktop UI', () => {
     expect(html).toContain('Agents');
     expect(html).toContain('basic-reviewer');
     expect(html).toContain('/review current changes');
+    expect(html).toContain('Skill Packs');
+    expect(html).toContain('Review Pack');
+    expect(html).toContain('Install Skill Pack');
+    expect(html).toContain('Install pack');
     expect(html).toContain('Add Project');
     expect(html).toContain('Add project');
     expect(html).toContain('Working');

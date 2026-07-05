@@ -136,6 +136,44 @@ describe('TUI runtime session adapters', () => {
     launched.dispose();
   });
 
+  test('local adapter installs, lists and enables SkillPacks from the workspace', async () => {
+    const packDir = join(tmpDir, 'review-pack');
+    const skillDir = join(packDir, 'skills', 'review');
+    const agentsDir = join(packDir, 'agents');
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ name: 'Review Pack' }), 'utf8');
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: review\ndescription: Review changes\n---\nReview skill', 'utf8');
+    writeFileSync(
+      join(agentsDir, 'reviewer.json'),
+      JSON.stringify({
+        name: 'pack-reviewer',
+        prompt: 'review with installed pack',
+        toolMode: 'none',
+        capabilities: { skills: false, subAgents: false, approval: false },
+      }),
+      'utf8',
+    );
+    const session = await createLocalRuntimeSession({
+      language: mockLanguage(textParts('pack result')),
+      model: 'default',
+      workingDirectory: tmpDir,
+    });
+
+    const installed = await session.installSkillPack('review-pack');
+    const packs = await session.listSkillPacks();
+    const specs = await session.listAgentSpecs();
+    const enabled = await session.createSession({ skillPacks: ['review-pack'] });
+
+    expect(installed).toMatchObject({ id: 'review-pack', name: 'Review Pack' });
+    expect(packs.map((pack) => pack.id)).toEqual(['review-pack']);
+    expect(specs.map((spec) => spec.name)).toContain('pack-reviewer');
+    expect(enabled.getInfo().skillPacks).toEqual(['review-pack']);
+
+    session.dispose();
+    enabled.dispose();
+  });
+
   test('remote adapter uses server actions and SSE while keeping restore server-owned', async () => {
     const calls: string[] = [];
     let eventSource: EventSourceLike | undefined;
@@ -257,5 +295,96 @@ describe('TUI runtime session adapters', () => {
 
     session.dispose();
     launched.dispose();
+  });
+
+  test('remote adapter lists, installs and enables SkillPacks through the server client', async () => {
+    const calls: Array<{ path: string; method: string; body?: unknown }> = [];
+    const client = new RemoteRuntimeClient({
+      baseUrl: 'http://server',
+      apiKey: 'key',
+      fetch: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        calls.push({
+          path,
+          method: init?.method ?? 'GET',
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        if (path === '/skill-packs/install') {
+          return jsonResponse({
+            skillPack: {
+              id: 'review-pack',
+              name: 'Review Pack',
+              sourcePath: '/remote/repo/review-pack',
+              installedAt: 2,
+              path: '/remote/repo/review-pack',
+              skillPaths: ['/remote/repo/review-pack/skills'],
+              agentSpecPaths: ['/remote/repo/review-pack/agents'],
+            },
+          });
+        }
+        if (path === '/skill-packs') {
+          return jsonResponse({
+            skillPacks: [
+              {
+                id: 'review-pack',
+                name: 'Review Pack',
+                sourcePath: '/remote/repo/review-pack',
+                installedAt: 1,
+                path: '/remote/repo/review-pack',
+                skillPaths: ['/remote/repo/review-pack/skills'],
+                agentSpecPaths: ['/remote/repo/review-pack/agents'],
+              },
+            ],
+          });
+        }
+        if (path === '/sessions' && init?.method === 'POST') {
+          const body = init.body ? JSON.parse(String(init.body)) : {};
+          return jsonResponse({
+            session: {
+              id: body.skillPacks ? 'sess_pack' : 'sess_remote',
+              createdAt: 1,
+              lastActivityAt: 2,
+              workingDirectory: body.workingDirectory ?? '/remote/repo',
+              model: body.model ?? 'default',
+              toolMode: body.toolMode ?? 'all',
+              approvalMode: body.approvalMode ?? 'interactive',
+              skillPacks: body.skillPacks,
+              isRunning: false,
+              eventCount: 0,
+            },
+          });
+        }
+        return jsonResponse(sessionBody());
+      },
+    });
+    const session = await createRemoteRuntimeSession({ client, create: { workingDirectory: '/remote/repo' } });
+
+    const packs = await session.listSkillPacks();
+    const installed = await session.installSkillPack('review-pack', 'review-pack');
+    const enabled = await session.createSession({ skillPacks: ['review-pack'] });
+
+    expect(packs.map((pack) => pack.id)).toEqual(['review-pack']);
+    expect(installed).toMatchObject({ id: 'review-pack', installedAt: 2 });
+    expect(enabled.getInfo()).toMatchObject({ id: 'sess_pack', skillPacks: ['review-pack'] });
+    expect(calls).toEqual([
+      { path: '/sessions', method: 'POST', body: { workingDirectory: '/remote/repo', metadata: { tuiMode: 'remote' } } },
+      { path: '/skill-packs', method: 'GET', body: undefined },
+      { path: '/skill-packs/install', method: 'POST', body: { path: 'review-pack', id: 'review-pack' } },
+      {
+        path: '/sessions',
+        method: 'POST',
+        body: {
+          workingDirectory: '/remote/repo',
+          model: 'default',
+          toolMode: 'all',
+          approvalMode: 'interactive',
+          skillPacks: ['review-pack'],
+          metadata: { tuiMode: 'remote' },
+        },
+      },
+    ]);
+
+    session.dispose();
+    enabled.dispose();
   });
 });

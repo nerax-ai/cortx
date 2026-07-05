@@ -7,7 +7,7 @@ import {
 import type { CommandDef } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
 import { TuiRegistry } from '../tui-registry.js';
-import { commandPlugin, formatAgentSpecList } from '../plugins/command-plugin.js';
+import { commandPlugin, formatAgentSpecList, formatSkillPackList, parseSkillPackSessionIds } from '../plugins/command-plugin.js';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -217,6 +217,36 @@ describe('formatAgentSpecList', () => {
   });
 });
 
+describe('SkillPack command helpers', () => {
+  test('formats installed SkillPacks', () => {
+    const text = formatSkillPackList([
+      {
+        id: 'review-pack',
+        name: 'Review Pack',
+        sourcePath: '/repo/review-pack',
+        installedAt: 1,
+        path: '/repo/review-pack',
+        skillPaths: ['/repo/review-pack/skills'],
+        agentSpecPaths: ['/repo/review-pack/agents'],
+      },
+    ]);
+
+    expect(text).toContain('Installed SkillPacks:');
+    expect(text).toContain('review-pack');
+    expect(text).toContain('Review Pack');
+    expect(text).toContain('1 skills, 1 agents');
+  });
+
+  test('formats empty installed SkillPacks', () => {
+    expect(formatSkillPackList([])).toBe('No SkillPacks installed.');
+  });
+
+  test('parses comma-separated session ids', () => {
+    expect(parseSkillPackSessionIds('review-pack, support-pack')).toEqual(['review-pack', 'support-pack']);
+    expect(parseSkillPackSessionIds('')).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration: plugin registers new command -> appears in palette
 // ---------------------------------------------------------------------------
@@ -245,7 +275,7 @@ describe('Integration: plugin commands in palette', () => {
     });
 
     const commands = registry.getCommands();
-    expect(commands.length).toBe(9); // 8 built-in + 1 custom
+    expect(commands.length).toBe(11); // 10 built-in + 1 custom
     expect(commands.some((c) => c.name === '/custom')).toBe(true);
 
     // Verify it appears in palette filtering
@@ -286,6 +316,8 @@ describe('Integration: plugin commands in palette', () => {
     expect(helpText).toContain('/steer');
     expect(helpText).toContain('/agents');
     expect(helpText).toContain('/agent');
+    expect(helpText).toContain('/skill-packs');
+    expect(helpText).toContain('/skill-pack');
   });
 
   test('AgentSpec commands list and launch through injected dependencies', async () => {
@@ -325,6 +357,56 @@ describe('Integration: plugin commands in palette', () => {
     expect(notices[1]).toBe('Launched AgentSpec: reviewer');
     expect(pickerOpens).toBe(1);
     expect(launches).toEqual(['reviewer']);
+  });
+
+  test('SkillPack commands list, install and create sessions through injected dependencies', async () => {
+    const notices: string[] = [];
+    const installs: Array<{ path: string; id?: string }> = [];
+    const sessions: string[][] = [];
+    const registry = new TuiRegistry();
+    await registry.registerPlugin(commandPlugin({
+      exit: () => {},
+      clear: () => {},
+      getConfig: () => ({}),
+      listSkillPacks: async () => [
+        {
+          id: 'review-pack',
+          name: 'Review Pack',
+          sourcePath: '/repo/review-pack',
+          installedAt: 1,
+          path: '/repo/review-pack',
+          skillPaths: ['/repo/review-pack/skills'],
+          agentSpecPaths: ['/repo/review-pack/agents'],
+        },
+      ],
+      installSkillPack: async (path, id) => {
+        installs.push({ path, id });
+        return {
+          id: id ?? 'review-pack',
+          name: 'Review Pack',
+          sourcePath: `/repo/${path}`,
+          installedAt: 1,
+          path: `/repo/${path}`,
+          skillPaths: [`/repo/${path}/skills`],
+          agentSpecPaths: [`/repo/${path}/agents`],
+        };
+      },
+      createSkillPackSession: async (ids) => {
+        sessions.push(ids);
+      },
+      showNotice: (message) => notices.push(message),
+      showError: (message) => notices.push(`ERROR: ${message}`),
+    }));
+
+    await registry.executeCommand('/skill-packs', '', { args: '', abort: () => {} });
+    await registry.executeCommand('/skill-pack', 'install review-pack review-pack', { args: 'install review-pack review-pack', abort: () => {} });
+    await registry.executeCommand('/skill-pack', 'session review-pack,support-pack', { args: 'session review-pack,support-pack', abort: () => {} });
+
+    expect(notices[0]).toContain('Installed SkillPacks:');
+    expect(notices[1]).toBe('Installed SkillPack: review-pack');
+    expect(notices[2]).toBe('Started session with SkillPacks: review-pack, support-pack');
+    expect(installs).toEqual([{ path: 'review-pack', id: 'review-pack' }]);
+    expect(sessions).toEqual([['review-pack', 'support-pack']]);
   });
 
   test('/agent without picker support reports a clear command error', async () => {

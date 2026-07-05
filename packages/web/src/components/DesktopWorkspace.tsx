@@ -4,6 +4,8 @@ import type {
   WebApprovalMode,
   WebEventConnectionState,
   WebRuntimeSessionInfo,
+  WebSkillPackInfo,
+  WebSkillPackInstallRequest,
   WebWorkspaceToolMode,
 } from '../bridge/event-bridge';
 import { surface } from '../design';
@@ -17,6 +19,8 @@ interface DesktopWorkspaceProps {
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
   agentSpecs: WebAgentSpecInfo[];
+  skillPacks: WebSkillPackInfo[];
+  selectedSkillPackIds: string[];
   selectedWorkingDirectory: string | null;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
@@ -27,9 +31,12 @@ interface DesktopWorkspaceProps {
   onRecoverEventStream: () => void | Promise<void>;
   onCreateSession: (request: {
     workingDirectory: string;
+    skillPacks?: string[];
   }) => void | Promise<void>;
   onCreateSessionForCurrentProject: () => void | Promise<unknown>;
   onLaunchAgentSpec: (path: string) => void | Promise<void>;
+  onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
+  onSkillPackSelectionChange: (ids: string[]) => void;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
@@ -41,6 +48,8 @@ export function DesktopWorkspace({
   session,
   sessions,
   agentSpecs,
+  skillPacks,
+  selectedSkillPackIds,
   selectedWorkingDirectory,
   toolMode,
   approvalMode,
@@ -52,13 +61,20 @@ export function DesktopWorkspace({
   onCreateSession,
   onCreateSessionForCurrentProject,
   onLaunchAgentSpec,
+  onInstallSkillPack,
+  onSkillPackSelectionChange,
   onSelectProject,
   onSwitchSession,
   onToolModeChange,
   onApprovalModeChange,
 }: DesktopWorkspaceProps) {
   const willCreateSessionOnSend =
-    Boolean(session) && state.status !== 'running' && (session?.toolMode !== toolMode || session?.approvalMode !== approvalMode);
+    Boolean(session) &&
+    state.status !== 'running' &&
+    (session?.toolMode !== toolMode ||
+      session?.approvalMode !== approvalMode ||
+      (session?.skillPacks ?? []).length !== selectedSkillPackIds.length ||
+      (session?.skillPacks ?? []).some((id) => !selectedSkillPackIds.includes(id)));
 
   return (
     <div className={`${surface.page} flex h-screen overflow-hidden`}>
@@ -68,11 +84,15 @@ export function DesktopWorkspace({
           session={session}
           sessions={sessions}
           agentSpecs={agentSpecs}
+          skillPacks={skillPacks}
+          selectedSkillPackIds={selectedSkillPackIds}
           selectedWorkingDirectory={selectedWorkingDirectory}
           tokenUsage={state.tokenUsage}
           elapsed={state.totalElapsed}
           onCreateSession={onCreateSession}
           onLaunchAgentSpec={onLaunchAgentSpec}
+          onInstallSkillPack={onInstallSkillPack}
+          onSkillPackSelectionChange={onSkillPackSelectionChange}
           onSelectProject={onSelectProject}
           onSwitchSession={onSwitchSession}
         />

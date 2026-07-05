@@ -22,7 +22,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
 - P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
 - P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并进一步补上 `defineRuntimeCapability()`、`defineCapabilityContribution()`、`registerRuntimeCapability()` 组合 helper；SDK 现在有运行时导出测试、`tsc --noEmit` 编译期 type-test 和官方插件作者文档。
-- P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；runtime 已新增本地 SkillPack install registry，session 和 AgentSpec 均可通过已安装 pack id/name 启用 skills；server 暴露 `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动和 `/agent` 选择器 overlay；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
+- P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；runtime 已新增本地 SkillPack install registry，session 和 AgentSpec 均可通过已安装 pack id/name 启用 skills；server 暴露 `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec，也能列出/安装 SkillPack 并为新 session 选择 pack；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动、`/agent` 选择器 overlay，以及 `/skill-packs`、`/skill-pack install`、`/skill-pack session` 的第一版 SkillPack 入口；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - Web event replay / recovery：Web bridge 现在暴露 typed event stream lifecycle，workspace header 能显示 replay/live/reconnecting/disconnected 状态、last event sequence，并提供不需要重新输入 API key 或 workspace 的 recover stream 操作。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
@@ -100,7 +100,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 ### 当前状态
 
-TUI 已经支持 local runtime 和 remote server 两种模式，输入历史、steer、markdown、thinking、tool region、session restore、AgentSpec 列表/直接启动/选择器 overlay 等都有测试覆盖。
+TUI 已经支持 local runtime 和 remote server 两种模式，输入历史、steer、markdown、thinking、tool region、session restore、AgentSpec 列表/直接启动/选择器 overlay，以及 SkillPack 列表/安装/新 session 启用命令都有测试覆盖。
 
 ### 缺口
 
@@ -108,7 +108,7 @@ TUI 已经支持 local runtime 和 remote server 两种模式，输入历史、s
 - tool/sub-agent 展示还不够接近 Claude Code / Codex 的成熟感。
 - approval 交互还需要更清楚的默认体验。
 - markdown/code block/thinking 展示仍需要继续 polish。
-- 多 session、多目录、多 agent 切换还没有完整产品化；AgentSpec 选择器已有第一版，还需要真实终端 dogfood 后打磨交互细节。
+- 多 session、多目录、多 agent 切换还没有完整产品化；AgentSpec 选择器和 SkillPack 命令入口已有第一版，还需要真实终端 dogfood 后打磨交互细节。
 
 ### 后续验收
 
@@ -130,11 +130,12 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 - Approval dialog 已迁到 Base UI dialog，tool card 使用 Base UI collapsible，inspector 使用 Base UI tabs。
 - 连接页已有 connecting/error/retry 基础状态。
 - Workspace header 已有 event replay/live/reconnecting/disconnected 状态和 recover stream 操作。
+- Sidebar 已有 SkillPack 列表、安装表单和新 session pack 选择入口。
 - Web 仍通过 `EventBridge` 访问 server/runtime，不直接依赖 core/runtime/workspace-tools 内部实现。
 
 ### 缺口
 
-- session 列表、多 project 分组和同 project 多 session 切换已有第一版；多目录、多 agent 管理体验还需要真实 dogfood 后继续打磨。
+- session 列表、多 project 分组、同 project 多 session 切换和 SkillPack 选择启用已有第一版；多目录、多 agent/asset 管理体验还需要真实 dogfood 后继续打磨。
 - Approval dialog、tool/result、sub-agent 可视化已有第一版，但还缺真实长会话 dogfood 后的细节打磨。
 - event replay 和断线恢复 UI 已有第一版，但还缺真实断网、server restart、长会话恢复场景 dogfood。
 - 缺真实 server/provider 环境下的 Web remote 长流程验证。
@@ -170,21 +171,21 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 当前状态
 
-AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-only 或 skill-pack-backed session。AgentSpec 支持显式 `schemaVersion: 1`，缺省版本按 v1 兼容；SkillPack 支持 `skill-pack.json` 或 `.cortx/skill-pack.json` manifest，并保留无 manifest 的 `skills/`、`.cortx/skills/`、`agents/` 目录约定。Runtime 支持 JSON 文件启动和 `agents/` 目录 discovery；runtime 也已有本地 install registry，可把本地 SkillPack 按 id/name 注册后，在普通 session 或 AgentSpec 的 `skillPacks` 中启用；server 提供 scoped `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` listing 与 launch endpoint；Web bridge/sidebar 已能展示并启动发现到的 AgentSpec；TUI local/remote 也能通过 `/agents`、`/agent <name-or-path>` 和 `/agent` 选择器使用同一套资产，启动后仍进入普通 runtime session。
+AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-only 或 skill-pack-backed session。AgentSpec 支持显式 `schemaVersion: 1`，缺省版本按 v1 兼容；SkillPack 支持 `skill-pack.json` 或 `.cortx/skill-pack.json` manifest，并保留无 manifest 的 `skills/`、`.cortx/skills/`、`agents/` 目录约定。Runtime 支持 JSON 文件启动和 `agents/` 目录 discovery；runtime 也已有本地 install registry，可把本地 SkillPack 按 id/name 注册后，在普通 session 或 AgentSpec 的 `skillPacks` 中启用；server 提供 scoped `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` listing 与 launch endpoint；Web bridge/sidebar 已能展示并启动发现到的 AgentSpec，也能列出/安装 SkillPack 并在新 session 中启用已选 pack；TUI local/remote 也能通过 `/agents`、`/agent <name-or-path>` 和 `/agent` 选择器使用同一套 AgentSpec 资产，并通过 `/skill-packs`、`/skill-pack install <path> [id]`、`/skill-pack session <id[,id...]>` 使用同一套 SkillPack registry。
 
 ### 缺口
 
-- 本地安装、启用入口已有第一版：local registry + server install/list API + runtime session/AgentSpec `skillPacks` id/name 解析。后续仍缺 TUI/Web 的安装 UI。
+- 本地安装、启用入口已有第一版：local registry + server install/list API + runtime session/AgentSpec `skillPacks` id/name 解析，并已接到 Web sidebar 与 TUI slash commands。后续仍缺更完整的 TUI/Web asset manager。
 - v1 manifest / schemaVersion 策略已有第一版，后续仍缺跨版本 migration、pack lockfile/签名、官方发布规范和 marketplace 入口。
 - 官方示例包已有 basic 版本，但还缺覆盖更多真实官方插件集场景的示例。
-- TUI 和 Web 都已有第一版 AgentSpec selector，仍需真实 provider dogfood 打磨交互细节。
+- TUI 和 Web 都已有第一版 AgentSpec selector/SkillPack entry，仍需真实 provider dogfood 打磨交互细节。
 - 缺 skill pack 与普通 `SKILL.md`、companion files、prompt template 的完整官方约定。
 
 ### 后续验收
 
 - 一个 prompt-only AgentSpec 可以无需 JavaScript plugin code 运行。
 - 一个 SkillPack 可以用 v1 manifest 声明 skills/agents 资产，并被 runtime discovery、被 local registry install、被 session/AgentSpec enable。
-- TUI/server/Web 至少有一种入口能选择并启动 AgentSpec。
+- TUI/server/Web 至少有一种入口能选择并启动 AgentSpec；Web/TUI 也都有第一版 SkillPack list/install/enable 入口。
 
 ## P1：真实端到端验证
 
@@ -230,7 +231,7 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 2. 基于 dogfood 修 TUI 体验和 Web 基础产品能力。
 3. 补长会话压测、streaming-time token preemption 和多用户权限模型。
 4. 打磨 SDK helper、类型测试、官方插件开发手册。
-5. 产品化 AgentSpec / SkillPack 的安装 UI、manifest migration/发布策略、selector polish 和更多官方示例入口。
+5. 产品化 AgentSpec / SkillPack 的完整 asset manager、manifest migration/发布策略、selector polish 和更多官方示例入口。
 
 ## 结论
 

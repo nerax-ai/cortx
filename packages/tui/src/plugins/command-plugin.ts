@@ -9,12 +9,14 @@
  *   /steer  — steer the active run
  *   /agents — list available AgentSpec agents
  *   /agent  — launch or pick an AgentSpec agent
+ *   /skill-packs — list installed SkillPacks
+ *   /skill-pack  — install or enable SkillPacks
  */
 
 import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
 import type { TuiFactoryMap, TuiExtensionType, CommandDef } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
-import type { TuiAgentSpecInfo } from '../runtime-session.js';
+import type { TuiAgentSpecInfo, TuiSkillPackInfo } from '../runtime-session.js';
 
 export interface CommandPluginDeps {
   exit: () => void;
@@ -24,6 +26,9 @@ export interface CommandPluginDeps {
   listAgentSpecs: () => Promise<TuiAgentSpecInfo[]>;
   launchAgentSpec: (identifier: string) => void | Promise<void>;
   openAgentSpecPicker: () => void | Promise<void>;
+  listSkillPacks: () => Promise<TuiSkillPackInfo[]>;
+  installSkillPack: (path: string, id?: string) => Promise<TuiSkillPackInfo>;
+  createSkillPackSession: (ids: string[]) => void | Promise<void>;
   showNotice: (message: string) => void;
   showError: (message: string) => void;
   /** Returns all registered commands (for /help). */
@@ -44,6 +49,27 @@ export function formatAgentSpecList(specs: TuiAgentSpecInfo[]): string {
   ].join('\n');
 }
 
+export function formatSkillPackList(packs: TuiSkillPackInfo[]): string {
+  if (packs.length === 0) return 'No SkillPacks installed.';
+  const sorted = [...packs].sort((a, b) => a.id.localeCompare(b.id));
+  const maxIdLen = Math.max(...sorted.map((pack) => pack.id.length));
+  return [
+    'Installed SkillPacks:',
+    ...sorted.map((pack) => {
+      const name = pack.name && pack.name !== pack.id ? ` · ${pack.name}` : '';
+      const version = pack.version ? ` @ ${pack.version}` : '';
+      return `  ${pack.id.padEnd(maxIdLen)}  - ${pack.skillPaths.length} skills, ${pack.agentSpecPaths.length} agents${name}${version}\n      ${pack.sourcePath}`;
+    }),
+  ].join('\n');
+}
+
+export function parseSkillPackSessionIds(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 /**
  * Create the built-in command plugin.
  * Accepts dependency injection for testability.
@@ -56,6 +82,9 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
   const listAgentSpecs = deps?.listAgentSpecs;
   const launchAgentSpec = deps?.launchAgentSpec;
   const openAgentSpecPicker = deps?.openAgentSpecPicker;
+  const listSkillPacks = deps?.listSkillPacks;
+  const installSkillPack = deps?.installSkillPack;
+  const createSkillPackSession = deps?.createSkillPackSession;
   const showNotice = deps?.showNotice ?? ((message: string) => ctxLogFallback(message));
   const showError = deps?.showError ?? ((message: string) => ctxLogFallback(message));
   const getCommands = deps?.getCommands;
@@ -171,6 +200,69 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
         },
       }));
 
+      ctx.register(TUI_COMMAND, 'skill-packs', (_ctx) => ({
+        name: '/skill-packs',
+        description: 'List installed SkillPacks',
+        handler: async () => {
+          if (!listSkillPacks) {
+            showError('SkillPack listing is not available in this session.');
+            return;
+          }
+          try {
+            showNotice(formatSkillPackList(await listSkillPacks()));
+          } catch (error) {
+            showError(`Failed to list SkillPacks: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        },
+      }));
+
+      ctx.register(TUI_COMMAND, 'skill-pack', (_ctx) => ({
+        name: '/skill-pack',
+        description: 'Install or enable SkillPacks',
+        handler: async (args) => {
+          const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+          if (action === 'install') {
+            if (!installSkillPack) {
+              showError('SkillPack install is not available in this session.');
+              return;
+            }
+            const [path, id] = rest;
+            if (!path) {
+              showError('Usage: /skill-pack install <path> [id]');
+              return;
+            }
+            try {
+              const pack = await installSkillPack(path, id);
+              showNotice(`Installed SkillPack: ${pack.id}`);
+            } catch (error) {
+              showError(`Failed to install SkillPack: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return;
+          }
+
+          if (action === 'session') {
+            if (!createSkillPackSession) {
+              showError('SkillPack session creation is not available in this session.');
+              return;
+            }
+            const ids = parseSkillPackSessionIds(rest.join(' '));
+            if (ids.length === 0) {
+              showError('Usage: /skill-pack session <id[,id...]>');
+              return;
+            }
+            try {
+              await createSkillPackSession(ids);
+              showNotice(`Started session with SkillPacks: ${ids.join(', ')}`);
+            } catch (error) {
+              showError(`Failed to start SkillPack session: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return;
+          }
+
+          showError('Usage: /skill-pack install <path> [id] or /skill-pack session <id[,id...]>');
+        },
+      }));
+
       // /help — lists all registered commands
       ctx.register(TUI_COMMAND, 'help', (_ctx) => ({
         name: '/help',
@@ -188,7 +280,7 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
             );
           } else {
             ctx.logger.info(
-              'Available commands: /exit, /quit, /clear, /config, /help',
+              'Available commands: /exit, /quit, /clear, /config, /help, /steer, /agents, /agent, /skill-packs, /skill-pack',
             );
           }
         },

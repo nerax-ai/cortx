@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@cortx/sdk';
-import type { DiscoveredAgentSpec, RuntimeSessionCreateRequest, RuntimeSessionInfo } from '@cortx/runtime';
+import type { DiscoveredAgentSpec, InstalledSkillPack, RuntimeSessionCreateRequest, RuntimeSessionInfo } from '@cortx/runtime';
 
 export interface EventSourceLike {
   onmessage: ((event: { data: string }) => void) | null;
@@ -25,6 +25,12 @@ export interface RemoteAgentSpecLaunchRequest {
 }
 
 export type RemoteAgentSpecInfo = DiscoveredAgentSpec;
+export type RemoteSkillPackInfo = InstalledSkillPack;
+
+export interface RemoteSkillPackInstallRequest {
+  path: string;
+  id?: string;
+}
 
 export class RemoteRuntimeError extends Error {
   constructor(
@@ -102,6 +108,19 @@ export class RemoteRuntimeClient {
   async listAgentSpecs(): Promise<RemoteAgentSpecInfo[]> {
     const data = await this.request<{ agentSpecs: RemoteAgentSpecInfo[] }>('/agent-specs');
     return data.agentSpecs;
+  }
+
+  async listSkillPacks(): Promise<RemoteSkillPackInfo[]> {
+    const data = await this.request<{ skillPacks: RemoteSkillPackInfo[] }>('/skill-packs');
+    return data.skillPacks;
+  }
+
+  async installSkillPack(request: RemoteSkillPackInstallRequest): Promise<RemoteSkillPackInfo> {
+    const data = await this.request<{ skillPack: RemoteSkillPackInfo }>('/skill-packs/install', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+    return data.skillPack;
   }
 
   async prompt(sessionId: string, message: string): Promise<void> {

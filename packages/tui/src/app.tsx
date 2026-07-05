@@ -223,6 +223,12 @@ export default function App({ session, logger }: AppProps) {
           setActiveSession(next);
         },
         openAgentSpecPicker: handleOpenAgentSpecPicker,
+        listSkillPacks: () => activeSession.listSkillPacks(),
+        installSkillPack: (path, id) => activeSession.installSkillPack(path, id),
+        createSkillPackSession: async (ids) => {
+          const next = await activeSession.createSession({ skillPacks: ids });
+          setActiveSession(next);
+        },
         showNotice: (message) => store.showNotice(message),
         showError: (message) => store.dispatch({ type: 'error', error: new Error(message) }),
         getConfig: () => ({}) as Record<string, unknown>,

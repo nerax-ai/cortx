@@ -257,6 +257,68 @@ describe('EventBridge', () => {
     expect(calls[1].auth).toBe('Bearer short-token');
   });
 
+  test('lists and installs SkillPacks through the server bridge', async () => {
+    const calls: Array<{ path: string; auth: string | null; body?: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push({
+        path: url.pathname,
+        auth: new Headers(init?.headers).get('Authorization'),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/skill-packs') {
+        return jsonResponse({
+          skillPacks: [
+            {
+              id: 'review-pack',
+              name: 'Review Pack',
+              sourcePath: '/repo/examples/review-pack',
+              installedAt: 42,
+              path: '/repo/examples/review-pack',
+              skillPaths: ['/repo/examples/review-pack/skills'],
+              agentSpecPaths: ['/repo/examples/review-pack/agents'],
+            },
+          ],
+        });
+      }
+      if (url.pathname === '/skill-packs/install') {
+        return jsonResponse({
+          skillPack: {
+            id: 'review-pack',
+            name: 'Review Pack',
+            sourcePath: '/repo/examples/review-pack',
+            installedAt: 43,
+            path: '/repo/examples/review-pack',
+            skillPaths: ['/repo/examples/review-pack/skills'],
+            agentSpecPaths: ['/repo/examples/review-pack/agents'],
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key');
+    const packs = await bridge.listSkillPacks();
+    const installed = await bridge.installSkillPack({ path: 'examples/review-pack', id: 'review-pack' });
+
+    expect(packs).toEqual([
+      expect.objectContaining({
+        id: 'review-pack',
+        name: 'Review Pack',
+        skillPaths: ['/repo/examples/review-pack/skills'],
+      }),
+    ]);
+    expect(installed).toMatchObject({ id: 'review-pack', installedAt: 43 });
+    expect(calls.map((call) => call.path)).toEqual([
+      '/auth/token',
+      '/skill-packs',
+      '/skill-packs/install',
+    ]);
+    expect(calls[1].auth).toBe('Bearer short-token');
+    expect(calls[2].body).toEqual({ path: 'examples/review-pack', id: 'review-pack' });
+  });
+
   test('surfaces typed server errors', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');

@@ -150,6 +150,54 @@ describe('RemoteRuntimeClient', () => {
     expect(new Headers(calls[0].init?.headers).get('Authorization')).toBe('Bearer test-key');
   });
 
+  test('lists and installs SkillPacks through the remote server contract', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = new RemoteRuntimeClient({
+      baseUrl: 'http://localhost:3000/',
+      apiKey: 'test-key',
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        if (String(url).endsWith('/skill-packs/install')) {
+          return jsonResponse({
+            skillPack: {
+              id: 'review-pack',
+              name: 'Review Pack',
+              sourcePath: '/repo/review-pack',
+              installedAt: 2,
+              path: '/repo/review-pack',
+              skillPaths: ['/repo/review-pack/skills'],
+              agentSpecPaths: ['/repo/review-pack/agents'],
+            },
+          });
+        }
+        return jsonResponse({
+          skillPacks: [
+            {
+              id: 'review-pack',
+              name: 'Review Pack',
+              sourcePath: '/repo/review-pack',
+              installedAt: 1,
+              path: '/repo/review-pack',
+              skillPaths: ['/repo/review-pack/skills'],
+              agentSpecPaths: ['/repo/review-pack/agents'],
+            },
+          ],
+        });
+      },
+    });
+
+    const packs = await client.listSkillPacks();
+    const installed = await client.installSkillPack({ path: 'review-pack', id: 'review-pack' });
+
+    expect(packs).toEqual([expect.objectContaining({ id: 'review-pack', name: 'Review Pack' })]);
+    expect(installed).toMatchObject({ id: 'review-pack', installedAt: 2 });
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual(['/skill-packs', '/skill-packs/install']);
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({ path: 'review-pack', id: 'review-pack' });
+    for (const call of calls) {
+      expect(new Headers(call.init?.headers).get('Authorization')).toBe('Bearer test-key');
+    }
+  });
+
   test('throws typed remote errors from server error bodies', async () => {
     const client = new RemoteRuntimeClient({
       baseUrl: 'http://localhost:3000',

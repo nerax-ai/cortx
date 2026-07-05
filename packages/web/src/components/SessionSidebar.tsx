@@ -1,20 +1,25 @@
 import { useState } from 'react';
 import type { AgentStatus, TokenUsage } from '@cortx/store';
 import { compactPath, compactSessionId, formatElapsed, formatTokenUsage, statusTone, surface } from '../design';
-import type { WebAgentSpecInfo, WebRuntimeSessionInfo } from '../bridge/event-bridge';
+import type { WebAgentSpecInfo, WebRuntimeSessionInfo, WebSkillPackInfo, WebSkillPackInstallRequest } from '../bridge/event-bridge';
 
 interface SessionSidebarProps {
   status: AgentStatus;
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
   agentSpecs: WebAgentSpecInfo[];
+  skillPacks: WebSkillPackInfo[];
+  selectedSkillPackIds: string[];
   selectedWorkingDirectory: string | null;
   tokenUsage: TokenUsage;
   elapsed: number;
   onCreateSession: (request: {
     workingDirectory: string;
+    skillPacks?: string[];
   }) => void | Promise<void>;
   onLaunchAgentSpec: (path: string) => void | Promise<void>;
+  onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
+  onSkillPackSelectionChange: (ids: string[]) => void;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
 }
@@ -61,44 +66,81 @@ export function SessionSidebar({
   session,
   sessions,
   agentSpecs,
+  skillPacks,
+  selectedSkillPackIds,
   selectedWorkingDirectory,
   tokenUsage,
   elapsed,
   onCreateSession,
   onLaunchAgentSpec,
+  onInstallSkillPack,
+  onSkillPackSelectionChange,
   onSelectProject,
   onSwitchSession,
 }: SessionSidebarProps) {
   const tone = statusTone(status);
   const [projectPath, setProjectPath] = useState('');
+  const [skillPackPath, setSkillPackPath] = useState('');
+  const [skillPackId, setSkillPackId] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [isInstallingPack, setIsInstallingPack] = useState(false);
   const [launchingSpecPath, setLaunchingSpecPath] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [skillPackError, setSkillPackError] = useState<string | null>(null);
   const projects = groupSessions(sessions);
 
   async function submitProject() {
     const workingDirectory = projectPath.trim();
     if (!workingDirectory || isAdding) return;
     setIsAdding(true);
-    setError(null);
+    setProjectError(null);
     try {
-      await onCreateSession({ workingDirectory });
+      await onCreateSession({
+        workingDirectory,
+        skillPacks: selectedSkillPackIds.length ? selectedSkillPackIds : undefined,
+      });
       setProjectPath('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setProjectError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAdding(false);
     }
   }
 
+  async function submitSkillPack() {
+    const path = skillPackPath.trim();
+    const id = skillPackId.trim();
+    if (!path || isInstallingPack) return;
+    setIsInstallingPack(true);
+    setSkillPackError(null);
+    try {
+      await onInstallSkillPack({ path, id: id || undefined });
+      setSkillPackPath('');
+      setSkillPackId('');
+    } catch (err) {
+      setSkillPackError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsInstallingPack(false);
+    }
+  }
+
+  function toggleSkillPack(id: string) {
+    onSkillPackSelectionChange(
+      selectedSkillPackIds.includes(id)
+        ? selectedSkillPackIds.filter((item) => item !== id)
+        : [...selectedSkillPackIds, id],
+    );
+  }
+
   async function launchSpec(spec: WebAgentSpecInfo) {
     if (launchingSpecPath) return;
     setLaunchingSpecPath(spec.path);
-    setError(null);
+    setActionError(null);
     try {
       await onLaunchAgentSpec(spec.path);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setLaunchingSpecPath(null);
     }
@@ -129,6 +171,7 @@ export function SessionSidebar({
           <DetailRow label="Session" value={compactSessionId(session?.id, 13)} />
           <DetailRow label="Tools" value={session?.toolMode ?? '-'} />
           <DetailRow label="Control" value={session?.approvalMode ?? '-'} />
+          <DetailRow label="Packs" value={session?.skillPacks?.length ? session.skillPacks.join(', ') : 'none'} />
           <DetailRow label="Tokens" value={formatTokenUsage(tokenUsage)} />
           <DetailRow label="Elapsed" value={formatElapsed(elapsed)} />
         </div>
@@ -226,8 +269,98 @@ export function SessionSidebar({
               </div>
             </div>
           )}
+
+          <div>
+            <div className="mb-2 flex items-center justify-between px-1">
+              <span className="text-xs font-medium text-zinc-500">Skill Packs</span>
+              <span className="text-[10px] text-zinc-400">{skillPacks.length}</span>
+            </div>
+            <div className="space-y-1">
+              {skillPacks.length === 0 && (
+                <div className="rounded-md border border-dashed border-zinc-200 bg-white/60 px-2 py-2 text-[11px] leading-4 text-zinc-500">
+                  No packs installed
+                </div>
+              )}
+              {skillPacks.map((pack) => {
+                const selected = selectedSkillPackIds.includes(pack.id);
+                return (
+                  <label
+                    key={pack.id}
+                    className={`block rounded-md border px-2 py-2 text-xs transition-colors ${
+                      selected ? 'border-zinc-900 bg-white text-zinc-950' : 'border-transparent text-zinc-600 hover:border-zinc-200 hover:bg-white'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleSkillPack(pack.id)}
+                        className={`mt-0.5 h-3.5 w-3.5 rounded border-zinc-300 ${surface.focus}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">{pack.name ?? pack.id}</span>
+                          <span className="shrink-0 text-[10px] text-zinc-400">{pack.skillPaths.length} skills</span>
+                        </div>
+                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">{pack.id}</div>
+                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
+                          {pack.sourcePath || compactPath(pack.path)}
+                        </div>
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {actionError && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
+              {actionError}
+            </div>
+          )}
         </div>
       </section>
+
+      <form
+        className="space-y-2 border-t border-zinc-200 p-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submitSkillPack();
+        }}
+      >
+        <div className="text-xs font-medium text-zinc-500">Install Skill Pack</div>
+        <input
+          value={skillPackPath}
+          onChange={(e) => {
+            setSkillPackPath(e.target.value);
+            if (skillPackError) setSkillPackError(null);
+          }}
+          placeholder="Pack path on server"
+          className={`h-9 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
+        />
+        <input
+          value={skillPackId}
+          onChange={(e) => {
+            setSkillPackId(e.target.value);
+            if (skillPackError) setSkillPackError(null);
+          }}
+          placeholder="Optional id"
+          className={`h-8 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
+        />
+        <button
+          type="submit"
+          disabled={!skillPackPath.trim() || isInstallingPack}
+          className={`h-8 w-full rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:text-zinc-300 ${surface.focus}`}
+        >
+          {isInstallingPack ? 'Installing...' : 'Install pack'}
+        </button>
+        {skillPackError && (
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
+            {skillPackError}
+          </div>
+        )}
+      </form>
 
       <form
         className="space-y-2 border-t border-zinc-200 p-3"
@@ -241,14 +374,14 @@ export function SessionSidebar({
           value={projectPath}
           onChange={(e) => {
             setProjectPath(e.target.value);
-            if (error) setError(null);
+            if (projectError) setProjectError(null);
           }}
           placeholder="Directory path on server"
           className={`h-9 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
         />
-        {error && (
+        {projectError && (
           <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
-            {error}
+            {projectError}
           </div>
         )}
         <button

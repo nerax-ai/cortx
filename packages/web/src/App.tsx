@@ -7,6 +7,8 @@ import {
   type WebApprovalMode,
   type WebEventConnectionState,
   type WebRuntimeSessionInfo,
+  type WebSkillPackInfo,
+  type WebSkillPackInstallRequest,
   type WebWorkspaceToolMode,
 } from './bridge/event-bridge';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -31,6 +33,8 @@ export function App() {
   const [session, setSession] = useState<WebRuntimeSessionInfo | null>(null);
   const [sessions, setSessions] = useState<WebRuntimeSessionInfo[]>([]);
   const [agentSpecs, setAgentSpecs] = useState<WebAgentSpecInfo[]>([]);
+  const [skillPacks, setSkillPacks] = useState<WebSkillPackInfo[]>([]);
+  const [selectedSkillPackIds, setSelectedSkillPackIds] = useState<string[]>([]);
   const [selectedWorkingDirectory, setSelectedWorkingDirectory] = useState<string | null>(null);
   const [toolMode, setToolMode] = useState<WebWorkspaceToolMode>('all');
   const [approvalMode, setApprovalMode] = useState<WebApprovalMode>('interactive');
@@ -56,11 +60,15 @@ export function App() {
         [...existing].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0] ??
         await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' });
       await bridge.connect(target.id);
-      const nextSessions = await bridge.listSessions();
-      const discoveredAgentSpecs = await bridge.listAgentSpecs();
+      const [nextSessions, discoveredAgentSpecs, installedSkillPacks] = await Promise.all([
+        bridge.listSessions(),
+        bridge.listAgentSpecs(),
+        bridge.listSkillPacks(),
+      ]);
       activateSession(target);
       setSessions(nextSessions);
       setAgentSpecs(discoveredAgentSpecs);
+      setSkillPacks(installedSkillPacks);
       setConnected(true);
     } catch (err) {
       bridge.disconnect();
@@ -87,14 +95,27 @@ export function App() {
     setAgentSpecs(await bridgeRef.current.listAgentSpecs());
   }
 
+  async function refreshSkillPacks() {
+    if (!bridgeRef.current) return;
+    const installed = await bridgeRef.current.listSkillPacks();
+    setSkillPacks(installed);
+    setSelectedSkillPackIds((current) => current.filter((id) => installed.some((pack) => pack.id === id)));
+  }
+
+  function selectedSkillPacksForRequest(): string[] | undefined {
+    return selectedSkillPackIds.length ? selectedSkillPackIds : undefined;
+  }
+
   async function createWorkspaceSession(request: {
     workingDirectory: string;
+    skillPacks?: string[];
   }) {
     if (!bridgeRef.current) return;
     const created = await bridgeRef.current.createSession({
       workingDirectory: request.workingDirectory.trim(),
       toolMode,
       approvalMode,
+      skillPacks: request.skillPacks ?? selectedSkillPacksForRequest(),
     });
     await bridgeRef.current.connect(created.id);
     const nextSessions = await bridgeRef.current.listSessions();
@@ -128,6 +149,7 @@ export function App() {
       workingDirectory,
       toolMode,
       approvalMode,
+      skillPacks: selectedSkillPacksForRequest(),
     });
     await bridgeRef.current.connect(created.id);
     activateSession(created);
@@ -144,6 +166,12 @@ export function App() {
     await refreshAgentSpecs();
   }
 
+  async function installSkillPack(request: WebSkillPackInstallRequest) {
+    if (!bridgeRef.current) return;
+    await bridgeRef.current.installSkillPack(request);
+    await Promise.all([refreshSkillPacks(), refreshAgentSpecs()]);
+  }
+
   async function sendPrompt(message: string) {
     if (!session || !bridgeRef.current) return;
     if (state.status === 'running') {
@@ -151,7 +179,11 @@ export function App() {
       return;
     }
     let target = session;
-    if (session.toolMode !== toolMode || session.approvalMode !== approvalMode) {
+    const sessionPackIds = session.skillPacks ?? [];
+    const selectedPacksChanged =
+      sessionPackIds.length !== selectedSkillPackIds.length ||
+      sessionPackIds.some((id) => !selectedSkillPackIds.includes(id));
+    if (session.toolMode !== toolMode || session.approvalMode !== approvalMode || selectedPacksChanged) {
       const created = await createSessionForCurrentProject();
       if (!created) return;
       target = created;
@@ -214,6 +246,8 @@ export function App() {
         session={session}
         sessions={sessions}
         agentSpecs={agentSpecs}
+        skillPacks={skillPacks}
+        selectedSkillPackIds={selectedSkillPackIds}
         selectedWorkingDirectory={selectedWorkingDirectory}
         toolMode={toolMode}
         approvalMode={approvalMode}
@@ -225,6 +259,8 @@ export function App() {
         onCreateSession={createWorkspaceSession}
         onCreateSessionForCurrentProject={createSessionForCurrentProject}
         onLaunchAgentSpec={launchAgentSpec}
+        onInstallSkillPack={installSkillPack}
+        onSkillPackSelectionChange={setSelectedSkillPackIds}
         onSelectProject={selectProject}
         onSwitchSession={switchSession}
         onToolModeChange={setToolMode}

@@ -1,12 +1,30 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageMessage, Logger } from '@cortx/sdk';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, DiscoveredAgentSpec, PluginConfig } from '@cortx/runtime';
-import { CortxRuntime, SubAgentSessionStore, discoverAgentSpecs, type RuntimeSessionCreateRequest, type RuntimeSessionInfo } from '@cortx/runtime';
+import { join } from 'node:path';
+import type {
+  CortxFactoryMap,
+  CortxExtensionType,
+  CortxRegistry,
+  DiscoveredAgentSpec,
+  InstalledSkillPack,
+  PluginConfig,
+} from '@cortx/runtime';
+import {
+  CortxRuntime,
+  SubAgentSessionStore,
+  discoverAgentSpecs,
+  installSkillPack,
+  listInstalledSkillPacks,
+  resolveWorkspace,
+  type RuntimeSessionCreateRequest,
+  type RuntimeSessionInfo,
+} from '@cortx/runtime';
 import type { ProjectPluginRegistry } from './language.js';
 import { RemoteRuntimeClient } from './remote-client.js';
 
 export type TuiRuntimeMode = 'local' | 'remote';
 export type TuiAgentSpecInfo = DiscoveredAgentSpec;
+export type TuiSkillPackInfo = InstalledSkillPack;
 
 export interface TuiSessionAdapter {
   readonly mode: TuiRuntimeMode;
@@ -17,6 +35,9 @@ export interface TuiSessionAdapter {
   prompt(message: string): Promise<void>;
   listAgentSpecs(): Promise<TuiAgentSpecInfo[]>;
   launchAgentSpec(identifier: string): Promise<TuiSessionAdapter>;
+  listSkillPacks(): Promise<TuiSkillPackInfo[]>;
+  installSkillPack(path: string, id?: string): Promise<TuiSkillPackInfo>;
+  createSession(request?: RuntimeSessionCreateRequest): Promise<TuiSessionAdapter>;
   steer(message: string): void | Promise<void>;
   followUp(message: string): void | Promise<void>;
   resume(): Promise<void>;
@@ -36,6 +57,7 @@ export interface LocalRuntimeSessionOptions {
   registry?: ProjectPluginRegistry | CortxRegistry;
   plugins?: PluginConfig[];
   logger?: Logger;
+  skillPackRegistryPath?: string;
 }
 
 export interface RemoteRuntimeSessionOptions {
@@ -54,6 +76,7 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
   constructor(
     private readonly runtime: CortxRuntime,
     private readonly sessionId: string,
+    private readonly skillPackRegistryPath: string,
     ownsRuntime = true,
   ) {
     this.ownsRuntime = ownsRuntime;
@@ -70,14 +93,51 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
   }
 
   listAgentSpecs(): Promise<TuiAgentSpecInfo[]> {
-    return discoverAgentSpecs({ roots: [this.getInfo().workingDirectory] });
+    return discoverAgentSpecs({
+      roots: [this.getInfo().workingDirectory],
+      installedSkillPackRegistryPath: this.skillPackRegistryPath,
+    });
   }
 
   async launchAgentSpec(identifier: string): Promise<TuiSessionAdapter> {
     const spec = await resolveAgentSpecIdentifier(await this.listAgentSpecs(), identifier);
     const info = await this.runtime.launchAgentSpecFile(spec.path);
     this.ownsRuntime = false;
-    return new LocalRuntimeSessionAdapter(this.runtime, info.id, true);
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath, true);
+  }
+
+  listSkillPacks(): Promise<TuiSkillPackInfo[]> {
+    return listInstalledSkillPacks(this.skillPackRegistryPath);
+  }
+
+  async installSkillPack(path: string, id?: string): Promise<TuiSkillPackInfo> {
+    const workspace = await resolveWorkspace({
+      requested: path,
+      defaultWorkingDirectory: this.getInfo().workingDirectory,
+      allowedRoots: [this.getInfo().workingDirectory],
+    });
+    return installSkillPack({
+      registryPath: this.skillPackRegistryPath,
+      sourcePath: workspace.workingDirectory,
+      id,
+    });
+  }
+
+  async createSession(request: RuntimeSessionCreateRequest = {}): Promise<TuiSessionAdapter> {
+    const current = this.getInfo();
+    const info = await this.runtime.createSession({
+      workingDirectory: current.workingDirectory,
+      model: current.model,
+      system: current.system,
+      maxIterations: current.maxIterations,
+      toolMode: current.toolMode,
+      approvalMode: current.approvalMode,
+      capabilities: current.capabilities,
+      ...request,
+      metadata: { ...request.metadata, tuiMode: 'local' },
+    });
+    this.ownsRuntime = false;
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath, true);
   }
 
   prompt(message: string): Promise<void> {
@@ -169,6 +229,31 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
     return new RemoteRuntimeSessionAdapter(this.client, info);
   }
 
+  listSkillPacks(): Promise<TuiSkillPackInfo[]> {
+    return this.client.listSkillPacks();
+  }
+
+  installSkillPack(path: string, id?: string): Promise<TuiSkillPackInfo> {
+    return this.client.installSkillPack({ path, id });
+  }
+
+  async createSession(request: RuntimeSessionCreateRequest = {}): Promise<TuiSessionAdapter> {
+    const current = this.getInfo();
+    const info = await this.client.createSession({
+      workingDirectory: current.workingDirectory,
+      model: current.model,
+      system: current.system,
+      maxIterations: current.maxIterations,
+      toolMode: current.toolMode,
+      approvalMode: current.approvalMode,
+      capabilities: current.capabilities,
+      ...request,
+      metadata: { ...request.metadata, tuiMode: 'remote' },
+    });
+    this.dispose();
+    return new RemoteRuntimeSessionAdapter(this.client, info);
+  }
+
   async steer(message: string): Promise<void> {
     await this.client.steer(this.info.id, message);
   }
@@ -214,6 +299,7 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
 }
 
 export async function createLocalRuntimeSession(options: LocalRuntimeSessionOptions): Promise<TuiSessionAdapter> {
+  const skillPackRegistryPath = options.skillPackRegistryPath ?? join(options.workingDirectory, '.cortx', 'skill-packs', 'registry.json');
   const runtime = new CortxRuntime({
     appName: 'cortx',
     language: options.language,
@@ -227,6 +313,7 @@ export async function createLocalRuntimeSession(options: LocalRuntimeSessionOpti
     toolMode: 'all',
     approvalMode: 'interactive',
     logger: options.logger,
+    skillPackRegistryPath,
   });
   const info = await runtime.createSession({
     workingDirectory: options.workingDirectory,
@@ -237,7 +324,7 @@ export async function createLocalRuntimeSession(options: LocalRuntimeSessionOpti
     plugins: options.plugins,
     metadata: { tuiMode: 'local' },
   });
-  return new LocalRuntimeSessionAdapter(runtime, info.id);
+  return new LocalRuntimeSessionAdapter(runtime, info.id, skillPackRegistryPath);
 }
 
 export async function createRemoteRuntimeSession(options: RemoteRuntimeSessionOptions): Promise<TuiSessionAdapter> {
