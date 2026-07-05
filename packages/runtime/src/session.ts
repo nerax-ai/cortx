@@ -2,6 +2,7 @@ import type { AgentEvent, LanguageMessage, Tool } from '@cortx/sdk';
 import type { Cortx, PluginConfig, CortxRegistry } from '@cortx/core';
 import type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 import type { SubAgentSessionStore } from './capabilities/sub-agent/session-store.js';
+import type { WorkspaceToolMode } from './workspace-tool-mode.js';
 
 export interface RuntimeSessionMetadata {
   [key: string]: unknown;
@@ -17,7 +18,7 @@ export interface RuntimeSessionInfo {
   model: string;
   system?: string;
   maxIterations?: number;
-  toolMode: import('./tool-mount.js').WorkspaceToolMode;
+  toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
@@ -34,7 +35,7 @@ export interface RuntimeSessionCreateRequest {
   system?: string;
   maxIterations?: number;
   tools?: Tool[];
-  toolMode?: import('./tool-mount.js').WorkspaceToolMode;
+  toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
   capabilities?: RuntimeDefaultCapabilities;
   skillPaths?: string[];
@@ -53,7 +54,7 @@ export interface ManagedRuntimeSession {
   model: string;
   system?: string;
   maxIterations?: number;
-  toolMode: import('./tool-mount.js').WorkspaceToolMode;
+  toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];

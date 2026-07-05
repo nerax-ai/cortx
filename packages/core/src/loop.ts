@@ -13,7 +13,6 @@ import {
 import type { CortxConfig, AgentController, AgentEvent } from './types.js';
 import { AgentLoopController } from './types.js';
 import { isToolCallContent } from './message-helpers.js';
-import { emit } from './loop/events.js';
 import { applyTurnPolicies } from './loop/policy.js';
 import { runModelPhase } from './loop/model-phase.js';
 import { runCompletionPhase } from './loop/completion-phase.js';
@@ -295,7 +294,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       const maxConcurrent = opts.maxConcurrentTools ?? 5;
       const budget = opts.toolResultBudget ?? 10240;
       const resolvedAskUser = askUser
-        ? (q: string, tcId: string) => askUser(q)
+        ? (q: string) => askUser(q)
         : controller instanceof AgentLoopController
           ? (_q: string, tcId: string) => controller.registerQuestion(tcId)
           : undefined;

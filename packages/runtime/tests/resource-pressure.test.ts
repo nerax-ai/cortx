@@ -245,12 +245,12 @@ describe('runtime resource pressure guardrails', () => {
     expect(runtime.getSession(session.id).isRunning).toBe(true);
     await waitFor(() => provider.started);
 
-    runtime.abort(session.id);
+    await runtime.abort(session.id);
     await waitFor(() => provider.aborted);
     expect(runtime.getSession(session.id).isRunning).toBe(false);
 
     await runtime.prompt(session.id, 'can run again');
-    runtime.deleteSession(session.id);
+    await runtime.deleteSession(session.id);
     expectSessionNotFound(() => runtime.getSession(session.id));
     expectSessionNotFound(() => runtime.subscribe(session.id, () => {}));
     runtime.dispose();
@@ -275,6 +275,7 @@ describe('runtime resource pressure guardrails', () => {
     runtime.dispose();
 
     await waitFor(() => provider.aborted);
+    await waitFor(() => runtime.listSessions().length === 0);
     expect(runtime.listSessions()).toEqual([]);
     expectSessionNotFound(() => runtime.getSession(session.id));
   });

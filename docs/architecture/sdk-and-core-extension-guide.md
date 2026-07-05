@@ -311,7 +311,7 @@ Skills 仍然是 `SKILL.md` 文件系统资产，不要求 skill 作者写 JavaS
 
 Sub-agent 的模型可见 `agent` tool、foreground/background child run、child session store 和生命周期事件也由 `@cortx/runtime` 的 official sub-agent capability 挂载。Core 保留 agent loop、controller、tool pipeline、policy hook 和 checkpoint primitive，但不再默认创建产品级 `agent` tool。
 
-Default approval policy 也位于 runtime official approval capability。Runtime 在 `approvalMode: 'interactive'` 时通过统一 `user_request` / `user_response` 事件传输结构化审批；在 `approvalMode: 'deny'` 或没有可用审批通道时，write/destructive 工具默认拒绝。
+Default approval policy 也位于 runtime official approval capability。Runtime 在 `approvalMode: 'interactive'` 时通过统一 `user_request` / `user_answer` 事件传输结构化审批；在 `approvalMode: 'deny'` 或没有可用审批通道时，write/destructive 工具默认拒绝。
 
 这是一条迁移边界，不是对 skill 作者或插件作者的新负担。
 

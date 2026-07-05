@@ -99,6 +99,27 @@ describe('SubAgentSessionStore', () => {
     expect(store.get('tc4')).toBeDefined();
   });
 
+  test('evicts by completedAt rather than creation order', () => {
+    const store = new SubAgentSessionStore(2);
+    const slow = store.create('slow', 'created first, completed later', false);
+    const oldOne = store.create('old-1', 'old completed session', false);
+    store.complete('old-1', false);
+    oldOne.completedAt = 10;
+    const oldTwo = store.create('old-2', 'older completed session', false);
+    store.complete('old-2', false);
+    oldTwo.completedAt = 20;
+    slow.status = 'completed';
+    slow.completedAt = 30;
+
+    store.create('trigger', 'new terminal session', false);
+    store.complete('trigger', false);
+
+    expect(store.get('old-1')).toBeUndefined();
+    expect(store.get('old-2')).toBeUndefined();
+    expect(store.get('slow')).toBeDefined();
+    expect(store.get('trigger')).toBeDefined();
+  });
+
   test('does not evict running sessions', () => {
     const store = new SubAgentSessionStore(2);
     store.create('tc1', 'running', false);

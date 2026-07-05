@@ -177,8 +177,8 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
     this.runtime.answer(this.sessionId, toolCallId, response);
   }
 
-  abort(): void {
-    this.runtime.abort(this.sessionId);
+  abort(): Promise<void> {
+    return Promise.resolve(this.runtime.abort(this.sessionId));
   }
 
   getAgentMessages(): LanguageMessage[] {

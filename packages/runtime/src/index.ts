@@ -6,7 +6,7 @@ export type { RuntimeErrorKind } from './errors.js';
 export { DEFAULT_RUNTIME_CAPABILITIES } from './default-capabilities.js';
 export type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 export { createWorkspaceTools } from './tool-mount.js';
-export type { WorkspaceToolMode } from './tool-mount.js';
+export type { WorkspaceToolMode } from './workspace-tool-mode.js';
 export { resolveWorkspace, resolveWorkspaceRoot } from './workspace.js';
 export type { WorkspaceResolution } from './workspace.js';
 export { MemoryDurableRunStore } from './durable/memory-store.js';

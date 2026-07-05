@@ -1,9 +1,10 @@
 import type { Tool } from '@cortx/sdk';
 import { createWorkspaceToolPack } from './workspace-tools/index.js';
 import { RuntimeError } from './errors.js';
+import type { WorkspaceToolMode } from './workspace-tool-mode.js';
 
-export type WorkspaceToolMode = 'none' | 'read-only' | 'coding' | 'all';
 const WORKSPACE_TOOL_MODES = new Set<WorkspaceToolMode>(['none', 'read-only', 'coding', 'all']);
+export type { WorkspaceToolMode } from './workspace-tool-mode.js';
 
 export function parseWorkspaceToolMode(value: unknown, fallback: WorkspaceToolMode = 'all'): WorkspaceToolMode {
   if (value === undefined) return fallback;

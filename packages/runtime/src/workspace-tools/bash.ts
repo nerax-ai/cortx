@@ -1,10 +1,10 @@
 import { spawn, ChildProcess } from 'child_process';
 import { platform } from 'os';
-import { accessSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import type { Tool } from '@cortx/sdk';
 
-type ShellType = 'bash' | 'powershell' | 'cmd';
+type ShellType = 'bash' | 'powershell';
 
 interface ShellConfiguration {
   executable: string;
@@ -40,23 +40,8 @@ function findGitBash(): string | null {
 }
 
 /**
- * Detect if WSL is available
- */
-function findWslBash(): string | null {
-  if (!isWindows()) return null;
-
-  // Check if wsl command is available
-  try {
-    // We'll return 'wsl' as the executable and handle it specially
-    return 'wsl';
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Get shell configuration based on platform
- * Priority on Windows: Git Bash > WSL > PowerShell > CMD
+ * Priority on Windows: Git Bash > PowerShell
  */
 function getShellConfiguration(): ShellConfiguration {
   if (!isWindows()) {
@@ -71,7 +56,6 @@ function getShellConfiguration(): ShellConfiguration {
   // Windows - try to find a Unix-like shell first
   const gitBash = findGitBash();
   if (gitBash) {
-    console.log(`[bash-tool] Using Git Bash: ${gitBash}`);
     return {
       executable: gitBash,
       argsPrefix: ['-c'],
@@ -95,24 +79,6 @@ function getShellConfiguration(): ShellConfiguration {
     argsPrefix: ['-NoProfile', '-Command'],
     shell: 'powershell',
   };
-}
-
-/**
- * Escape shell argument based on shell type
- */
-function escapeShellArg(arg: string, shell: ShellType): string {
-  switch (shell) {
-    case 'powershell':
-      // PowerShell escaping: single quotes with doubled single quotes
-      return `'${arg.replace(/'/g, "''")}'`;
-    case 'cmd':
-      // CMD escaping: double quotes with doubled double quotes
-      return `"${arg.replace(/"/g, '""')}"`;
-    case 'bash':
-    default:
-      // Bash escaping: use single quotes, escape single quotes
-      return `'${arg.replace(/'/g, "'\\''")}'`;
-  }
 }
 
 /**
@@ -155,8 +121,8 @@ function killProcessTreeWindows(pid: number): void {
       stdio: 'ignore',
       windowsHide: true,
     });
-  } catch (e) {
-    console.error(`[bash-tool] Failed to kill process tree: ${e}`);
+  } catch {
+    /* best-effort cleanup */
   }
 }
 
@@ -184,7 +150,7 @@ export function createBashTool(cwd: string): Tool {
       },
       required: ['command'],
     },
-    execute: async ({ command, timeout }, ctx) => {
+    execute: async ({ command, timeout }) => {
       // Validate required parameters
       if (!command || typeof command !== 'string' || command.trim() === '') {
         return {
@@ -200,13 +166,11 @@ export function createBashTool(cwd: string): Tool {
 
       const timeoutMs = timeout ? (timeout as number) * 1000 : 120000; // Default 2 minutes
 
-
       // Prepare command based on shell type
       let actualCommand = command as string;
       if (shellConfig.shell === 'powershell') {
         actualCommand = convertToPowerShell(command as string);
       }
-
 
       return new Promise((resolve) => {
         let stdout = '';

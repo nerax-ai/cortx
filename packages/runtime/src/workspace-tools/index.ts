@@ -6,6 +6,7 @@ import { createEditTool } from './edit.js';
 import { createGrepTool } from './grep.js';
 import { createFindTool } from './find.js';
 import { createLsTool } from './ls.js';
+import type { WorkspaceToolPackMode } from '../workspace-tool-mode.js';
 
 export { createBashTool } from './bash.js';
 export { createReadTool } from './read.js';
@@ -34,8 +35,6 @@ export function createAllTools(cwd: string): Tool[] {
     createLsTool(cwd),
   ];
 }
-
-export type WorkspaceToolPackMode = 'read-only' | 'coding' | 'all';
 
 export interface WorkspaceToolPackOptions {
   mode?: WorkspaceToolPackMode;

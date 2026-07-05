@@ -164,6 +164,53 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
+  test('isolates replay subscriber errors for event and envelope subscriptions', async () => {
+    const runtime = new CortxRuntime({
+      language: mockLanguage([textParts('replay me')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'replay-session' });
+    const live: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => live.push(event));
+    await runtime.prompt(session.id, 'hello');
+    await waitForEvent(live, 'done');
+
+    let replayCalls = 0;
+    const replayed: AgentEvent['type'][] = [];
+    runtime.subscribe(session.id, (event) => {
+      replayCalls++;
+      if (replayCalls === 1) throw new Error('boom');
+      replayed.push(event.type);
+    });
+
+    let envelopeReplayCalls = 0;
+    const replayedEnvelopes: AgentEvent['type'][] = [];
+    runtime.subscribeEnvelopes(session.id, (event) => {
+      envelopeReplayCalls++;
+      if (envelopeReplayCalls === 1) throw new Error('boom');
+      replayedEnvelopes.push(event.event.type);
+    });
+
+    expect(replayCalls).toBe(runtime.getEventHistory(session.id).length);
+    expect(replayed).toContain('done');
+    expect(envelopeReplayCalls).toBe(runtime.getEventEnvelopeHistory(session.id).length);
+    expect(replayedEnvelopes).toContain('done');
+
+    const liveAfterReplay: AgentEvent[] = [];
+    runtime.subscribe(session.id, async () => {
+      throw new Error('async boom');
+    }, { replay: false });
+    runtime.subscribe(session.id, (event) => liveAfterReplay.push(event), { replay: false });
+    await runtime.prompt(session.id, 'again');
+    await waitForEvent(liveAfterReplay, 'done');
+
+    runtime.dispose();
+  });
+
   test('records runtime event envelopes with stable identity and bounded history', async () => {
     const runtime = new CortxRuntime({
       language: mockLanguage([textParts('enveloped')]),
@@ -216,7 +263,7 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
-  test('abort clears the running gate and ignores stale run completion', async () => {
+  test('abort waits for the active run before clearing the running gate', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(200),
       model: 'test-model',
@@ -227,7 +274,10 @@ describe('CortxRuntime sessions', () => {
     const session = await runtime.createSession();
     await runtime.prompt(session.id, 'first');
     expect(runtime.getSession(session.id).isRunning).toBe(true);
-    runtime.abort(session.id);
+    const abortPromise = runtime.abort(session.id);
+    expect(runtime.getSession(session.id).isRunning).toBe(true);
+    await expect(runtime.prompt(session.id, 'too soon')).rejects.toMatchObject({ kind: 'session_busy' });
+    await abortPromise;
     expect(runtime.getSession(session.id).isRunning).toBe(false);
     await runtime.prompt(session.id, 'second');
     runtime.dispose();
@@ -275,8 +325,10 @@ describe('CortxRuntime sessions', () => {
     expect(runtime.getSession(session.id).isRunning).toBe(true);
     await expect(runtime.prompt(session.id, 'parallel')).rejects.toMatchObject({ kind: 'session_busy' });
     runtime.answer(session.id, 'question-1', 'yes');
+    expect(events.filter((event) => event.type === 'user_answer')).toHaveLength(1);
     expect(events.find((event) => event.type === 'user_answer')).toMatchObject({ response: 'yes' });
-    runtime.abort(session.id);
+    expect(events.map((event) => event.type)).not.toContain('user_response');
+    await runtime.abort(session.id);
     await runtime.resume(session.id);
     runtime.dispose();
   });

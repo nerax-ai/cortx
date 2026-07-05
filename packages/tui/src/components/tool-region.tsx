@@ -93,7 +93,7 @@ export function ToolRegion({ store, collapsed = true, onViewAgent }: ToolRegionP
     useCallback(() => store.select((s: TuiState) => s.status).get(), [store]),
   );
 
-  useInput((input, key) => {
+  useInput((_input, key) => {
     if (!key.return || !onViewAgent || collapsed || status !== 'idle') return;
     const id = firstViewableAgentToolCallId(toolCalls, agentSessions);
     if (id) onViewAgent(id);

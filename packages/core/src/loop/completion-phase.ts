@@ -23,7 +23,7 @@ export async function* runCompletionPhase(
   input: CompletionPhaseInput,
 ): AsyncGenerator<AgentEvent, CompletionPhaseOutcome> {
   const { runtime, finishReason, thinkingBuffer, textBuffer, usage, autoContinueLimit, messages, iteration } = input;
-  const { controller, extensions, logger } = runtime;
+  const { controller } = runtime;
   let autoContinueCount = input.autoContinueCount;
   const isTruncated = finishReason === 'length';
 

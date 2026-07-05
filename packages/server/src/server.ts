@@ -529,7 +529,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     const id = c.req.param('id');
     try {
       await getAuthorizedSession(runtime, c, config, id);
-      runtime.abort(id);
+      await runtime.abort(id);
       return c.json({ ok: true });
     } catch (error) {
       const response = errorResponse(error);
@@ -634,7 +634,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     const id = c.req.param('id');
     try {
       await getAuthorizedSession(runtime, c, config, id);
-      runtime.deleteSession(id);
+      await runtime.deleteSession(id);
       return c.json({ ok: true });
     } catch (error) {
       const response = errorResponse(error);

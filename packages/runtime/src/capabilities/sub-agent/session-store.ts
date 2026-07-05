@@ -152,14 +152,17 @@ export class SubAgentSessionStore {
   }
 
   private evictCompleted(): void {
-    const completed: string[] = [];
+    const completed: Array<{ id: string; completedAt: number; startedAt: number }> = [];
     for (const [id, s] of this.sessions) {
-      if (s.status === 'completed' || s.status === 'error') completed.push(id);
+      if (s.status === 'completed' || s.status === 'error') {
+        completed.push({ id, completedAt: s.completedAt ?? s.startedAt, startedAt: s.startedAt });
+      }
     }
     const excess = completed.length - this.maxCompleted;
     if (excess <= 0) return;
+    completed.sort((a, b) => a.completedAt - b.completedAt || a.startedAt - b.startedAt);
     for (let i = 0; i < excess; i++) {
-      this.sessions.delete(completed[i]);
+      this.sessions.delete(completed[i]!.id);
     }
   }
 }

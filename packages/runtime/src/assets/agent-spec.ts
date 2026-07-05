@@ -4,7 +4,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode } from '../session.js';
-import type { WorkspaceToolMode } from '../tool-mount.js';
+import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
 import { resolveSkillPack } from './skill-pack.js';
 import { listInstalledSkillPacks } from './skill-pack-registry.js';
 

@@ -57,6 +57,5 @@ export type AgentEvent =
   | { type: 'agent_progress'; toolCallId: string; text: string }
   | { type: 'agent_completed'; toolCallId: string; output: string; iterations: number; toolCallCount: number; isError?: boolean }
   | { type: 'user_request'; request: RuntimeUserRequest }
-  | { type: 'user_response'; requestId: string; response: string }
   | { type: 'user_question'; question: string; toolCallId: string }
   | { type: 'user_answer'; toolCallId: string; response: string };

@@ -1,7 +1,7 @@
 import type { AgentDurableRunStore, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode, RuntimeSessionMetadata } from '../session.js';
-import type { WorkspaceToolMode } from '../tool-mount.js';
+import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
 
 export const RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;

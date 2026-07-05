@@ -17,7 +17,8 @@ import {
 import { Cortx, type CortxRegistry, type PluginConfig } from '@cortx/core';
 import { RuntimeError, toRuntimeError } from './errors.js';
 import { DEFAULT_RUNTIME_CAPABILITIES, type RuntimeDefaultCapabilities } from './default-capabilities.js';
-import { createWorkspaceTools, parseWorkspaceToolMode, type WorkspaceToolMode } from './tool-mount.js';
+import { createWorkspaceTools, parseWorkspaceToolMode } from './tool-mount.js';
+import type { WorkspaceToolMode } from './workspace-tool-mode.js';
 import { resolveWorkspace } from './workspace.js';
 import {
   SubAgentSessionStore,
@@ -26,7 +27,7 @@ import {
   createSubAgentTool,
   discoverSkills,
 } from './capabilities/index.js';
-import { loadAgentSpecFile, parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
+import { loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
 import { resolveSkillPackReferences } from './assets/skill-pack-registry.js';
 import {
   RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
@@ -415,33 +416,25 @@ export class CortxRuntime {
   answer(sessionId: string, toolCallId: string, response: string): void {
     const session = this.requireSession(sessionId);
     session.cortx.controller.answerUser(toolCallId, response);
-    this.broadcast(session, { type: 'user_response', requestId: toolCallId, response });
     this.broadcast(session, { type: 'user_answer', toolCallId, response });
   }
 
-  abort(sessionId: string): void {
+  async abort(sessionId: string): Promise<void> {
     const session = this.requireSession(sessionId);
-    session.cortx.abort('User aborted via runtime');
-    session.agentSessions.abortRunning('Session aborted');
-    session.cortx.controller.rejectPendingQuestions('Session aborted');
-    session.runId++;
-    session.isRunning = false;
-    session.runPromise = undefined;
-    session.lastActivityAt = Date.now();
-    void this.persistRuntimeSession(session);
+    await this.abortSession(session, 'User aborted via runtime', 'Session aborted');
     this.resetIdleTimer(session);
   }
 
-  deleteSession(sessionId: string): void {
+  async deleteSession(sessionId: string): Promise<void> {
     const session = this.requireSession(sessionId);
-    this.destroy(session, { deleteDurable: true });
+    await this.destroy(session, { deleteDurable: true });
     this.logger.info(`[runtime] Session deleted: ${sessionId}`);
   }
 
   subscribe(sessionId: string, callback: (event: AgentEvent) => void, options: SubscribeOptions = {}): () => void {
     const session = this.requireSession(sessionId);
     if (options.replay ?? true) {
-      for (const event of [...session.events]) callback(event);
+      for (const event of [...session.events]) this.safeNotify(() => callback(event));
     }
     session.subscribers.add(callback);
     return () => session.subscribers.delete(callback);
@@ -454,14 +447,14 @@ export class CortxRuntime {
   ): () => void {
     const session = this.requireSession(sessionId);
     if (options.replay ?? true) {
-      for (const event of [...session.eventEnvelopes]) callback(event);
+      for (const event of [...session.eventEnvelopes]) this.safeNotify(() => callback(event));
     }
     session.envelopeSubscribers.add(callback);
     return () => session.envelopeSubscribers.delete(callback);
   }
 
   dispose(): void {
-    for (const session of [...this.sessions.values()]) this.destroy(session);
+    for (const session of [...this.sessions.values()]) void this.destroy(session);
   }
 
   private async startRun(
@@ -525,18 +518,10 @@ export class CortxRuntime {
     void this.persistEventEnvelope(envelope);
     void this.persistSubAgentSession(session, event);
     for (const subscriber of session.subscribers) {
-      try {
-        subscriber(event);
-      } catch {
-        /* subscriber errors should not break the runtime */
-      }
+      this.safeNotify(() => subscriber(event));
     }
     for (const subscriber of session.envelopeSubscribers) {
-      try {
-        subscriber(envelope);
-      } catch {
-        /* subscriber errors should not break the runtime */
-      }
+      this.safeNotify(() => subscriber(envelope));
     }
   }
 
@@ -550,19 +535,53 @@ export class CortxRuntime {
     session.idleTimer.unref?.();
   }
 
-  private destroy(session: ManagedRuntimeSession, options: { deleteDurable?: boolean } = {}): void {
+  private safeNotify(callback: () => unknown): void {
+    try {
+      const result = callback();
+      if (result instanceof Promise) void result.catch(() => {});
+    } catch {
+      /* subscriber errors should not break the runtime */
+    }
+  }
+
+  private async abortSession(
+    session: ManagedRuntimeSession,
+    abortReason: string,
+    pendingQuestionReason: string,
+  ): Promise<void> {
+    const previousRun = session.runPromise;
+    session.cortx.abort(abortReason);
+    session.agentSessions.abortRunning(pendingQuestionReason);
+    session.cortx.controller.rejectPendingQuestions(pendingQuestionReason);
+    session.runId++;
+    session.lastActivityAt = Date.now();
+    void this.persistRuntimeSession(session);
+
+    if (previousRun) {
+      try {
+        await previousRun;
+      } catch {
+        /* consumeRun already normalizes stream errors */
+      }
+    }
+
+    if (!this.sessions.has(session.id)) return;
+    if (session.runPromise === previousRun) session.runPromise = undefined;
+    session.isRunning = false;
+    await this.persistRuntimeSession(session);
+  }
+
+  private async destroy(session: ManagedRuntimeSession, options: { deleteDurable?: boolean } = {}): Promise<void> {
     if (session.idleTimer) clearTimeout(session.idleTimer);
-    session.cortx.abort('Session cleaned up');
-    session.agentSessions.abortRunning('Session cleaned up');
-    session.cortx.controller.rejectPendingQuestions('Session destroyed');
+    await this.abortSession(session, 'Session cleaned up', 'Session destroyed');
     session.subscribers.clear();
     session.envelopeSubscribers.clear();
     session.isRunning = false;
     this.sessions.delete(session.id);
     if (options.deleteDurable) {
-      void this.runtimeDurableStore()?.deleteRuntimeSession(session.id);
+      await this.runtimeDurableStore()?.deleteRuntimeSession(session.id);
     } else {
-      void this.persistRuntimeSession(session);
+      await this.persistRuntimeSession(session);
     }
   }
 

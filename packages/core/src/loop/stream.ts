@@ -1,6 +1,6 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import type { AgentEvent, ErrorCode, LanguageMessage, LanguageToolCallContent, Tool } from '@cortx/sdk';
+import type { AgentEvent, LanguageMessage, LanguageToolCallContent, Tool } from '@cortx/sdk';
 import { emitPhaseEvent, withAbortSignal, withTurnDeadline, type AgentLoopRuntime } from './pipeline.js';
 import { budgetExceededError, classifyAgentError } from './errors.js';
 

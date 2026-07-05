@@ -357,7 +357,7 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
       ctx.register(TUI_COMMAND, 'help', (_ctx) => ({
         name: '/help',
         description: 'List all available commands',
-        handler: async (_args, cmdCtx) => {
+        handler: async (_args, _cmdCtx) => {
           if (getCommands) {
             const commands = getCommands();
             const maxNameLen = Math.max(...commands.map((c) => c.name.length));

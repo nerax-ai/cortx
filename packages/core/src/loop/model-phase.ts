@@ -33,7 +33,7 @@ export type ModelPhaseOutcome =
 
 export async function* runModelPhase(input: ModelPhaseInput): AsyncGenerator<AgentEvent, ModelPhaseOutcome> {
   const { runtime, systemMessages, messages, tools, iteration, maxRetries, maxOverflowRecoveries } = input;
-  const { language, model, maxOutputTokens, temperature, extensions, logger, sessionId } = runtime;
+  const { language, model, maxOutputTokens, temperature, extensions, sessionId } = runtime;
 
   let retryCount = input.retryCount;
   let overflowRecoveryCount = input.overflowRecoveryCount;

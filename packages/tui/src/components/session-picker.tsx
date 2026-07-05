@@ -7,7 +7,7 @@
  * Pure helper functions are exported for testing.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { SessionSummary } from '../plugins/session-plugin.js';
 
