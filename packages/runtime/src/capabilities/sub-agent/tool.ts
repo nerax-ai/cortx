@@ -31,23 +31,40 @@ async function runSubAgentLoop(input: {
   loopOpts: Parameters<typeof agentLoop>[0];
   session: SubAgentSession;
   toolCallId: string;
+  controller: AgentLoopController;
+  bridgeAskUser?: (event: Extract<AgentEvent, { type: 'user_request' | 'user_question' }>) => Promise<void>;
   reportProgress?: (text: string) => void;
   onAgentEvent(event: AgentEvent): void;
 }): Promise<void> {
-  const { loopOpts, session, toolCallId, reportProgress, onAgentEvent } = input;
-  for await (const event of agentLoop(loopOpts)) {
-    session.events.push(event);
-    if (event.type === 'turn_start') session.iterations = event.iteration;
-    if (event.type === 'tool_use') {
-      session.toolCallCount++;
-      const summary = formatToolSummary(event.toolCall.toolName, event.toolCall.input, { maxLength: 60 });
-      const progressText = `  -> ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`;
-      reportProgress?.(progressText);
-      onAgentEvent({ type: 'agent_progress', toolCallId, text: progressText });
+  const { loopOpts, session, toolCallId, controller, bridgeAskUser, reportProgress, onAgentEvent } = input;
+  const bridgedQuestions = new Set<string>();
+  try {
+    for await (const event of agentLoop(loopOpts)) {
+      session.events.push(event);
+      if (event.type === 'user_request' || event.type === 'user_question') {
+        const requestId = event.type === 'user_request' ? event.request.requestId : event.toolCallId;
+        if (!bridgedQuestions.has(requestId) && bridgeAskUser) {
+          bridgedQuestions.add(requestId);
+          await bridgeAskUser(event);
+        }
+        if (event.type === 'user_question' && bridgedQuestions.has(requestId)) {
+          continue;
+        }
+      }
+      if (event.type === 'turn_start') session.iterations = event.iteration;
+      if (event.type === 'tool_use') {
+        session.toolCallCount++;
+        const summary = formatToolSummary(event.toolCall.toolName, event.toolCall.input, { maxLength: 60 });
+        const progressText = `  -> ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`;
+        reportProgress?.(progressText);
+        onAgentEvent({ type: 'agent_progress', toolCallId, text: progressText });
+      }
+      if (event.type === 'text') session.output += event.content;
+      if (event.type === 'error') throw event.error;
+      if (event.type === 'done') break;
     }
-    if (event.type === 'text') session.output += event.content;
-    if (event.type === 'error') throw event.error;
-    if (event.type === 'done') break;
+  } finally {
+    controller.rejectPendingQuestions('Sub-agent loop completed');
   }
 }
 
@@ -127,6 +144,32 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
       const abortChild = () => childController.abort('parent aborted');
       if (ctx.signal?.aborted) abortChild();
       ctx.signal?.addEventListener('abort', abortChild, { once: true });
+      const bridgeAskUser = ctx.askUser
+        ? async (event: Extract<AgentEvent, { type: 'user_request' | 'user_question' }>) => {
+            const childToolCallId = event.type === 'user_request' ? event.request.requestId : event.toolCallId;
+            const question = event.type === 'user_request' ? event.request.prompt : event.question;
+            const request =
+              event.type === 'user_request'
+                ? {
+                    ...event.request,
+                    requestId: toolCallId,
+                    context: {
+                      ...event.request.context,
+                      parentToolCallId: toolCallId,
+                      childToolCallId,
+                    },
+                  }
+                : {
+                    requestId: toolCallId,
+                    kind: 'question' as const,
+                    prompt: question,
+                    context: { parentToolCallId: toolCallId, childToolCallId },
+                  };
+            options.onAgentEvent({ type: 'user_request', request });
+            const response = await ctx.askUser!(question);
+            childController.answerUser(childToolCallId, response);
+          }
+        : undefined;
 
       const loopOpts: Parameters<typeof agentLoop>[0] = {
         language: options.language,
@@ -150,6 +193,8 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
               loopOpts,
               session,
               toolCallId,
+              controller: childController,
+              bridgeAskUser,
               onAgentEvent: options.onAgentEvent,
             });
             options.agentSessions.complete(toolCallId, false);
@@ -184,6 +229,8 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
           loopOpts,
           session,
           toolCallId,
+          controller: childController,
+          bridgeAskUser,
           reportProgress: (text) => ctx.reportProgress?.(text),
           onAgentEvent: options.onAgentEvent,
         });

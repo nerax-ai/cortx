@@ -7,9 +7,9 @@ interface ControlButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const toneClass: Record<NonNullable<ControlButtonProps['tone']>, string> = {
-  neutral: 'border-white/10 bg-white/5 text-zinc-300 hover:bg-white/8',
-  primary: 'border-cyan-300/20 bg-cyan-300/12 text-cyan-100 hover:bg-cyan-300/18',
-  danger: 'border-rose-300/20 bg-rose-300/10 text-rose-100 hover:bg-rose-300/16',
+  neutral: 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50',
+  primary: 'border-zinc-950 bg-zinc-950 text-white hover:bg-zinc-800',
+  danger: 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100',
 };
 
 export function ControlButton({ tone = 'neutral', className = '', children, ...props }: ControlButtonProps) {
@@ -17,7 +17,7 @@ export function ControlButton({ tone = 'neutral', className = '', children, ...p
     <button
       type="button"
       {...props}
-      className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-zinc-700 ${toneClass[tone]} ${surface.focus} ${className}`}
+      className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:border-zinc-200 disabled:bg-zinc-100 disabled:text-zinc-400 ${toneClass[tone]} ${surface.focus} ${className}`}
     >
       {children}
     </button>

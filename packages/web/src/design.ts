@@ -12,40 +12,40 @@ const STATUS_TONES: Record<AgentStatus, StatusTone> = {
   idle: {
     label: 'Ready',
     dotClass: 'bg-zinc-400',
-    textClass: 'text-zinc-300',
-    badgeClass: 'border-zinc-700 bg-zinc-900/80 text-zinc-300',
+    textClass: 'text-zinc-700',
+    badgeClass: 'border-zinc-200 bg-white text-zinc-700',
     busy: false,
   },
   running: {
     label: 'Working',
     dotClass: 'bg-emerald-400',
-    textClass: 'text-emerald-300',
-    badgeClass: 'border-emerald-500/30 bg-emerald-950/40 text-emerald-200',
+    textClass: 'text-emerald-700',
+    badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
     busy: true,
   },
   awaiting_user: {
     label: 'Awaiting Input',
     dotClass: 'bg-amber-300',
-    textClass: 'text-amber-200',
-    badgeClass: 'border-amber-400/30 bg-amber-950/40 text-amber-100',
+    textClass: 'text-amber-700',
+    badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
     busy: true,
   },
   error: {
     label: 'Error',
     dotClass: 'bg-rose-400',
-    textClass: 'text-rose-200',
-    badgeClass: 'border-rose-400/30 bg-rose-950/40 text-rose-100',
+    textClass: 'text-rose-700',
+    badgeClass: 'border-rose-200 bg-rose-50 text-rose-700',
     busy: false,
   },
 };
 
 export const surface = {
-  page: 'min-h-screen bg-[#111111] text-zinc-100 antialiased',
-  panel: 'border border-white/8 bg-[#181818] shadow-[0_1px_0_rgba(255,255,255,0.04)_inset]',
-  softPanel: 'border border-white/6 bg-[#151515]',
+  page: 'min-h-screen bg-[#f7f7f5] text-zinc-950 antialiased',
+  panel: 'border border-zinc-200 bg-white shadow-sm shadow-zinc-200/50',
+  softPanel: 'border border-zinc-200 bg-[#f7f7f5]',
   muted: 'text-zinc-500',
-  subtle: 'text-zinc-400',
-  focus: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/45',
+  subtle: 'text-zinc-600',
+  focus: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/20',
 };
 
 export function statusTone(status: AgentStatus): StatusTone {

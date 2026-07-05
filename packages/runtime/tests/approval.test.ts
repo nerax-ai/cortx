@@ -121,6 +121,36 @@ describe('runtime approval capability', () => {
     });
     runtime.dispose();
   });
+
+  test('full-access mode executes write tools without asking for approval', async () => {
+    let executed = false;
+    const runtime = new CortxRuntime({
+      language: mockLanguage([toolResponse('write-call', 'writeFile', '{"path":"a.txt"}'), textResponse('done')]),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      approvalMode: 'interactive',
+      tools: [writeTool(() => { executed = true; })],
+      capabilities: { skills: false, subAgents: false, approval: true },
+    });
+    const session = await runtime.createSession({ approvalMode: 'full-access' });
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    await runtime.prompt(session.id, 'write');
+    await waitForEvent(events, 'done');
+
+    expect(session.approvalMode).toBe('full-access');
+    expect(executed).toBe(true);
+    expect(events.some((event) => event.type === 'user_request' || event.type === 'user_question')).toBe(false);
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      toolCallId: 'write-call',
+      result: 'written',
+      isError: false,
+    });
+    runtime.dispose();
+  });
 });
 
 async function waitForEvent(events: AgentEvent[], type: AgentEvent['type'], timeoutMs = 1_000): Promise<AgentEvent> {

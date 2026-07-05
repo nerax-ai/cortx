@@ -44,10 +44,13 @@ export interface AgentSessionSummary {
   toolCallCount: number;
 }
 
-/** A pending askUser question from the agent. */
+/** A pending askUser question or structured runtime request from the agent. */
 export interface PendingQuestion {
   toolCallId: string;
   question: string;
+  kind?: import('@cortx/sdk').RuntimeUserRequestKind;
+  allowedResponses?: string[];
+  context?: import('@cortx/sdk').RuntimeUserRequestContext;
 }
 
 /** The UI-agnostic state object held by AgentStore. */

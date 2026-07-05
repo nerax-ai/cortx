@@ -82,14 +82,30 @@ describe('web desktop UI', () => {
           isRunning: true,
           eventCount: 7,
         }}
+        sessions={[
+          {
+            id: 'sess_1234567890',
+            createdAt: 1,
+            lastActivityAt: 2,
+            workingDirectory: '/Users/dev/work/cortx',
+            model: 'default',
+            toolMode: 'all',
+            approvalMode: 'interactive',
+            isRunning: true,
+            eventCount: 7,
+          },
+        ]}
         onSend={() => undefined}
         onAbort={() => undefined}
         onResume={() => undefined}
+        onCreateSession={() => undefined}
+        onSwitchSession={() => undefined}
       />,
     );
 
     expect(html).toContain('Cortx');
-    expect(html).toContain('Remote agent workspace');
+    expect(html).toContain('Agent workspace');
+    expect(html).toContain('New workspace session');
     expect(html).toContain('Working');
     expect(html).toContain('work/cortx');
     expect(html).toContain('Inspector');
@@ -130,5 +146,29 @@ describe('web desktop UI', () => {
 
     expect(html).toContain('Allow write to package.json?');
     expect(html).toContain('Submit answer');
+  });
+
+  test('ApprovalDialogBody renders selectable approval choices', () => {
+    const html = renderToStaticMarkup(
+      <ApprovalDialogBody
+        pendingQuestion={{
+          toolCallId: 'tool_approval',
+          question: 'Allow write to package.json?',
+          kind: 'tool_approval',
+          allowedResponses: ['yes', 'no'],
+          context: { workingDirectory: '/Users/dev/work/cortx' },
+        }}
+        response=""
+        onResponseChange={() => undefined}
+        onClear={() => undefined}
+        onSubmit={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('Allow write to package.json?');
+    expect(html).toContain('Allow');
+    expect(html).toContain('Deny');
+    expect(html).not.toContain('Submit answer');
+    expect(html).not.toContain('Type your response');
   });
 });

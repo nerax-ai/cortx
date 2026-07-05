@@ -6,7 +6,7 @@ import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentRuntimeExtensions, Tool } from '@cortx/sdk';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 import { createEmptyAgentRuntimeExtensions } from '@cortx/sdk';
-import { CortxRuntime, SubAgentSessionStore, createSubAgentTool } from '../src/index';
+import { CortxRuntime, SubAgentSessionStore, createDefaultSafetyExtensions, createSubAgentTool } from '../src/index';
 
 let tmpDir: string;
 
@@ -140,6 +140,55 @@ describe('runtime sub-agent capability', () => {
     expect(store.get('agent-call')).toMatchObject({ status: 'completed', isBackground: false, output: 'child output' });
     expect(events.find((event) => event.type === 'agent_started')).toMatchObject({ toolCallId: 'agent-call' });
     expect(events.find((event) => event.type === 'agent_completed')).toMatchObject({ output: 'child output' });
+  });
+
+  test('foreground agent bridges child tool approval through the parent tool question', async () => {
+    let executed = false;
+    const events: AgentEvent[] = [];
+    const store = new SubAgentSessionStore();
+    const tool = createSubAgentTool({
+      language: mockLanguage([
+        toolCallResponse('child-write', 'writeFile', '{"path":"child.txt"}'),
+        textResponse('child output'),
+      ]),
+      model: 'test',
+      agentSessions: store,
+      getTools: () => [
+        {
+          name: 'writeFile',
+          sideEffects: 'write',
+          inputSchema: {},
+          execute: async () => {
+            executed = true;
+            return { success: true, output: 'written by child' };
+          },
+        } satisfies Tool,
+      ],
+      getExtensions: () => createDefaultSafetyExtensions(),
+      onAgentEvent: (event) => events.push(event),
+    });
+
+    const result = await tool.execute(
+      { prompt: 'write from child', description: 'child approval' },
+      toolContext({ askUser: async () => 'yes' }) as never,
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(executed).toBe(true);
+    expect(String(result.output)).toContain('child output');
+    expect(events.find((event) => event.type === 'user_request')).toMatchObject({
+      type: 'user_request',
+      request: {
+        requestId: 'agent-call',
+        kind: 'tool_approval',
+        context: { toolName: 'writeFile', childToolCallId: 'child-write', parentToolCallId: 'agent-call' },
+      },
+    });
+    expect(events.find((event) => event.type === 'agent_completed')).toMatchObject({
+      type: 'agent_completed',
+      toolCallId: 'agent-call',
+    });
+    expect((events.find((event) => event.type === 'agent_completed') as { isError?: boolean }).isError).not.toBe(true);
   });
 
   test('runtime envelopes child lifecycle events with parent attribution', async () => {

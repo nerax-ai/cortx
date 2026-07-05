@@ -2,7 +2,9 @@ import { Synax, type SynaxRegistry } from '@synax-ai/core';
 import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/runtime';
+import { existsSync } from 'fs';
+import { dirname, resolve } from 'path';
+import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, RuntimeApprovalMode, WorkspaceToolMode } from '@cortx/runtime';
 import { createServer } from './server.js';
 
 interface CortxConfig {
@@ -10,6 +12,9 @@ interface CortxConfig {
   system?: string;
   maxIterations?: number;
   workingDirectory?: string;
+  allowedWorkspaceRoots?: string[];
+  toolMode?: WorkspaceToolMode;
+  approvalMode?: RuntimeApprovalMode;
   plugins?: string[];
   agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
   providers?: Array<{ id: string; use: string; options: Record<string, unknown> }>;
@@ -26,6 +31,18 @@ const log = createLogger({
   console: false,
   files: [{ filename: 'server-%DATE%.log', level: 'debug' }],
 });
+
+function findProjectRoot(start: string): string {
+  let current = resolve(start);
+  while (true) {
+    if (existsSync(`${current}/.git`) || existsSync(`${current}/bun.lock`) || existsSync(`${current}/package.json`)) {
+      if (existsSync(`${current}/packages`) || existsSync(`${current}/.git`)) return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) return resolve(start);
+    current = parent;
+  }
+}
 
 async function main() {
   const config = await loadServerConfig();
@@ -56,6 +73,12 @@ async function main() {
     await synax.addProvider(p);
   }
 
+  const defaultWorkingDirectory = resolve(config.workingDirectory ?? findProjectRoot(process.cwd()));
+  const allowedWorkspaceRoots = [...new Set([
+    defaultWorkingDirectory,
+    ...(config.allowedWorkspaceRoots ?? []),
+  ].map((path) => resolve(path)))];
+
   const app = createServer({
     apiKey,
     language: synax.language,
@@ -64,10 +87,10 @@ async function main() {
     maxIterations: config.maxIterations,
     registry,
     plugins: config.agentPlugins,
-    defaultWorkingDirectory: config.workingDirectory ?? process.cwd(),
-    allowedWorkspaceRoots: [config.workingDirectory ?? process.cwd()],
-    toolMode: 'all',
-    approvalMode: 'interactive',
+    defaultWorkingDirectory,
+    allowedWorkspaceRoots,
+    toolMode: config.toolMode ?? 'all',
+    approvalMode: config.approvalMode ?? 'interactive',
     logger: log.scope('server'),
     maxSessions: 10,
     idleTimeoutMs: 30 * 60 * 1000,
@@ -82,6 +105,8 @@ async function main() {
   console.log(`  API:   http://localhost:${port}`);
   console.log(`  Key:   ${apiKey}`);
   console.log(`  Model: ${config.model}\n`);
+  console.log(`  Workspace: ${defaultWorkingDirectory}`);
+  console.log(`  Roots: ${allowedWorkspaceRoots.join(', ')}\n`);
 }
 
 main().catch(async (e) => {

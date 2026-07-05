@@ -3,6 +3,7 @@ import type { AgentStore } from '@cortx/store';
 import { createAuthClient, getAuthToken, apiFetch, type AuthClient } from './auth';
 
 export type WebWorkspaceToolMode = 'none' | 'read-only' | 'coding' | 'all';
+export type WebApprovalMode = 'deny' | 'interactive' | 'full-access';
 
 export interface WebRuntimeSessionInfo {
   id: string;
@@ -12,7 +13,7 @@ export interface WebRuntimeSessionInfo {
   model: string;
   maxIterations?: number;
   toolMode: WebWorkspaceToolMode;
-  approvalMode: 'deny' | 'interactive';
+  approvalMode: WebApprovalMode;
   isRunning: boolean;
   eventCount: number;
   metadata?: Record<string, unknown>;
@@ -24,7 +25,7 @@ export interface WebCreateSessionRequest {
   system?: string;
   maxIterations?: number;
   toolMode?: WebWorkspaceToolMode;
-  approvalMode?: 'deny' | 'interactive';
+  approvalMode?: WebApprovalMode;
   metadata?: Record<string, unknown>;
 }
 
@@ -87,6 +88,13 @@ export class EventBridge {
     await throwIfError(res, 'Get session failed');
     const data = (await res.json()) as { session: WebRuntimeSessionInfo };
     return data.session;
+  }
+
+  async listSessions(): Promise<WebRuntimeSessionInfo[]> {
+    const res = await apiFetch(this.client, '/sessions');
+    await throwIfError(res, 'List sessions failed');
+    const data = (await res.json()) as { sessions: WebRuntimeSessionInfo[] };
+    return data.sessions;
   }
 
   async connect(sessionId: string): Promise<void> {

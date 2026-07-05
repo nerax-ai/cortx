@@ -30,7 +30,7 @@ export function createDefaultToolApprovalPolicy(): AgentSessionPolicyContributio
         [
           `Approve ${tool?.sideEffects} tool "${tool?.name ?? 'unknown'}"?`,
           `Input: ${summarizeToolInput(input)}`,
-          'Reply yes to allow, anything else to deny.',
+          'Choose Allow to continue or Deny to block this tool call.',
         ].join('\n'),
       );
 

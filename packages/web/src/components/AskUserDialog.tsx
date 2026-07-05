@@ -26,32 +26,64 @@ export function ApprovalDialogBody({
     if (!response.trim()) return;
     onSubmit(pendingQuestion.toolCallId, response);
   }
+  const choices = pendingQuestion.allowedResponses ?? [];
+  const isChoiceRequest = choices.length > 0;
+
+  function choiceLabel(choice: string): string {
+    if (choice === 'yes') return 'Allow';
+    if (choice === 'no') return 'Deny';
+    return choice;
+  }
 
   return (
     <>
-      <div className="mt-4 rounded-lg border border-white/8 bg-black/20 p-3 text-sm leading-6 text-zinc-300 whitespace-pre-wrap">
+      <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm leading-6 text-zinc-700 whitespace-pre-wrap">
         {pendingQuestion.question}
       </div>
 
-      <label className="mt-4 block text-xs font-medium uppercase tracking-[0.18em] text-zinc-600">
-        Response
-      </label>
-      <textarea
-        value={response}
-        onChange={(e) => onResponseChange(e.target.value)}
-        placeholder="Type your response..."
-        rows={4}
-        className={`mt-2 w-full resize-none rounded-lg border border-white/8 bg-black/25 px-3 py-2 text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-700 ${surface.focus}`}
-        autoFocus
-      />
+      {pendingQuestion.context?.workingDirectory && (
+        <div className="mt-3 truncate rounded-md bg-white px-2 py-1 font-mono text-[11px] text-zinc-500">
+          {String(pendingQuestion.context.workingDirectory)}
+        </div>
+      )}
+
+      {!isChoiceRequest && (
+        <>
+          <label className="mt-4 block text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
+            Response
+          </label>
+          <textarea
+            value={response}
+            onChange={(e) => onResponseChange(e.target.value)}
+            placeholder="Type your response..."
+            rows={4}
+            className={`mt-2 w-full resize-none rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm leading-6 text-zinc-950 outline-none placeholder:text-zinc-400 ${surface.focus}`}
+            autoFocus
+          />
+        </>
+      )}
 
       <div className="mt-4 flex justify-end gap-2">
-        <ControlButton onClick={onClear} disabled={!response}>
-          Clear
-        </ControlButton>
-        <ControlButton tone="primary" onClick={handleSubmit} disabled={!response.trim()}>
-          Submit answer
-        </ControlButton>
+        {isChoiceRequest ? (
+          choices.map((choice) => (
+            <ControlButton
+              key={choice}
+              tone={choice === 'no' ? 'danger' : 'primary'}
+              onClick={() => onSubmit(pendingQuestion.toolCallId, choice)}
+            >
+              {choiceLabel(choice)}
+            </ControlButton>
+          ))
+        ) : (
+          <>
+            <ControlButton onClick={onClear} disabled={!response}>
+              Clear
+            </ControlButton>
+            <ControlButton tone="primary" onClick={handleSubmit} disabled={!response.trim()}>
+              Submit answer
+            </ControlButton>
+          </>
+        )}
       </div>
     </>
   );
@@ -60,9 +92,9 @@ export function ApprovalDialogBody({
 export function AskUserDialogContent(props: AskUserDialogContentProps) {
   return (
     <>
-      <Dialog.Title className="text-lg font-semibold text-zinc-100">Approval required</Dialog.Title>
+      <Dialog.Title className="text-lg font-semibold text-zinc-950">Approval required</Dialog.Title>
       <Dialog.Description className="mt-1 text-sm text-zinc-500">
-        Cortx is waiting for your answer before continuing this tool call.
+        Cortx is waiting for your choice before continuing this tool call.
       </Dialog.Description>
       <ApprovalDialogBody {...props} />
     </>
@@ -75,10 +107,10 @@ export function AskUserDialog({ pendingQuestion, onSubmit }: AskUserDialogProps)
   return (
     <Dialog.Root open modal disablePointerDismissal onOpenChange={() => undefined}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" />
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-zinc-950/20 backdrop-blur-sm" />
         <Dialog.Popup
           initialFocus
-          className={`fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl shadow-black/40 ${surface.panel}`}
+          className={`fixed left-1/2 top-1/2 z-50 w-[min(560px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl shadow-zinc-300/60 ${surface.panel}`}
         >
           <AskUserDialogContent
             pendingQuestion={pendingQuestion}

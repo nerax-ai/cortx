@@ -172,6 +172,29 @@ describe('AgentStore', () => {
     expect(store.getState()).toEqual(stateBefore);
   });
 
+  test('dispatch user_request preserves selectable responses for pending approvals', () => {
+    const store = new AgentStore();
+    store.dispatch({
+      type: 'user_request',
+      request: {
+        requestId: 'tc_approval',
+        kind: 'tool_approval',
+        prompt: 'Approve write tool?',
+        allowedResponses: ['yes', 'no'],
+        context: { toolName: 'write', sideEffects: 'write' },
+      },
+    });
+    store.dispatch({ type: 'user_question', toolCallId: 'tc_approval', question: 'Approve write tool?' });
+
+    expect(store.getState().status).toBe('awaiting_user');
+    expect(store.getState().pendingQuestion).toMatchObject({
+      toolCallId: 'tc_approval',
+      kind: 'tool_approval',
+      allowedResponses: ['yes', 'no'],
+      context: { toolName: 'write', sideEffects: 'write' },
+    });
+  });
+
   test('turn_start clears tool calls and streaming state', () => {
     const store = new AgentStore();
     store.dispatch({ type: 'turn_start', iteration: 1 });

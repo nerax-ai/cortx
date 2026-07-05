@@ -7,6 +7,8 @@ export interface RuntimeSessionMetadata {
   [key: string]: unknown;
 }
 
+export type RuntimeApprovalMode = 'deny' | 'interactive' | 'full-access';
+
 export interface RuntimeSessionInfo {
   id: string;
   createdAt: number;
@@ -15,7 +17,7 @@ export interface RuntimeSessionInfo {
   model: string;
   maxIterations?: number;
   toolMode: import('./tool-mount.js').WorkspaceToolMode;
-  approvalMode: 'deny' | 'interactive';
+  approvalMode: RuntimeApprovalMode;
   isRunning: boolean;
   eventCount: number;
   metadata?: RuntimeSessionMetadata;
@@ -29,7 +31,7 @@ export interface RuntimeSessionCreateRequest {
   maxIterations?: number;
   tools?: Tool[];
   toolMode?: import('./tool-mount.js').WorkspaceToolMode;
-  approvalMode?: 'deny' | 'interactive';
+  approvalMode?: RuntimeApprovalMode;
   capabilities?: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   registry?: CortxRegistry;
@@ -46,7 +48,7 @@ export interface ManagedRuntimeSession {
   model: string;
   maxIterations?: number;
   toolMode: import('./tool-mount.js').WorkspaceToolMode;
-  approvalMode: 'deny' | 'interactive';
+  approvalMode: RuntimeApprovalMode;
   events: AgentEvent[];
   eventEnvelopes: import('@cortx/sdk').RuntimeAgentEventEnvelope[];
   subscribers: Set<(event: AgentEvent) => void>;

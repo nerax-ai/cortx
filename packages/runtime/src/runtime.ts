@@ -25,6 +25,7 @@ import { parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
 import { resolveSkillPack } from './assets/skill-pack.js';
 import type {
   ManagedRuntimeSession,
+  RuntimeApprovalMode,
   RuntimeSessionCreateRequest,
   RuntimeSessionInfo,
   RuntimeSessionLocalState,
@@ -40,7 +41,7 @@ export interface CortxRuntimeOptions {
   plugins?: PluginConfig[];
   tools?: Tool[];
   toolMode?: WorkspaceToolMode;
-  approvalMode?: 'deny' | 'interactive';
+  approvalMode?: RuntimeApprovalMode;
   capabilities?: RuntimeDefaultCapabilities;
   defaultWorkingDirectory?: string;
   allowedWorkspaceRoots?: string[];
@@ -63,10 +64,10 @@ function createSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function parseApprovalMode(value: unknown, fallback: 'deny' | 'interactive'): 'deny' | 'interactive' {
+function parseApprovalMode(value: unknown, fallback: RuntimeApprovalMode): RuntimeApprovalMode {
   if (value === undefined) return fallback;
-  if (value === 'deny' || value === 'interactive') return value;
-  throw new RuntimeError('invalid_request', 'approvalMode must be one of: deny, interactive', {
+  if (value === 'deny' || value === 'interactive' || value === 'full-access') return value;
+  throw new RuntimeError('invalid_request', 'approvalMode must be one of: deny, interactive, full-access', {
     approvalMode: value,
   });
 }
@@ -101,7 +102,7 @@ export class CortxRuntime {
   private readonly plugins?: PluginConfig[];
   private readonly tools: Tool[];
   private readonly toolMode: WorkspaceToolMode;
-  private readonly approvalMode: 'deny' | 'interactive';
+  private readonly approvalMode: RuntimeApprovalMode;
   private readonly capabilities: RuntimeDefaultCapabilities;
   private readonly defaultWorkingDirectory: string;
   private readonly allowedWorkspaceRoots: string[];
@@ -149,7 +150,11 @@ export class CortxRuntime {
     const maxIterations = request.maxIterations ?? this.maxIterations;
     const toolMode = parseWorkspaceToolMode(request.toolMode, this.toolMode);
     const approvalMode = parseApprovalMode(request.approvalMode, this.approvalMode);
-    const capabilities = request.capabilities ?? this.capabilities;
+    const requestedCapabilities = request.capabilities ?? this.capabilities;
+    const capabilities =
+      approvalMode === 'full-access'
+        ? { ...requestedCapabilities, approval: false }
+        : requestedCapabilities;
     const agentSessions = new SubAgentSessionStore();
     const mountedTools = [
       ...this.tools,

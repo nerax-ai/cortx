@@ -35,4 +35,5 @@ export type {
   RuntimeSessionInfo,
   RuntimeSessionLocalState,
   RuntimeSessionMetadata,
+  RuntimeApprovalMode,
 } from './session.js';

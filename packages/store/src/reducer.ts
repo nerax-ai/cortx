@@ -231,10 +231,27 @@ export function reduceAgentEvent(
     }
 
     case 'user_question': {
+      const existing =
+        state.pendingQuestion?.toolCallId === event.toolCallId ? state.pendingQuestion : undefined;
       nextState = {
         ...state,
         status: 'awaiting_user',
-        pendingQuestion: { toolCallId: event.toolCallId, question: event.question },
+        pendingQuestion: { ...existing, toolCallId: event.toolCallId, question: event.question },
+      };
+      break;
+    }
+
+    case 'user_request': {
+      nextState = {
+        ...state,
+        status: 'awaiting_user',
+        pendingQuestion: {
+          toolCallId: event.request.requestId,
+          question: event.request.prompt,
+          kind: event.request.kind,
+          allowedResponses: event.request.allowedResponses,
+          context: event.request.context,
+        },
       };
       break;
     }

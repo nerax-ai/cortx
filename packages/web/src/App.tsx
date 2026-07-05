@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { AgentStore } from '@cortx/store';
 import { useStore } from './hooks/use-store';
-import { EventBridge, type WebRuntimeSessionInfo } from './bridge/event-bridge';
+import {
+  EventBridge,
+  type WebApprovalMode,
+  type WebCreateSessionRequest,
+  type WebRuntimeSessionInfo,
+  type WebWorkspaceToolMode,
+} from './bridge/event-bridge';
 import { ConnectionOverlay } from './components/ConnectionOverlay';
 import { DesktopWorkspace } from './components/DesktopWorkspace';
 import { AskUserDialog } from './components/AskUserDialog';
@@ -12,6 +18,7 @@ export function App() {
   const bridgeRef = useRef<EventBridge | null>(null);
   const [connected, setConnected] = useState(false);
   const [session, setSession] = useState<WebRuntimeSessionInfo | null>(null);
+  const [sessions, setSessions] = useState<WebRuntimeSessionInfo[]>([]);
 
   useEffect(() => {
     return () => {
@@ -19,13 +26,36 @@ export function App() {
     };
   }, []);
 
-  async function connect(apiKey: string) {
+  async function connect(request: WebCreateSessionRequest & { apiKey: string }) {
+    const { apiKey, ...sessionRequest } = request;
     const bridge = new EventBridge(store, apiKey);
     bridgeRef.current = bridge;
-    const created = await bridge.createSession();
+    const created = await bridge.createSession(sessionRequest);
     await bridge.connect(created.id);
+    const nextSessions = await bridge.listSessions();
     setSession(created);
+    setSessions(nextSessions);
     setConnected(true);
+  }
+
+  async function createWorkspaceSession(request: {
+    workingDirectory: string;
+    toolMode: WebWorkspaceToolMode;
+    approvalMode: WebApprovalMode;
+  }) {
+    if (!bridgeRef.current) return;
+    const created = await bridgeRef.current.createSession(request);
+    await bridgeRef.current.connect(created.id);
+    const nextSessions = await bridgeRef.current.listSessions();
+    setSession(created);
+    setSessions(nextSessions);
+  }
+
+  async function switchSession(sessionId: string) {
+    if (!bridgeRef.current) return;
+    const next = await bridgeRef.current.getSession(sessionId);
+    await bridgeRef.current.connect(sessionId);
+    setSession(next);
   }
 
   async function sendPrompt(message: string) {
@@ -65,9 +95,12 @@ export function App() {
       <DesktopWorkspace
         state={state}
         session={session}
+        sessions={sessions}
         onSend={sendPrompt}
         onAbort={handleAbort}
         onResume={handleResume}
+        onCreateSession={createWorkspaceSession}
+        onSwitchSession={switchSession}
       />
       {state.status === 'awaiting_user' && state.pendingQuestion && (
         <AskUserDialog pendingQuestion={state.pendingQuestion} onSubmit={handleAnswer} />
