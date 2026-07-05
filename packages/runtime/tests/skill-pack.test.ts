@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, LanguageMessage } from '@cortx/sdk';
 import {
   CortxRuntime,
+  SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION,
   SKILL_PACK_MANIFEST_SCHEMA_VERSION,
   installSkillPack,
   listInstalledSkillPacks,
@@ -48,6 +49,10 @@ describe('skill pack assets', () => {
     expect(parseSkillPackManifest({ name: 'basic' })).toMatchObject({
       schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
       name: 'basic',
+    });
+    expect(parseSkillPackManifest({ schemaVersion: 0, name: 'legacy-basic' })).toMatchObject({
+      schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+      name: 'legacy-basic',
     });
     expect(
       parseSkillPackManifest({
@@ -120,6 +125,35 @@ describe('skill pack assets', () => {
     expect(pack.agentSpecPaths).toEqual([agentsDir]);
   });
 
+  test('resolves legacy SkillPack manifests as current schema', async () => {
+    const packDir = join(tmpDir, 'legacy-manifest-pack');
+    const skillsDir = join(packDir, 'legacy-skills');
+    const agentsDir = join(packDir, 'legacy-agents');
+    mkdirSync(skillsDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(packDir, 'skill-pack.json'),
+      JSON.stringify({
+        schemaVersion: 0,
+        name: 'legacy-manifest-pack',
+        version: '0.0.1',
+        skillPaths: ['legacy-skills'],
+        agentSpecPaths: ['legacy-agents'],
+      }),
+      'utf8',
+    );
+
+    const pack = await resolveSkillPack(packDir);
+
+    expect(pack).toMatchObject({
+      schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+      name: 'legacy-manifest-pack',
+      version: '0.0.1',
+    });
+    expect(pack.skillPaths).toEqual([skillsDir]);
+    expect(pack.agentSpecPaths).toEqual([agentsDir]);
+  });
+
   test('installs and resolves local SkillPacks through a registry', async () => {
     const packDir = join(tmpDir, 'installable-pack');
     const skillsDir = join(packDir, 'skills');
@@ -175,6 +209,53 @@ describe('skill pack assets', () => {
 
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ id: 'shared', name: 'second', sourcePath: secondPackDir, installedAt: 2 });
+  });
+
+  test('migrates legacy SkillPack install registries and rewrites current schema on install', async () => {
+    const legacyPackDir = join(tmpDir, 'legacy-installed-pack');
+    const newPackDir = join(tmpDir, 'new-installed-pack');
+    mkdirSync(join(legacyPackDir, 'skills'), { recursive: true });
+    mkdirSync(join(newPackDir, 'skills'), { recursive: true });
+    writeFileSync(join(legacyPackDir, 'skill-pack.json'), JSON.stringify({ name: 'legacy installed' }), 'utf8');
+    writeFileSync(join(newPackDir, 'skill-pack.json'), JSON.stringify({ name: 'new installed' }), 'utf8');
+    const registryPath = join(tmpDir, 'registry.json');
+    writeFileSync(
+      registryPath,
+      JSON.stringify({
+        schemaVersion: 0,
+        packs: [
+          {
+            schemaVersion: 0,
+            id: 'legacy-installed',
+            name: 'legacy installed',
+            sourcePath: legacyPackDir,
+            installedAt: 7,
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const listed = await listInstalledSkillPacks(registryPath);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: 'legacy-installed',
+      name: 'legacy installed',
+      sourcePath: legacyPackDir,
+      installedAt: 7,
+    });
+
+    await installSkillPack({ registryPath, sourcePath: newPackDir, id: 'new-installed', installedAt: 8 });
+    const rewritten = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+      schemaVersion?: number;
+      packs?: Array<{ schemaVersion?: number; id?: string }>;
+    };
+
+    expect(rewritten.schemaVersion).toBe(SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION);
+    expect(rewritten.packs?.map((pack) => [pack.id, pack.schemaVersion])).toEqual([
+      ['legacy-installed', SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION],
+      ['new-installed', SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION],
+    ]);
   });
 
   test('rejects manifest asset paths that escape the pack root', async () => {

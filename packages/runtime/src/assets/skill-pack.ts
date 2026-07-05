@@ -38,20 +38,14 @@ export function parseSkillPackManifest(value: unknown): SkillPackManifest {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('SkillPack manifest must be an object');
   }
-  const manifest = value as Record<string, unknown>;
-  if (manifest.schemaVersion !== undefined && manifest.schemaVersion !== SKILL_PACK_MANIFEST_SCHEMA_VERSION) {
-    throw new Error(`SkillPack.schemaVersion must be ${SKILL_PACK_MANIFEST_SCHEMA_VERSION}`);
-  }
+  const manifest = normalizeSkillPackManifestSchema(value as Record<string, unknown>);
   assertOptionalString(manifest, 'name');
   assertOptionalString(manifest, 'version');
   assertOptionalString(manifest, 'description');
   assertOptionalStringArray(manifest, 'skillPaths');
   assertOptionalStringArray(manifest, 'agentSpecPaths');
   assertOptionalMetadata(manifest);
-  return {
-    ...manifest,
-    schemaVersion: manifest.schemaVersion ?? SKILL_PACK_MANIFEST_SCHEMA_VERSION,
-  } as SkillPackManifest;
+  return manifest as SkillPackManifest;
 }
 
 export async function resolveSkillPack(path: string): Promise<SkillPack> {
@@ -135,6 +129,17 @@ function assertOptionalString(manifest: Record<string, unknown>, key: string): v
   if (manifest[key] !== undefined && typeof manifest[key] !== 'string') {
     throw new Error(`SkillPack.${key} must be a string`);
   }
+}
+
+function normalizeSkillPackManifestSchema(manifest: Record<string, unknown>): Record<string, unknown> {
+  if (
+    manifest.schemaVersion !== undefined &&
+    manifest.schemaVersion !== 0 &&
+    manifest.schemaVersion !== SKILL_PACK_MANIFEST_SCHEMA_VERSION
+  ) {
+    throw new Error(`SkillPack.schemaVersion must be ${SKILL_PACK_MANIFEST_SCHEMA_VERSION}`);
+  }
+  return { ...manifest, schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION };
 }
 
 function assertOptionalStringArray(manifest: Record<string, unknown>, key: string): void {

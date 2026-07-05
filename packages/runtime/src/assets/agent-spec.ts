@@ -52,8 +52,7 @@ export function parseAgentSpec(value: unknown): AgentSpec {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('AgentSpec must be an object');
   }
-  const spec = value as Record<string, unknown>;
-  assertOptionalSchemaVersion(spec);
+  const spec = normalizeAgentSpecSchema(value as Record<string, unknown>);
   if (typeof spec.prompt !== 'string' || !spec.prompt.trim()) {
     throw new Error('AgentSpec.prompt must be a non-empty string');
   }
@@ -66,7 +65,7 @@ export function parseAgentSpec(value: unknown): AgentSpec {
   assertOptionalStringArray(spec, 'skillPaths');
   assertOptionalStringArray(spec, 'skillPacks');
   assertOptionalCapabilities(spec);
-  return { ...spec, schemaVersion: spec.schemaVersion ?? AGENT_SPEC_SCHEMA_VERSION } as unknown as AgentSpec;
+  return spec as unknown as AgentSpec;
 }
 
 export async function loadAgentSpecFile(path: string): Promise<AgentSpec> {
@@ -192,11 +191,15 @@ function previewPrompt(prompt: string): string {
   return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
 }
 
-function assertOptionalSchemaVersion(spec: Record<string, unknown>): void {
-  if (spec.schemaVersion === undefined) return;
-  if (spec.schemaVersion !== AGENT_SPEC_SCHEMA_VERSION) {
+function normalizeAgentSpecSchema(spec: Record<string, unknown>): Record<string, unknown> {
+  if (
+    spec.schemaVersion !== undefined &&
+    spec.schemaVersion !== 0 &&
+    spec.schemaVersion !== AGENT_SPEC_SCHEMA_VERSION
+  ) {
     throw new Error(`AgentSpec.schemaVersion must be ${AGENT_SPEC_SCHEMA_VERSION}`);
   }
+  return { ...spec, schemaVersion: AGENT_SPEC_SCHEMA_VERSION };
 }
 
 function assertOptionalString(spec: Record<string, unknown>, key: string): void {

@@ -59,6 +59,10 @@ describe('AgentSpec asset launch', () => {
       schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
       prompt: 'hello',
     });
+    expect(parseAgentSpec({ schemaVersion: 0, prompt: 'legacy hello' })).toMatchObject({
+      schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
+      prompt: 'legacy hello',
+    });
     expect(parseAgentSpec({ schemaVersion: AGENT_SPEC_SCHEMA_VERSION, prompt: 'hello' })).toMatchObject({
       schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
       prompt: 'hello',
@@ -151,6 +155,33 @@ describe('AgentSpec asset launch', () => {
     expect(textOf(captured.messages?.at(-1))).toBe('file task');
     expect(captured.tools ?? []).toEqual([]);
     runtime.dispose();
+  });
+
+  test('loads legacy AgentSpec JSON files as current schema', async () => {
+    const specPath = join(tmpDir, 'legacy-agent.json');
+    writeFileSync(
+      specPath,
+      JSON.stringify({
+        schemaVersion: 0,
+        name: 'legacy-agent',
+        prompt: 'legacy task',
+        toolMode: 'read-only',
+        approvalMode: 'deny',
+        skillPacks: ['legacy-pack'],
+      }),
+      'utf8',
+    );
+
+    const loaded = await loadAgentSpecFile(specPath);
+
+    expect(loaded).toMatchObject({
+      schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
+      name: 'legacy-agent',
+      prompt: 'legacy task',
+      toolMode: 'read-only',
+      approvalMode: 'deny',
+      skillPacks: ['legacy-pack'],
+    });
   });
 
   test('discovers AgentSpec JSON files from agents directories', async () => {

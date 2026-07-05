@@ -142,7 +142,11 @@ function parseRegistry(value: unknown): SkillPackInstallRegistry {
     throw new Error('SkillPack registry must be an object');
   }
   const registry = value as Record<string, unknown>;
-  if (registry.schemaVersion !== SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION) {
+  if (
+    registry.schemaVersion !== undefined &&
+    registry.schemaVersion !== 0 &&
+    registry.schemaVersion !== SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION
+  ) {
     throw new Error(`SkillPack registry schemaVersion must be ${SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION}`);
   }
   if (!Array.isArray(registry.packs)) {
@@ -159,7 +163,11 @@ function parseRecord(value: unknown): InstalledSkillPackRecord {
     throw new Error('SkillPack registry record must be an object');
   }
   const record = value as Record<string, unknown>;
-  if (record.schemaVersion !== SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION) {
+  if (
+    record.schemaVersion !== undefined &&
+    record.schemaVersion !== 0 &&
+    record.schemaVersion !== SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION
+  ) {
     throw new Error(`SkillPack registry record schemaVersion must be ${SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION}`);
   }
   const id = requiredString(record, 'id');
