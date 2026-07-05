@@ -69,9 +69,10 @@ export async function submitInput(value: string, deps: SubmitInputDeps): Promise
 export default function App({ session, logger }: AppProps) {
   const { exit } = useApp();
 
+  const [activeSession, setActiveSession] = useState<TuiSessionAdapter>(session);
   const store = useMemo(() => new TuiStore(), []);
   const sessionStore = useMemo(() => createDefaultSessionStore(), []);
-  const sessionInfo = session.getInfo();
+  const sessionInfo = activeSession.getInfo();
   const model = sessionInfo.model;
   const cwd = sessionInfo.workingDirectory;
 
@@ -79,13 +80,17 @@ export default function App({ session, logger }: AppProps) {
   const sessionListRef = useRef<SessionSummary[]>([]);
 
   useEffect(() => {
-    store.reset(session.getInfo().id);
-  }, [session, store]);
+    setActiveSession(session);
+  }, [session]);
+
+  useEffect(() => {
+    store.reset(activeSession.getInfo().id);
+  }, [activeSession, store]);
 
   // --- Discover skills for palette display ---
   const [skills, setSkills] = useState<SkillItem[]>([]);
   useEffect(() => {
-    if (session.mode === 'remote') {
+    if (activeSession.mode === 'remote') {
       setSkills([]);
       return;
     }
@@ -101,14 +106,14 @@ export default function App({ session, logger }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [cwd, session.mode]);
+  }, [cwd, activeSession.mode]);
 
   // --- Session restore handler ---
   const handleRestoreSession = useCallback(
     async (summary: SessionSummary) => {
       setSessionPickerOpen(false);
       try {
-        if (!session.supportsMessageRestore) {
+        if (!activeSession.supportsMessageRestore) {
           store.showNotice(
             'Remote sessions keep history on the server. Local transcript restore is unavailable in remote mode.',
           );
@@ -121,10 +126,10 @@ export default function App({ session, logger }: AppProps) {
           const agentMessages = meta.agentMessages
             ? parseAgentMessages(meta.agentMessages)
             : turnsToMessages(meta.messages as TurnEntry[]);
-          session.replaceAgentMessages(agentMessages);
+          activeSession.replaceAgentMessages(agentMessages);
           if (meta.status === 'crashed') {
             store.showNotice(`Restored crashed session ${meta.sessionId}. Attempting checkpoint resume...`);
-            session.resume().catch((error) => {
+            activeSession.resume().catch((error) => {
               store.dispatch({ type: 'error', error: new Error(`Failed to resume session: ${errorMessage(error)}`) });
             });
           } else {
@@ -135,7 +140,7 @@ export default function App({ session, logger }: AppProps) {
         store.dispatch({ type: 'error', error: new Error(`Failed to restore session: ${errorMessage(error)}`) });
       }
     },
-    [store, session, sessionStore],
+    [store, activeSession, sessionStore],
   );
 
   const handleOpenSessionPicker = useCallback(async () => {
@@ -165,8 +170,15 @@ export default function App({ session, logger }: AppProps) {
         exit: () => exit(),
         clear: () => store.reset(),
         steer: (message) => {
-          void session.steer(message);
+          void activeSession.steer(message);
         },
+        listAgentSpecs: () => activeSession.listAgentSpecs(),
+        launchAgentSpec: async (identifier) => {
+          const next = await activeSession.launchAgentSpec(identifier);
+          setActiveSession(next);
+        },
+        showNotice: (message) => store.showNotice(message),
+        showError: (message) => store.dispatch({ type: 'error', error: new Error(message) }),
         getConfig: () => ({}) as Record<string, unknown>,
         getCommands: () => registry.getCommands(),
       });
@@ -200,27 +212,27 @@ export default function App({ session, logger }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore, registry, session]);
+  }, [exit, store, model, handleOpenSessionPicker, handleRestoreSession, sessionStore, registry, activeSession]);
 
   useEffect(() => {
     const autoSaveHandler = createAutoSaveHandler({
       getSessionId: () => store.getState().sessionId,
       getMessages: () => store.getState().messages.turns,
       getMessageSnapshot: () => store.getState().messages,
-      getAgentMessages: () => session.getAgentMessages(),
+      getAgentMessages: () => activeSession.getAgentMessages(),
       getModel: () => model,
       sessionStore,
       startTime: new Date().toISOString(),
     });
 
-    const unsubscribe = session.subscribe((event) => {
+    const unsubscribe = activeSession.subscribe((event) => {
       processEvent(event, store, registry);
       autoSaveHandler(event.type).catch(() => {});
     });
     return () => {
       unsubscribe();
     };
-  }, [session, store, model, sessionStore, registry]);
+  }, [activeSession, store, model, sessionStore, registry]);
 
   useEffect(
     () => () => {
@@ -231,40 +243,40 @@ export default function App({ session, logger }: AppProps) {
 
   useEffect(
     () => () => {
-      session.dispose();
+      activeSession.dispose();
     },
-    [session],
+    [activeSession],
   );
 
   const handleSubmit = useCallback(
     (value: string) => {
       const pending = store.getState().pendingQuestion;
       if (pending) {
-        Promise.resolve(session.answerUser(pending.toolCallId, value)).catch((error) => {
+        Promise.resolve(activeSession.answerUser(pending.toolCallId, value)).catch((error) => {
           store.dispatch({ type: 'error', error: new Error(`Failed to answer question: ${errorMessage(error)}`) });
         });
         return;
       }
-      submitInput(value, { registryStatus, registryError, registry, session, store }).catch(() => {});
+      submitInput(value, { registryStatus, registryError, registry, session: activeSession, store }).catch(() => {});
     },
-    [registryStatus, registryError, registry, session, store],
+    [registryStatus, registryError, registry, activeSession, store],
   );
 
   const handleSteer = useCallback(
     (value: string) => {
-      Promise.resolve(session.steer(value)).catch((error) => {
+      Promise.resolve(activeSession.steer(value)).catch((error) => {
         store.dispatch({ type: 'error', error: new Error(`Failed to steer session: ${errorMessage(error)}`) });
       });
     },
-    [session],
+    [activeSession],
   );
 
   const handleAbort = useCallback(() => {
-    Promise.resolve(session.abort('user interrupt')).catch((error) => {
+    Promise.resolve(activeSession.abort('user interrupt')).catch((error) => {
       store.dispatch({ type: 'error', error: new Error(`Failed to abort session: ${errorMessage(error)}`) });
     });
     store.setInterrupting();
-  }, [session, store]);
+  }, [activeSession, store]);
 
   const handleForceExit = useCallback(() => {
     exit();
@@ -277,9 +289,9 @@ export default function App({ session, logger }: AppProps) {
       registryReady={registryReady}
       model={model}
       cwd={cwd}
-      runtimeMode={session.mode}
+      runtimeMode={activeSession.mode}
       skills={skills}
-      agentSessionsStore={session.agentSessions}
+      agentSessionsStore={activeSession.agentSessions}
       onSubmit={handleSubmit}
       onSteer={handleSteer}
       onAbort={handleAbort}

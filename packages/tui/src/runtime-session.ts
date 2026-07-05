@@ -1,11 +1,12 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageMessage, Logger } from '@cortx/sdk';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, PluginConfig } from '@cortx/runtime';
-import { CortxRuntime, SubAgentSessionStore, type RuntimeSessionCreateRequest, type RuntimeSessionInfo } from '@cortx/runtime';
+import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, DiscoveredAgentSpec, PluginConfig } from '@cortx/runtime';
+import { CortxRuntime, SubAgentSessionStore, discoverAgentSpecs, type RuntimeSessionCreateRequest, type RuntimeSessionInfo } from '@cortx/runtime';
 import type { ProjectPluginRegistry } from './language.js';
 import { RemoteRuntimeClient } from './remote-client.js';
 
 export type TuiRuntimeMode = 'local' | 'remote';
+export type TuiAgentSpecInfo = DiscoveredAgentSpec;
 
 export interface TuiSessionAdapter {
   readonly mode: TuiRuntimeMode;
@@ -14,6 +15,8 @@ export interface TuiSessionAdapter {
   getInfo(): RuntimeSessionInfo;
   subscribe(listener: (event: import('@cortx/sdk').AgentEvent) => void): () => void;
   prompt(message: string): Promise<void>;
+  listAgentSpecs(): Promise<TuiAgentSpecInfo[]>;
+  launchAgentSpec(identifier: string): Promise<TuiSessionAdapter>;
   steer(message: string): void | Promise<void>;
   followUp(message: string): void | Promise<void>;
   resume(): Promise<void>;
@@ -46,11 +49,14 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
   readonly agentSessions: SubAgentSessionStore;
   readonly supportsMessageRestore = true;
   private readonly localState: ReturnType<CortxRuntime['getLocalState']>;
+  private ownsRuntime = true;
 
   constructor(
     private readonly runtime: CortxRuntime,
     private readonly sessionId: string,
+    ownsRuntime = true,
   ) {
+    this.ownsRuntime = ownsRuntime;
     this.localState = runtime.getLocalState(sessionId);
     this.agentSessions = this.localState.agentSessions;
   }
@@ -61,6 +67,17 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
 
   subscribe(listener: Parameters<TuiSessionAdapter['subscribe']>[0]): () => void {
     return this.runtime.subscribe(this.sessionId, listener);
+  }
+
+  listAgentSpecs(): Promise<TuiAgentSpecInfo[]> {
+    return discoverAgentSpecs({ roots: [this.getInfo().workingDirectory] });
+  }
+
+  async launchAgentSpec(identifier: string): Promise<TuiSessionAdapter> {
+    const spec = await resolveAgentSpecIdentifier(await this.listAgentSpecs(), identifier);
+    const info = await this.runtime.launchAgentSpecFile(spec.path);
+    this.ownsRuntime = false;
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, true);
   }
 
   prompt(message: string): Promise<void> {
@@ -96,7 +113,7 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
   }
 
   dispose(): void {
-    this.runtime.dispose();
+    if (this.ownsRuntime) this.runtime.dispose();
   }
 }
 
@@ -139,6 +156,17 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
   async prompt(message: string): Promise<void> {
     await this.client.prompt(this.info.id, message);
     await this.refresh();
+  }
+
+  listAgentSpecs(): Promise<TuiAgentSpecInfo[]> {
+    return this.client.listAgentSpecs();
+  }
+
+  async launchAgentSpec(identifier: string): Promise<TuiSessionAdapter> {
+    const spec = await resolveAgentSpecIdentifier(await this.listAgentSpecs(), identifier);
+    const info = await this.client.launchAgentSpec({ path: spec.path });
+    this.dispose();
+    return new RemoteRuntimeSessionAdapter(this.client, info);
   }
 
   async steer(message: string): Promise<void> {
@@ -223,3 +251,24 @@ export async function createRemoteRuntimeSession(options: RemoteRuntimeSessionOp
 }
 
 export type { CortxFactoryMap, CortxExtensionType };
+
+export async function resolveAgentSpecIdentifier(
+  specs: TuiAgentSpecInfo[],
+  identifier: string,
+): Promise<TuiAgentSpecInfo> {
+  const needle = identifier.trim();
+  if (!needle) throw new Error('Agent name or path is required.');
+  const matches = specs.filter(
+    (spec) =>
+      spec.name === needle ||
+      spec.path === needle ||
+      spec.relativePath === needle ||
+      spec.path.endsWith(`/${needle}`) ||
+      spec.path.endsWith(`\\${needle}`),
+  );
+  if (matches.length === 0) throw new Error(`No AgentSpec found for "${needle}". Run /agents to list available agents.`);
+  if (matches.length > 1) {
+    throw new Error(`AgentSpec "${needle}" is ambiguous. Use a full relative path from /agents.`);
+  }
+  return matches[0];
+}

@@ -113,6 +113,43 @@ describe('RemoteRuntimeClient', () => {
     });
   });
 
+  test('lists AgentSpec assets through the remote server contract', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = new RemoteRuntimeClient({
+      baseUrl: 'http://localhost:3000/',
+      apiKey: 'test-key',
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        return jsonResponse({
+          agentSpecs: [
+            {
+              name: 'reviewer',
+              path: '/repo/agents/reviewer.json',
+              relativePath: 'agents/reviewer.json',
+              sourceRoot: '/repo',
+              promptPreview: 'Review current changes',
+              toolMode: 'read-only',
+              approvalMode: 'deny',
+            },
+          ],
+        });
+      },
+    });
+
+    const specs = await client.listAgentSpecs();
+
+    expect(specs).toEqual([
+      expect.objectContaining({
+        name: 'reviewer',
+        path: '/repo/agents/reviewer.json',
+        promptPreview: 'Review current changes',
+      }),
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0].url).pathname).toBe('/agent-specs');
+    expect(new Headers(calls[0].init?.headers).get('Authorization')).toBe('Bearer test-key');
+  });
+
   test('throws typed remote errors from server error bodies', async () => {
     const client = new RemoteRuntimeClient({
       baseUrl: 'http://localhost:3000',

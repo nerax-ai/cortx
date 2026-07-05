@@ -7,7 +7,7 @@ import {
 import type { CommandDef } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
 import { TuiRegistry } from '../tui-registry.js';
-import { commandPlugin } from '../plugins/command-plugin.js';
+import { commandPlugin, formatAgentSpecList } from '../plugins/command-plugin.js';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -191,6 +191,32 @@ describe('formatHelpText', () => {
   });
 });
 
+describe('formatAgentSpecList', () => {
+  test('formats discovered AgentSpec assets with launch identifiers', () => {
+    const text = formatAgentSpecList([
+      {
+        name: 'reviewer',
+        path: '/repo/agents/reviewer.json',
+        relativePath: 'agents/reviewer.json',
+        sourceRoot: '/repo',
+        promptPreview: 'Review current changes',
+        toolMode: 'read-only',
+        approvalMode: 'deny',
+      },
+    ]);
+
+    expect(text).toContain('Available agents:');
+    expect(text).toContain('reviewer');
+    expect(text).toContain('agents/reviewer.json');
+    expect(text).toContain('read-only/deny');
+    expect(text).toContain('Review current changes');
+  });
+
+  test('formats an empty AgentSpec list', () => {
+    expect(formatAgentSpecList([])).toBe('No AgentSpecs found in this workspace.');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration: plugin registers new command -> appears in palette
 // ---------------------------------------------------------------------------
@@ -219,7 +245,7 @@ describe('Integration: plugin commands in palette', () => {
     });
 
     const commands = registry.getCommands();
-    expect(commands.length).toBe(7); // 6 built-in + 1 custom
+    expect(commands.length).toBe(9); // 8 built-in + 1 custom
     expect(commands.some((c) => c.name === '/custom')).toBe(true);
 
     // Verify it appears in palette filtering
@@ -258,6 +284,41 @@ describe('Integration: plugin commands in palette', () => {
     expect(helpText).toContain('/clear');
     expect(helpText).toContain('/help');
     expect(helpText).toContain('/steer');
+    expect(helpText).toContain('/agents');
+    expect(helpText).toContain('/agent');
+  });
+
+  test('AgentSpec commands list and launch through injected dependencies', async () => {
+    const notices: string[] = [];
+    const launches: string[] = [];
+    const registry = new TuiRegistry();
+    await registry.registerPlugin(commandPlugin({
+      exit: () => {},
+      clear: () => {},
+      getConfig: () => ({}),
+      listAgentSpecs: async () => [
+        {
+          name: 'reviewer',
+          path: '/repo/agents/reviewer.json',
+          relativePath: 'agents/reviewer.json',
+          sourceRoot: '/repo',
+          promptPreview: 'Review current changes',
+        },
+      ],
+      launchAgentSpec: async (identifier) => {
+        launches.push(identifier);
+      },
+      showNotice: (message) => notices.push(message),
+      showError: (message) => notices.push(`ERROR: ${message}`),
+    }));
+
+    await registry.executeCommand('/agents', '', { args: '', abort: () => {} });
+    await registry.executeCommand('/agent', 'reviewer', { args: 'reviewer', abort: () => {} });
+
+    expect(notices[0]).toContain('Available agents:');
+    expect(notices[0]).toContain('reviewer');
+    expect(notices[1]).toBe('Launched AgentSpec: reviewer');
+    expect(launches).toEqual(['reviewer']);
   });
 });
 

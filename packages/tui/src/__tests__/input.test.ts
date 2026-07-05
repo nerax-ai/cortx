@@ -646,6 +646,39 @@ describe('submitInput', () => {
     expect(userMessages).toEqual([]);
   });
 
+  test('executes /agent as a command instead of prompting the agent', async () => {
+    const executed: string[] = [];
+    const promptCalls: string[] = [];
+    const userMessages: string[] = [];
+
+    await submitInput('/agent reviewer', {
+      registryStatus: 'ready',
+      registryError: null,
+      registry: {
+        executeCommand: async (name: string, args: string) => {
+          executed.push(`${name}:${args}`);
+          return true;
+        },
+      },
+      session: {
+        abort: () => {},
+        prompt: async (value: string) => {
+          promptCalls.push(value);
+        },
+      },
+      store: {
+        addUserMessage: (value: string) => {
+          userMessages.push(value);
+        },
+        dispatch: () => {},
+      },
+    });
+
+    expect(executed).toEqual(['/agent:reviewer']);
+    expect(promptCalls).toEqual([]);
+    expect(userMessages).toEqual([]);
+  });
+
   test('sends ordinary text to the agent while registry is loading', async () => {
     const promptCalls: string[] = [];
     const userMessages: string[] = [];

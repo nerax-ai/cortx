@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { AgentEvent } from '@cortx/sdk';
@@ -98,6 +98,44 @@ describe('TUI runtime session adapters', () => {
     session.dispose();
   });
 
+  test('local adapter lists and launches AgentSpec assets from the workspace', async () => {
+    const agentsDir = join(tmpDir, 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, 'reviewer.json'),
+      JSON.stringify({
+        name: 'reviewer',
+        prompt: 'review with tui',
+        toolMode: 'none',
+        capabilities: { skills: false, subAgents: false, approval: false },
+      }),
+      'utf8',
+    );
+    const session = await createLocalRuntimeSession({
+      language: mockLanguage(textParts('agent spec result')),
+      model: 'default',
+      workingDirectory: tmpDir,
+    });
+
+    const specs = await session.listAgentSpecs();
+    const launched = await session.launchAgentSpec('reviewer');
+    const events: AgentEvent[] = [];
+    const unsubscribe = launched.subscribe((event) => events.push(event));
+    await waitForEvent(events, 'done');
+
+    expect(specs).toEqual([
+      expect.objectContaining({
+        name: 'reviewer',
+        path: join(agentsDir, 'reviewer.json'),
+      }),
+    ]);
+    expect(launched.getInfo().metadata).toMatchObject({ agentSpec: 'reviewer' });
+
+    unsubscribe();
+    session.dispose();
+    launched.dispose();
+  });
+
   test('remote adapter uses server actions and SSE while keeping restore server-owned', async () => {
     const calls: string[] = [];
     let eventSource: EventSourceLike | undefined;
@@ -154,5 +192,70 @@ describe('TUI runtime session adapters', () => {
 
     unsubscribe();
     session.dispose();
+  });
+
+  test('remote adapter lists and launches AgentSpec assets through the server client', async () => {
+    const calls: string[] = [];
+    const client = new RemoteRuntimeClient({
+      baseUrl: 'http://server',
+      apiKey: 'key',
+      fetch: async (url, init) => {
+        calls.push(`${new URL(String(url)).pathname}:${init?.method ?? 'GET'}`);
+        if (String(url).endsWith('/agent-specs')) {
+          return jsonResponse({
+            agentSpecs: [
+              {
+                name: 'reviewer',
+                path: '/repo/agents/reviewer.json',
+                relativePath: 'agents/reviewer.json',
+                sourceRoot: '/repo',
+                promptPreview: 'Review current changes',
+              },
+            ],
+          });
+        }
+        if (String(url).endsWith('/agent-specs/launch')) {
+          return jsonResponse({
+            session: {
+              id: 'sess_spec',
+              createdAt: 1,
+              lastActivityAt: 2,
+              workingDirectory: '/remote/repo',
+              model: 'default',
+              toolMode: 'read-only',
+              approvalMode: 'deny',
+              isRunning: true,
+              eventCount: 1,
+              metadata: { agentSpec: 'reviewer' },
+            },
+          });
+        }
+        return jsonResponse(sessionBody());
+      },
+    });
+    const session = await createRemoteRuntimeSession({ client, create: { workingDirectory: '/remote/repo' } });
+
+    const specs = await session.listAgentSpecs();
+    const launched = await session.launchAgentSpec('agents/reviewer.json');
+
+    expect(specs).toEqual([
+      expect.objectContaining({
+        name: 'reviewer',
+        relativePath: 'agents/reviewer.json',
+      }),
+    ]);
+    expect(launched.getInfo()).toMatchObject({
+      id: 'sess_spec',
+      metadata: { agentSpec: 'reviewer' },
+    });
+    expect(calls).toEqual([
+      '/sessions:POST',
+      '/agent-specs:GET',
+      '/agent-specs:GET',
+      '/agent-specs/launch:POST',
+    ]);
+
+    session.dispose();
+    launched.dispose();
   });
 });

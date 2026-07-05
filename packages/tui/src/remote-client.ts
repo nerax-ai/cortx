@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@cortx/sdk';
-import type { RuntimeSessionCreateRequest, RuntimeSessionInfo } from '@cortx/runtime';
+import type { DiscoveredAgentSpec, RuntimeSessionCreateRequest, RuntimeSessionInfo } from '@cortx/runtime';
 
 export interface EventSourceLike {
   onmessage: ((event: { data: string }) => void) | null;
@@ -23,6 +23,8 @@ export interface RemoteAgentSpecLaunchRequest {
   spec?: Record<string, unknown>;
   path?: string;
 }
+
+export type RemoteAgentSpecInfo = DiscoveredAgentSpec;
 
 export class RemoteRuntimeError extends Error {
   constructor(
@@ -95,6 +97,11 @@ export class RemoteRuntimeClient {
       body: JSON.stringify(request),
     });
     return data.session;
+  }
+
+  async listAgentSpecs(): Promise<RemoteAgentSpecInfo[]> {
+    const data = await this.request<{ agentSpecs: RemoteAgentSpecInfo[] }>('/agent-specs');
+    return data.agentSpecs;
   }
 
   async prompt(sessionId: string, message: string): Promise<void> {

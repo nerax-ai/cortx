@@ -12,14 +12,33 @@
 import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
 import type { TuiFactoryMap, TuiExtensionType, CommandDef } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
+import type { TuiAgentSpecInfo } from '../runtime-session.js';
 
 export interface CommandPluginDeps {
   exit: () => void;
   clear: () => void;
   steer: (message: string) => void;
   getConfig: () => Record<string, unknown>;
+  listAgentSpecs: () => Promise<TuiAgentSpecInfo[]>;
+  launchAgentSpec: (identifier: string) => void | Promise<void>;
+  showNotice: (message: string) => void;
+  showError: (message: string) => void;
   /** Returns all registered commands (for /help). */
   getCommands?: () => CommandDef[];
+}
+
+export function formatAgentSpecList(specs: TuiAgentSpecInfo[]): string {
+  if (specs.length === 0) return 'No AgentSpecs found in this workspace.';
+  const sorted = [...specs].sort((a, b) => a.name.localeCompare(b.name) || a.relativePath.localeCompare(b.relativePath));
+  const maxNameLen = Math.max(...sorted.map((spec) => spec.name.length));
+  return [
+    'Available agents:',
+    ...sorted.map((spec) => {
+      const mode = [spec.toolMode, spec.approvalMode].filter(Boolean).join('/');
+      const suffix = mode ? ` · ${mode}` : '';
+      return `  ${spec.name.padEnd(maxNameLen)}  - ${spec.relativePath}${suffix}\n      ${spec.promptPreview}`;
+    }),
+  ].join('\n');
 }
 
 /**
@@ -31,7 +50,16 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
   const clear = deps?.clear ?? (() => {});
   const steer = deps?.steer ?? (() => {});
   const getConfig = deps?.getConfig ?? (() => ({}));
+  const listAgentSpecs = deps?.listAgentSpecs;
+  const launchAgentSpec = deps?.launchAgentSpec;
+  const showNotice = deps?.showNotice ?? ((message: string) => ctxLogFallback(message));
+  const showError = deps?.showError ?? ((message: string) => ctxLogFallback(message));
   const getCommands = deps?.getCommands;
+
+  let fallbackLogger: { info(message: string): void; error(message: string): void } | undefined;
+  function ctxLogFallback(message: string): void {
+    fallbackLogger?.info(message);
+  }
 
   return {
     manifest: {
@@ -44,6 +72,7 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
     },
 
     setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>): void {
+      fallbackLogger = ctx.logger;
       // /exit
       ctx.register(TUI_COMMAND, 'exit', (_ctx) => ({
         name: '/exit',
@@ -89,6 +118,44 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
         handler: async (args, _cmdCtx) => {
           const message = args.trim();
           if (message) steer(message);
+        },
+      }));
+
+      ctx.register(TUI_COMMAND, 'agents', (_ctx) => ({
+        name: '/agents',
+        description: 'List available AgentSpec agents',
+        handler: async () => {
+          if (!listAgentSpecs) {
+            showError('AgentSpec listing is not available in this session.');
+            return;
+          }
+          try {
+            showNotice(formatAgentSpecList(await listAgentSpecs()));
+          } catch (error) {
+            showError(`Failed to list AgentSpecs: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        },
+      }));
+
+      ctx.register(TUI_COMMAND, 'agent', (_ctx) => ({
+        name: '/agent',
+        description: 'Launch an AgentSpec by name or path',
+        handler: async (args) => {
+          const identifier = args.trim();
+          if (!identifier) {
+            showError('Usage: /agent <name-or-path>');
+            return;
+          }
+          if (!launchAgentSpec) {
+            showError('AgentSpec launch is not available in this session.');
+            return;
+          }
+          try {
+            await launchAgentSpec(identifier);
+            showNotice(`Launched AgentSpec: ${identifier}`);
+          } catch (error) {
+            showError(`Failed to launch AgentSpec: ${error instanceof Error ? error.message : String(error)}`);
+          }
         },
       }));
 
