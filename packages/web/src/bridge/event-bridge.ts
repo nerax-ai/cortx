@@ -37,6 +37,7 @@ export interface WebRuntimeSessionInfo {
   approvalMode: WebApprovalMode;
   capabilities?: Record<string, unknown>;
   skillPaths?: string[];
+  skillPacks?: string[];
   isRunning: boolean;
   eventCount: number;
   metadata?: Record<string, unknown>;
@@ -49,6 +50,7 @@ export interface WebCreateSessionRequest {
   maxIterations?: number;
   toolMode?: WebWorkspaceToolMode;
   approvalMode?: WebApprovalMode;
+  skillPacks?: string[];
   metadata?: Record<string, unknown>;
 }
 

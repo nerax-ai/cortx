@@ -87,11 +87,16 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     toolMode: parseToolMode(value.toolMode),
     approvalMode: parseApprovalMode(value.approvalMode),
     capabilities: isObject(value.capabilities) ? { ...DEFAULT_RUNTIME_CAPABILITIES, ...value.capabilities } : { skills: false, subAgents: false, approval: false },
-    skillPaths: Array.isArray(value.skillPaths) && value.skillPaths.every((item) => typeof item === 'string') ? value.skillPaths : undefined,
+    skillPaths: stringArray(value.skillPaths),
+    skillPacks: stringArray(value.skillPacks),
     runId: typeof value.runId === 'number' ? value.runId : 0,
     nextEventSequence: typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
     metadata: isObject(value.metadata) ? value.metadata : undefined,
   };
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : undefined;
 }
 
 function migrateRuntimeSubAgentSessionSnapshotV0(value: Record<string, unknown>): RuntimeSubAgentSessionSnapshot | undefined {

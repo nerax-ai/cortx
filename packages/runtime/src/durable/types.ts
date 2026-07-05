@@ -20,6 +20,7 @@ export interface RuntimeSessionSnapshot {
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
+  skillPacks?: string[];
   runId: number;
   nextEventSequence: number;
   metadata?: RuntimeSessionMetadata;

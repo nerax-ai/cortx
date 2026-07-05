@@ -27,7 +27,7 @@ import {
   discoverSkills,
 } from './capabilities/index.js';
 import { loadAgentSpecFile, parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
-import { resolveSkillPack } from './assets/skill-pack.js';
+import { resolveSkillPackReferences } from './assets/skill-pack-registry.js';
 import {
   RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
@@ -63,6 +63,7 @@ export interface CortxRuntimeOptions {
   idleTimeoutMs?: number;
   logger?: Logger;
   durableStore?: AgentDurableRunStore;
+  skillPackRegistryPath?: string;
 }
 
 export interface SubscribeOptions {
@@ -87,6 +88,12 @@ function parseApprovalMode(value: unknown, fallback: RuntimeApprovalMode): Runti
   throw new RuntimeError('invalid_request', 'approvalMode must be one of: deny, interactive, full-access', {
     approvalMode: value,
   });
+}
+
+function parseOptionalStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return value;
+  throw new RuntimeError('invalid_request', `${field} must be an array of strings`, { [field]: value });
 }
 
 function eventError(error: unknown): AgentEvent {
@@ -128,6 +135,7 @@ export class CortxRuntime {
   private readonly idleTimeoutMs: number;
   private readonly logger: Logger;
   private readonly durableStore?: AgentDurableRunStore;
+  private readonly skillPackRegistryPath?: string;
 
   constructor(options: CortxRuntimeOptions) {
     this.appName = options.appName ?? 'cortx';
@@ -148,6 +156,7 @@ export class CortxRuntime {
     this.idleTimeoutMs = options.idleTimeoutMs ?? 30 * 60 * 1000;
     this.logger = options.logger ?? noopLogger;
     this.durableStore = options.durableStore;
+    this.skillPackRegistryPath = options.skillPackRegistryPath;
   }
 
   async createSession(request: RuntimeSessionCreateRequest = {}): Promise<RuntimeSessionInfo> {
@@ -172,7 +181,16 @@ export class CortxRuntime {
       approvalMode === 'full-access'
         ? { ...requestedCapabilities, approval: false }
         : requestedCapabilities;
-    const skillPaths = request.skillPaths;
+    const requestedSkillPaths = parseOptionalStringArray(request.skillPaths, 'skillPaths');
+    const requestedSkillPacks = parseOptionalStringArray(request.skillPacks, 'skillPacks');
+    const installedSkillPacks = await resolveSkillPackReferences(requestedSkillPacks, {
+      registryPath: this.skillPackRegistryPath,
+    });
+    const resolvedSkillPaths = [
+      ...(requestedSkillPaths ?? []),
+      ...installedSkillPacks.flatMap((pack) => pack.skillPaths),
+    ];
+    const skillPaths = resolvedSkillPaths.length ? resolvedSkillPaths : undefined;
     const system = request.system ?? this.system;
     const agentSessions = new SubAgentSessionStore();
     const mountedTools = [
@@ -183,7 +201,7 @@ export class CortxRuntime {
     const officialExtensions = await this.createOfficialExtensions({
       workingDirectory: workspace.workingDirectory,
       capabilities,
-      skillPaths: request.skillPaths,
+      skillPaths,
     });
     let session: ManagedRuntimeSession;
     if (capabilities.subAgents !== false) {
@@ -230,6 +248,7 @@ export class CortxRuntime {
       approvalMode,
       capabilities,
       skillPaths,
+      skillPacks: requestedSkillPacks,
       events: [],
       eventEnvelopes: [],
       subscribers: new Set(),
@@ -279,6 +298,7 @@ export class CortxRuntime {
         approvalMode: snapshot.approvalMode,
         capabilities: snapshot.capabilities,
         skillPaths: snapshot.skillPaths,
+        skillPacks: snapshot.skillPacks,
         metadata: snapshot.metadata,
       });
       const session = this.requireSession(info.id);
@@ -302,11 +322,6 @@ export class CortxRuntime {
 
   async launchAgentSpec(value: unknown): Promise<RuntimeSessionInfo> {
     const spec = parseAgentSpec(value);
-    const skillPaths = [...(spec.skillPaths ?? [])];
-    for (const packPath of spec.skillPacks ?? []) {
-      const pack = await resolveSkillPack(packPath);
-      skillPaths.push(...pack.skillPaths);
-    }
     const session = await this.createSession({
       workingDirectory: spec.workingDirectory,
       model: spec.model,
@@ -315,7 +330,8 @@ export class CortxRuntime {
       toolMode: spec.toolMode,
       approvalMode: spec.approvalMode,
       capabilities: spec.capabilities,
-      skillPaths,
+      skillPaths: spec.skillPaths,
+      skillPacks: spec.skillPacks,
       metadata: { ...spec.metadata, agentSpec: spec.name ?? 'inline' },
     });
     await this.prompt(session.id, spec.prompt);
@@ -537,6 +553,7 @@ export class CortxRuntime {
       approvalMode: session.approvalMode,
       capabilities: session.capabilities,
       skillPaths: session.skillPaths,
+      skillPacks: session.skillPacks,
       isRunning: session.isRunning,
       eventCount: session.events.length,
       metadata: session.metadata,
@@ -561,6 +578,7 @@ export class CortxRuntime {
       approvalMode: session.approvalMode,
       capabilities: session.capabilities,
       skillPaths: session.skillPaths,
+      skillPacks: session.skillPacks,
       runId: session.runId,
       nextEventSequence: session.nextEventSequence,
       metadata: session.metadata,

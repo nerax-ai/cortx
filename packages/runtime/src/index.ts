@@ -28,6 +28,19 @@ export type { AgentSpec, DiscoverAgentSpecsOptions, DiscoveredAgentSpec } from '
 export { SKILL_PACK_MANIFEST_SCHEMA_VERSION, parseSkillPackManifest, resolveSkillPack } from './assets/skill-pack.js';
 export type { SkillPack, SkillPackManifest } from './assets/skill-pack.js';
 export {
+  SKILL_PACK_INSTALL_REGISTRY_SCHEMA_VERSION,
+  installSkillPack,
+  listInstalledSkillPacks,
+  resolveSkillPackReference,
+  resolveSkillPackReferences,
+} from './assets/skill-pack-registry.js';
+export type {
+  InstallSkillPackOptions,
+  InstalledSkillPack,
+  InstalledSkillPackRecord,
+  SkillPackReferenceOptions,
+} from './assets/skill-pack-registry.js';
+export {
   SubAgentSessionStore,
   SkillParseError,
   createDefaultSafetyExtensions,

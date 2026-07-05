@@ -26,6 +26,7 @@ export interface ServerConfig {
   approvalMode?: RuntimeApprovalMode;
   logger?: Logger;
   durableStore?: AgentDurableRunStore;
+  skillPackRegistryPath?: string;
 }
 
 export interface SessionInfo {
@@ -37,6 +38,7 @@ export interface SessionInfo {
   maxIterations?: number;
   toolMode: WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
+  skillPacks?: string[];
   isRunning: boolean;
   eventCount: number;
   metadata?: Record<string, unknown>;

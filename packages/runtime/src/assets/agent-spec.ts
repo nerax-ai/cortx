@@ -6,6 +6,7 @@ import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode } from '../session.js';
 import type { WorkspaceToolMode } from '../tool-mount.js';
 import { resolveSkillPack } from './skill-pack.js';
+import { listInstalledSkillPacks } from './skill-pack-registry.js';
 
 export const AGENT_SPEC_SCHEMA_VERSION = 1;
 
@@ -42,6 +43,7 @@ export interface DiscoveredAgentSpec {
 export interface DiscoverAgentSpecsOptions {
   roots?: string[];
   skillPacks?: string[];
+  installedSkillPackRegistryPath?: string;
   strict?: boolean;
   maxDepth?: number;
 }
@@ -82,6 +84,13 @@ export async function discoverAgentSpecs(options: DiscoverAgentSpecsOptions = {}
     const pack = await resolveSkillPack(packPath);
     for (const agentSpecPath of pack.agentSpecPaths) {
       roots.set(resolve(agentSpecPath), resolve(pack.path));
+    }
+  }
+  if (options.installedSkillPackRegistryPath) {
+    for (const pack of await listInstalledSkillPacks(options.installedSkillPackRegistryPath)) {
+      for (const agentSpecPath of pack.agentSpecPaths) {
+        roots.set(resolve(agentSpecPath), resolve(pack.path));
+      }
     }
   }
 

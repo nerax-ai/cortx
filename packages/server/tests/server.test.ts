@@ -17,6 +17,9 @@ function mockLanguageClient() {
   } as any;
 }
 
+const serverStateDir = mkdtempSync(join(tmpdir(), 'cortx-server-state-'));
+const serverFixtureDirs: string[] = [];
+
 const config: ServerConfig = {
   apiKey: 'test-key-123',
   port: 3999,
@@ -24,6 +27,7 @@ const config: ServerConfig = {
   language: mockLanguageClient(),
   model: 'test-model',
   maxSessions: 100,
+  skillPackRegistryPath: join(serverStateDir, 'skill-packs.json'),
 };
 
 const BASE = `http://localhost:${config.port}`;
@@ -86,6 +90,8 @@ describe('server routes', () => {
   afterAll(() => {
     server?.stop();
     handle?.dispose();
+    for (const dir of serverFixtureDirs) rmSync(dir, { recursive: true, force: true });
+    rmSync(serverStateDir, { recursive: true, force: true });
   });
 
   const headers = { Authorization: 'Bearer test-key-123' };
@@ -178,6 +184,79 @@ describe('server routes', () => {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: specPath }),
+      });
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({ kind: 'invalid_workspace' });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('installs and lists local SkillPacks through the server contract', async () => {
+    const fixtureDir = mkdtempSync(join(process.cwd(), '.tmp-cortx-server-pack-'));
+    serverFixtureDirs.push(fixtureDir);
+    const skillDir = join(fixtureDir, 'skills', 'review');
+    const agentsDir = join(fixtureDir, 'agents');
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(fixtureDir, 'skill-pack.json'), JSON.stringify({ name: 'server-pack' }), 'utf8');
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: review\ndescription: Review changes\n---\nServer skill: $ARGUMENTS',
+      'utf8',
+    );
+    writeFileSync(
+      join(agentsDir, 'reviewer.json'),
+      JSON.stringify({
+        name: 'server-reviewer',
+        prompt: '/review current diff',
+        capabilities: { skills: true, subAgents: false, approval: false },
+        skillPacks: ['server-pack'],
+      }),
+      'utf8',
+    );
+
+    const installRes = await fetch(`${BASE}/skill-packs/install`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fixtureDir }),
+    });
+    expect(installRes.status).toBe(201);
+    const installBody = await installRes.json();
+    expect(installBody.skillPack).toMatchObject({ id: 'server-pack', name: 'server-pack' });
+
+    const listRes = await fetch(`${BASE}/skill-packs`, { headers });
+    expect(listRes.status).toBe(200);
+    const listBody = await listRes.json();
+    expect(listBody.skillPacks.map((pack: { id: string }) => pack.id)).toContain('server-pack');
+
+    const specsRes = await fetch(`${BASE}/agent-specs`, { headers });
+    expect(specsRes.status).toBe(200);
+    const specsBody = await specsRes.json();
+    expect(specsBody.agentSpecs.map((spec: { name: string }) => spec.name)).toContain('server-reviewer');
+
+    const sessionRes = await fetch(`${BASE}/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        toolMode: 'none',
+        capabilities: { skills: true, subAgents: false, approval: false },
+        skillPacks: ['server-pack'],
+      }),
+    });
+    expect(sessionRes.status).toBe(201);
+    const sessionBody = await sessionRes.json();
+    expect(sessionBody.session.skillPacks).toEqual(['server-pack']);
+  });
+
+  test('SkillPack install rejects paths outside allowed roots', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'cortx-server-pack-outside-'));
+    try {
+      writeFileSync(join(outside, 'skill-pack.json'), JSON.stringify({ name: 'outside-pack' }), 'utf8');
+      const res = await fetch(`${BASE}/skill-packs/install`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: outside }),
       });
       expect(res.status).toBe(400);
       await expect(res.json()).resolves.toMatchObject({ kind: 'invalid_workspace' });

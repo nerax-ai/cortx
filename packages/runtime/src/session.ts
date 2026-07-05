@@ -21,6 +21,7 @@ export interface RuntimeSessionInfo {
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
+  skillPacks?: string[];
   isRunning: boolean;
   eventCount: number;
   metadata?: RuntimeSessionMetadata;
@@ -37,6 +38,7 @@ export interface RuntimeSessionCreateRequest {
   approvalMode?: RuntimeApprovalMode;
   capabilities?: RuntimeDefaultCapabilities;
   skillPaths?: string[];
+  skillPacks?: string[];
   registry?: CortxRegistry;
   plugins?: PluginConfig[];
   metadata?: RuntimeSessionMetadata;
@@ -55,6 +57,7 @@ export interface ManagedRuntimeSession {
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
+  skillPacks?: string[];
   events: AgentEvent[];
   eventEnvelopes: import('@cortx/sdk').RuntimeAgentEventEnvelope[];
   subscribers: Set<(event: AgentEvent) => void>;

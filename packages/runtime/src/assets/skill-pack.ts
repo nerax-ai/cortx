@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export const SKILL_PACK_MANIFEST_SCHEMA_VERSION = 1;
@@ -56,6 +56,10 @@ export function parseSkillPackManifest(value: unknown): SkillPackManifest {
 
 export async function resolveSkillPack(path: string): Promise<SkillPack> {
   const root = resolve(path);
+  const info = await stat(root);
+  if (!info.isDirectory()) {
+    throw new Error('SkillPack path must be a directory');
+  }
   const manifestPath = await findManifestPath(root);
   const manifest = manifestPath
     ? parseSkillPackManifest(JSON.parse(await readFile(manifestPath, 'utf8')) as unknown)

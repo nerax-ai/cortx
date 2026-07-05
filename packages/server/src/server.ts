@@ -8,13 +8,16 @@ import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope } from '@co
 import {
   CortxRuntime,
   discoverAgentSpecs,
+  installSkillPack,
   isRuntimeError,
+  listInstalledSkillPacks,
   loadAgentSpecFile,
   parseAgentSpec,
   resolveWorkspace,
   RuntimeError,
   type AgentSpec,
   type DiscoveredAgentSpec,
+  type InstalledSkillPack,
   type RuntimeApprovalMode,
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
@@ -98,6 +101,10 @@ function getRuntimeAllowedWorkspaceRoots(config: ServerConfig): string[] {
       ...(config.apiKeys ?? []).flatMap((entry) => entry.allowedWorkspaceRoots ?? []),
     ]),
   ];
+}
+
+function getSkillPackRegistryPath(config: ServerConfig): string {
+  return config.skillPackRegistryPath ?? resolve(getDefaultWorkingDirectory(config), '.cortx', 'skill-packs', 'registry.json');
 }
 
 function getPrincipalAllowedWorkspaceRoots(config: ServerConfig, principal: AuthPrincipal | undefined): string[] {
@@ -255,6 +262,7 @@ async function listAuthorizedAgentSpecs(c: Context, config: ServerConfig): Promi
   const principal = getAuthPrincipal(c);
   const discovered = await discoverAgentSpecs({
     roots: getPrincipalAllowedWorkspaceRoots(config, principal),
+    installedSkillPackRegistryPath: getSkillPackRegistryPath(config),
     strict: false,
   });
   const visible: DiscoveredAgentSpec[] = [];
@@ -269,6 +277,34 @@ async function listAuthorizedAgentSpecs(c: Context, config: ServerConfig): Promi
     }
   }
   return visible;
+}
+
+async function listAuthorizedSkillPacks(c: Context, config: ServerConfig): Promise<InstalledSkillPack[]> {
+  const principal = getAuthPrincipal(c);
+  const visible: InstalledSkillPack[] = [];
+  for (const pack of await listInstalledSkillPacks(getSkillPackRegistryPath(config))) {
+    try {
+      await authorizeWorkspace(config, principal, pack.sourcePath);
+      visible.push(pack);
+    } catch (error) {
+      if (isRuntimeError(error) && (error.kind === 'permission_denied' || error.kind === 'invalid_workspace')) continue;
+      throw error;
+    }
+  }
+  return visible;
+}
+
+async function installSkillPackFromBody(c: Context, config: ServerConfig, body: Record<string, unknown>): Promise<InstalledSkillPack> {
+  const sourcePath = assertOptionalString(body.path, 'path');
+  if (!sourcePath?.trim()) throw new RuntimeError('invalid_request', 'path is required');
+  const id = assertOptionalString(body.id, 'id');
+  const resolvedPath = resolve(getDefaultWorkingDirectory(config), sourcePath);
+  await authorizeWorkspace(config, getAuthPrincipal(c), resolvedPath);
+  return installSkillPack({
+    registryPath: getSkillPackRegistryPath(config),
+    sourcePath: resolvedPath,
+    id,
+  });
 }
 
 async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, c: Context, path: string) {
@@ -337,6 +373,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     toolMode: config.toolMode,
     approvalMode: config.approvalMode ?? 'interactive',
     durableStore: config.durableStore,
+    skillPackRegistryPath: getSkillPackRegistryPath(config),
     logger,
   });
 
@@ -388,6 +425,26 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
   app.get('/agent-specs', async (c) => {
     try {
       return c.json({ agentSpecs: await listAuthorizedAgentSpecs(c, config) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.get('/skill-packs', async (c) => {
+    try {
+      return c.json({ skillPacks: await listAuthorizedSkillPacks(c, config) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.post('/skill-packs/install', async (c) => {
+    try {
+      const body = await readOptionalJson(c);
+      const skillPack = await installSkillPackFromBody(c, config, body);
+      return c.json({ skillPack }, 201);
     } catch (error) {
       const response = errorResponse(error);
       return c.json(response.body, response.status);

@@ -8,6 +8,7 @@ import {
   AGENT_SPEC_SCHEMA_VERSION,
   CortxRuntime,
   discoverAgentSpecs,
+  installSkillPack,
   loadAgentSpecFile,
   parseAgentSpec,
 } from '../src/index';
@@ -183,6 +184,72 @@ describe('AgentSpec asset launch', () => {
     expect(specs[0].path).toBe(join(agentsDir, 'reviewer.json'));
     expect(specs[0].relativePath).toBe('packs/review/agents/reviewer.json');
     expect(specs[0].promptPreview).toContain('Review the current diff');
+  });
+
+  test('discovers AgentSpecs from installed SkillPacks', async () => {
+    const packDir = join(tmpDir, 'installed-pack');
+    const agentsDir = join(packDir, 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ name: 'installed-agents' }), 'utf8');
+    writeFileSync(
+      join(agentsDir, 'builder.json'),
+      JSON.stringify({
+        name: 'builder',
+        prompt: 'Build the requested change.',
+        toolMode: 'coding',
+        approvalMode: 'interactive',
+      }),
+      'utf8',
+    );
+    const registryPath = join(tmpDir, 'registry.json');
+    await installSkillPack({ registryPath, sourcePath: packDir });
+
+    const specs = await discoverAgentSpecs({ installedSkillPackRegistryPath: registryPath });
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toMatchObject({
+      name: 'builder',
+      relativePath: 'agents/builder.json',
+      sourceRoot: packDir,
+      toolMode: 'coding',
+      approvalMode: 'interactive',
+    });
+  });
+
+  test('launches an AgentSpec that references an installed SkillPack id', async () => {
+    const packDir = join(tmpDir, 'installed-skill-pack');
+    const skillDir = join(packDir, 'skills', 'review');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ name: 'review-pack' }), 'utf8');
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: review\ndescription: Review changes\n---\nInstalled AgentSpec skill: $ARGUMENTS',
+    );
+    const registryPath = join(tmpDir, 'registry.json');
+    await installSkillPack({ registryPath, sourcePath: packDir });
+
+    const captured: { messages?: LanguageMessage[]; tools?: unknown[] } = {};
+    const runtime = new CortxRuntime({
+      language: capturingLanguage(captured),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      skillPackRegistryPath: registryPath,
+    });
+    const session = await runtime.launchAgentSpec({
+      name: 'installed-reviewer',
+      prompt: '/review code',
+      capabilities: { skills: true, subAgents: false, approval: false },
+      skillPacks: ['review-pack'],
+    });
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+    await waitForEvent(events, 'done');
+
+    expect(session.skillPacks).toEqual(['review-pack']);
+    expect(textOf(captured.messages?.at(-1))).toContain('Installed AgentSpec skill: code');
+    runtime.dispose();
   });
 
   test('skips invalid specs by default and throws in strict discovery mode', async () => {

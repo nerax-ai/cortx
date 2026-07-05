@@ -7,7 +7,10 @@ import type { AgentEvent, LanguageMessage } from '@cortx/sdk';
 import {
   CortxRuntime,
   SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+  installSkillPack,
+  listInstalledSkillPacks,
   parseSkillPackManifest,
+  resolveSkillPackReference,
   resolveSkillPack,
 } from '../src/index';
 
@@ -117,6 +120,63 @@ describe('skill pack assets', () => {
     expect(pack.agentSpecPaths).toEqual([agentsDir]);
   });
 
+  test('installs and resolves local SkillPacks through a registry', async () => {
+    const packDir = join(tmpDir, 'installable-pack');
+    const skillsDir = join(packDir, 'skills');
+    const agentsDir = join(packDir, 'agents');
+    mkdirSync(skillsDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(packDir, 'skill-pack.json'),
+      JSON.stringify({
+        schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+        name: 'Review Pack',
+        version: '0.1.0',
+        description: 'Local review tools',
+        skillPaths: ['skills'],
+        agentSpecPaths: ['agents'],
+      }),
+      'utf8',
+    );
+    const registryPath = join(tmpDir, 'registry', 'skill-packs.json');
+
+    const installed = await installSkillPack({ registryPath, sourcePath: packDir, installedAt: 42 });
+    const listed = await listInstalledSkillPacks(registryPath);
+    const byId = await resolveSkillPackReference('review-pack', { registryPath });
+    const byName = await resolveSkillPackReference('Review Pack', { registryPath });
+    const byPath = await resolveSkillPackReference(packDir, { registryPath });
+
+    expect(installed).toMatchObject({
+      id: 'review-pack',
+      name: 'Review Pack',
+      version: '0.1.0',
+      installedAt: 42,
+      sourcePath: packDir,
+    });
+    expect(listed.map((pack) => pack.id)).toEqual(['review-pack']);
+    expect(byId.skillPaths).toEqual([skillsDir]);
+    expect(byName.agentSpecPaths).toEqual([agentsDir]);
+    expect(byPath.path).toBe(packDir);
+    await expect(resolveSkillPackReference('missing-pack', { registryPath })).rejects.toThrow('SkillPack is not installed');
+  });
+
+  test('reinstalling a SkillPack id updates the registry record', async () => {
+    const firstPackDir = join(tmpDir, 'first-pack');
+    const secondPackDir = join(tmpDir, 'second-pack');
+    mkdirSync(join(firstPackDir, 'skills'), { recursive: true });
+    mkdirSync(join(secondPackDir, 'skills'), { recursive: true });
+    writeFileSync(join(firstPackDir, 'skill-pack.json'), JSON.stringify({ name: 'first' }), 'utf8');
+    writeFileSync(join(secondPackDir, 'skill-pack.json'), JSON.stringify({ name: 'second' }), 'utf8');
+    const registryPath = join(tmpDir, 'registry.json');
+
+    await installSkillPack({ registryPath, sourcePath: firstPackDir, id: 'shared', installedAt: 1 });
+    await installSkillPack({ registryPath, sourcePath: secondPackDir, id: 'shared', installedAt: 2 });
+    const listed = await listInstalledSkillPacks(registryPath);
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ id: 'shared', name: 'second', sourcePath: secondPackDir, installedAt: 2 });
+  });
+
   test('rejects manifest asset paths that escape the pack root', async () => {
     const packDir = join(tmpDir, 'escape-pack');
     mkdirSync(packDir, { recursive: true });
@@ -196,6 +256,41 @@ describe('skill pack assets', () => {
     await waitForEvent(events, 'done');
 
     expect(textOf(captured.messages?.at(-1))).toContain('Expanded pack skill: fix bug');
+    runtime.dispose();
+  });
+
+  test('createSession enables installed SkillPacks by id', async () => {
+    const packDir = join(tmpDir, 'installed-session-pack');
+    const skillDir = join(packDir, 'skills', 'review');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: review\ndescription: Review changes\n---\nInstalled review skill: $ARGUMENTS',
+    );
+    writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ name: 'session-pack' }), 'utf8');
+    const registryPath = join(tmpDir, 'registry.json');
+    await installSkillPack({ registryPath, sourcePath: packDir });
+
+    const captured: { messages?: LanguageMessage[] } = {};
+    const runtime = new CortxRuntime({
+      language: capturingLanguage(captured),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      skillPackRegistryPath: registryPath,
+    });
+    const session = await runtime.createSession({
+      capabilities: { skills: true, subAgents: false, approval: false },
+      skillPacks: ['session-pack'],
+    });
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+    await runtime.prompt(session.id, '/review files');
+    await waitForEvent(events, 'done');
+
+    expect(runtime.getSession(session.id).skillPacks).toEqual(['session-pack']);
+    expect(textOf(captured.messages?.at(-1))).toContain('Installed review skill: files');
     runtime.dispose();
   });
 });
