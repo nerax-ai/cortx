@@ -23,10 +23,10 @@ export type {
   RuntimeSessionSnapshot,
   RuntimeSubAgentSessionSnapshot,
 } from './durable/types.js';
-export { discoverAgentSpecs, loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
+export { AGENT_SPEC_SCHEMA_VERSION, discoverAgentSpecs, loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
 export type { AgentSpec, DiscoverAgentSpecsOptions, DiscoveredAgentSpec } from './assets/agent-spec.js';
-export { resolveSkillPack } from './assets/skill-pack.js';
-export type { SkillPack } from './assets/skill-pack.js';
+export { SKILL_PACK_MANIFEST_SCHEMA_VERSION, parseSkillPackManifest, resolveSkillPack } from './assets/skill-pack.js';
+export type { SkillPack, SkillPackManifest } from './assets/skill-pack.js';
 export {
   SubAgentSessionStore,
   SkillParseError,

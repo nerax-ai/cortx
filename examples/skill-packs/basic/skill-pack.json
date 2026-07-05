@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "basic-skill-pack",
+  "version": "0.1.0",
+  "description": "A minimal file-only Cortx skill pack with one review skill and one AgentSpec.",
+  "skillPaths": ["skills"],
+  "agentSpecPaths": ["agents"],
+  "metadata": {
+    "category": "engineering",
+    "example": true
+  }
+}

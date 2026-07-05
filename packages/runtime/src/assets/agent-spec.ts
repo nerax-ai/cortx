@@ -7,7 +7,10 @@ import type { RuntimeApprovalMode } from '../session.js';
 import type { WorkspaceToolMode } from '../tool-mount.js';
 import { resolveSkillPack } from './skill-pack.js';
 
+export const AGENT_SPEC_SCHEMA_VERSION = 1;
+
 export interface AgentSpec {
+  schemaVersion?: typeof AGENT_SPEC_SCHEMA_VERSION;
   name?: string;
   prompt: string;
   system?: string;
@@ -26,6 +29,7 @@ export interface DiscoveredAgentSpec {
   path: string;
   relativePath: string;
   sourceRoot: string;
+  schemaVersion: typeof AGENT_SPEC_SCHEMA_VERSION;
   name: string;
   promptPreview: string;
   workingDirectory?: string;
@@ -47,6 +51,7 @@ export function parseAgentSpec(value: unknown): AgentSpec {
     throw new Error('AgentSpec must be an object');
   }
   const spec = value as Record<string, unknown>;
+  assertOptionalSchemaVersion(spec);
   if (typeof spec.prompt !== 'string' || !spec.prompt.trim()) {
     throw new Error('AgentSpec.prompt must be a non-empty string');
   }
@@ -59,7 +64,7 @@ export function parseAgentSpec(value: unknown): AgentSpec {
   assertOptionalStringArray(spec, 'skillPaths');
   assertOptionalStringArray(spec, 'skillPacks');
   assertOptionalCapabilities(spec);
-  return spec as unknown as AgentSpec;
+  return { ...spec, schemaVersion: spec.schemaVersion ?? AGENT_SPEC_SCHEMA_VERSION } as unknown as AgentSpec;
 }
 
 export async function loadAgentSpecFile(path: string): Promise<AgentSpec> {
@@ -95,6 +100,7 @@ export async function discoverAgentSpecs(options: DiscoverAgentSpecsOptions = {}
         path,
         relativePath: relative(sourceRoot, path) || basename(path),
         sourceRoot,
+        schemaVersion: spec.schemaVersion ?? AGENT_SPEC_SCHEMA_VERSION,
         name: spec.name?.trim() || basename(path, extname(path)),
         promptPreview: previewPrompt(spec.prompt),
         workingDirectory: spec.workingDirectory,
@@ -175,6 +181,13 @@ function shouldIgnoreDirectory(name: string): boolean {
 function previewPrompt(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, ' ').trim();
   return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
+}
+
+function assertOptionalSchemaVersion(spec: Record<string, unknown>): void {
+  if (spec.schemaVersion === undefined) return;
+  if (spec.schemaVersion !== AGENT_SPEC_SCHEMA_VERSION) {
+    throw new Error(`AgentSpec.schemaVersion must be ${AGENT_SPEC_SCHEMA_VERSION}`);
+  }
 }
 
 function assertOptionalString(spec: Record<string, unknown>, key: string): void {

@@ -4,7 +4,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, LanguageMessage } from '@cortx/sdk';
-import { CortxRuntime, resolveSkillPack } from '../src/index';
+import {
+  CortxRuntime,
+  SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+  parseSkillPackManifest,
+  resolveSkillPack,
+} from '../src/index';
 
 let tmpDir: string;
 
@@ -36,6 +41,112 @@ function textOf(message: LanguageMessage | undefined): string {
 }
 
 describe('skill pack assets', () => {
+  test('validates SkillPack manifests', () => {
+    expect(parseSkillPackManifest({ name: 'basic' })).toMatchObject({
+      schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+      name: 'basic',
+    });
+    expect(
+      parseSkillPackManifest({
+        schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+        name: 'basic',
+        skillPaths: ['skills'],
+        agentSpecPaths: ['agents'],
+        metadata: { category: 'engineering' },
+      }),
+    ).toMatchObject({
+      schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+      skillPaths: ['skills'],
+      agentSpecPaths: ['agents'],
+      metadata: { category: 'engineering' },
+    });
+    expect(() => parseSkillPackManifest({ schemaVersion: 999 })).toThrow('SkillPack.schemaVersion');
+    expect(() => parseSkillPackManifest({ name: 1 })).toThrow('SkillPack.name');
+    expect(() => parseSkillPackManifest({ skillPaths: [1] })).toThrow('SkillPack.skillPaths');
+    expect(() => parseSkillPackManifest({ metadata: [] })).toThrow('SkillPack.metadata');
+  });
+
+  test('resolves pack metadata from a top-level manifest', async () => {
+    const packDir = join(tmpDir, 'manifest-pack');
+    const skillsDir = join(packDir, 'assets', 'skills');
+    const agentsDir = join(packDir, 'assets', 'agents');
+    mkdirSync(skillsDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(packDir, 'skill-pack.json'),
+      JSON.stringify({
+        schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+        name: 'manifest-pack',
+        version: '0.1.0',
+        description: 'Manifest backed pack',
+        skillPaths: ['assets/skills'],
+        agentSpecPaths: ['assets/agents'],
+        metadata: { official: true },
+      }),
+      'utf8',
+    );
+
+    const pack = await resolveSkillPack(packDir);
+
+    expect(pack).toMatchObject({
+      schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+      name: 'manifest-pack',
+      version: '0.1.0',
+      description: 'Manifest backed pack',
+      metadata: { official: true },
+    });
+    expect(pack.manifestPath).toBe(join(packDir, 'skill-pack.json'));
+    expect(pack.skillPaths).toEqual([skillsDir]);
+    expect(pack.agentSpecPaths).toEqual([agentsDir]);
+  });
+
+  test('resolves hidden manifests and falls back to conventional asset paths', async () => {
+    const packDir = join(tmpDir, 'hidden-pack');
+    const skillsDir = join(packDir, 'skills');
+    const agentsDir = join(packDir, 'agents');
+    mkdirSync(skillsDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(join(packDir, '.cortx'), { recursive: true });
+    writeFileSync(join(packDir, '.cortx', 'skill-pack.json'), JSON.stringify({ name: 'hidden-pack' }), 'utf8');
+
+    const pack = await resolveSkillPack(packDir);
+
+    expect(pack.manifestPath).toBe(join(packDir, '.cortx', 'skill-pack.json'));
+    expect(pack.name).toBe('hidden-pack');
+    expect(pack.skillPaths).toEqual([skillsDir]);
+    expect(pack.agentSpecPaths).toEqual([agentsDir]);
+  });
+
+  test('rejects manifest asset paths that escape the pack root', async () => {
+    const packDir = join(tmpDir, 'escape-pack');
+    mkdirSync(packDir, { recursive: true });
+    writeFileSync(
+      join(packDir, 'skill-pack.json'),
+      JSON.stringify({ skillPaths: ['../outside'], agentSpecPaths: [] }),
+      'utf8',
+    );
+
+    await expect(resolveSkillPack(packDir)).rejects.toThrow('SkillPack.skillPaths');
+  });
+
+  test('allows manifest asset paths to point at the pack root', async () => {
+    const packDir = join(tmpDir, 'root-pack');
+    mkdirSync(packDir, { recursive: true });
+    writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ skillPaths: ['.'], agentSpecPaths: [] }), 'utf8');
+
+    const pack = await resolveSkillPack(packDir);
+
+    expect(pack.skillPaths).toEqual([packDir]);
+  });
+
+  test('rejects unsupported SkillPack manifest versions', async () => {
+    const packDir = join(tmpDir, 'future-pack');
+    mkdirSync(packDir, { recursive: true });
+    writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ schemaVersion: 999 }), 'utf8');
+
+    await expect(resolveSkillPack(packDir)).rejects.toThrow('SkillPack.schemaVersion');
+  });
+
   test('resolves skills and launches a skill-backed AgentSpec without core changes', async () => {
     const packDir = join(tmpDir, 'pack');
     const skillDir = join(packDir, 'skills', 'commit');
@@ -46,9 +157,24 @@ describe('skill pack assets', () => {
       join(skillDir, 'SKILL.md'),
       '---\nname: commit\ndescription: Commit changes\n---\nExpanded pack skill: $ARGUMENTS',
     );
-    writeFileSync(join(agentsDir, 'commit-agent.json'), JSON.stringify({ prompt: '/commit changes' }), 'utf8');
+    writeFileSync(
+      join(packDir, 'skill-pack.json'),
+      JSON.stringify({
+        schemaVersion: SKILL_PACK_MANIFEST_SCHEMA_VERSION,
+        name: 'commit-pack',
+        skillPaths: ['skills'],
+        agentSpecPaths: ['agents'],
+      }),
+      'utf8',
+    );
+    writeFileSync(
+      join(agentsDir, 'commit-agent.json'),
+      JSON.stringify({ schemaVersion: 1, prompt: '/commit changes' }),
+      'utf8',
+    );
 
     const pack = await resolveSkillPack(packDir);
+    expect(pack.name).toBe('commit-pack');
     expect(pack.skillPaths).toEqual([join(packDir, 'skills')]);
     expect(pack.agentSpecPaths).toEqual([agentsDir]);
 

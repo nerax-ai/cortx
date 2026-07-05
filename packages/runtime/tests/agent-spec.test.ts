@@ -4,7 +4,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, LanguageMessage } from '@cortx/sdk';
-import { CortxRuntime, discoverAgentSpecs, loadAgentSpecFile, parseAgentSpec } from '../src/index';
+import {
+  AGENT_SPEC_SCHEMA_VERSION,
+  CortxRuntime,
+  discoverAgentSpecs,
+  loadAgentSpecFile,
+  parseAgentSpec,
+} from '../src/index';
 
 let tmpDir: string;
 
@@ -48,7 +54,15 @@ function textOf(message: LanguageMessage | undefined): string {
 
 describe('AgentSpec asset launch', () => {
   test('validates prompt-only specs', () => {
-    expect(parseAgentSpec({ prompt: 'hello' })).toMatchObject({ prompt: 'hello' });
+    expect(parseAgentSpec({ prompt: 'hello' })).toMatchObject({
+      schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
+      prompt: 'hello',
+    });
+    expect(parseAgentSpec({ schemaVersion: AGENT_SPEC_SCHEMA_VERSION, prompt: 'hello' })).toMatchObject({
+      schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
+      prompt: 'hello',
+    });
+    expect(() => parseAgentSpec({ schemaVersion: 999, prompt: 'hello' })).toThrow('AgentSpec.schemaVersion');
     expect(() => parseAgentSpec({ prompt: '' })).toThrow('AgentSpec.prompt');
     expect(() => parseAgentSpec({ prompt: 'ok', skillPaths: [1] })).toThrow('AgentSpec.skillPaths');
     expect(() => parseAgentSpec({ prompt: 'ok', toolMode: 'everything' })).toThrow('AgentSpec.toolMode');
@@ -108,6 +122,7 @@ describe('AgentSpec asset launch', () => {
     writeFileSync(
       specPath,
       JSON.stringify({
+        schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
         name: 'file-agent',
         prompt: 'file task',
         toolMode: 'none',
@@ -158,6 +173,7 @@ describe('AgentSpec asset launch', () => {
 
     expect(specs).toHaveLength(1);
     expect(specs[0]).toMatchObject({
+      schemaVersion: AGENT_SPEC_SCHEMA_VERSION,
       name: 'reviewer',
       workingDirectory: tmpDir,
       toolMode: 'read-only',
@@ -176,6 +192,15 @@ describe('AgentSpec asset launch', () => {
 
     await expect(discoverAgentSpecs({ roots: [tmpDir] })).resolves.toEqual([]);
     await expect(discoverAgentSpecs({ roots: [tmpDir], strict: true })).rejects.toThrow('Invalid AgentSpec');
+  });
+
+  test('reports unsupported AgentSpec schema versions in strict discovery mode', async () => {
+    const agentsDir = join(tmpDir, 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(agentsDir, 'future.json'), JSON.stringify({ schemaVersion: 999, prompt: 'future' }), 'utf8');
+
+    await expect(discoverAgentSpecs({ roots: [tmpDir] })).resolves.toEqual([]);
+    await expect(discoverAgentSpecs({ roots: [tmpDir], strict: true })).rejects.toThrow('AgentSpec.schemaVersion');
   });
 });
 
