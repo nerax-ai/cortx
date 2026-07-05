@@ -49,6 +49,7 @@ AgentSpec/SkillPack 已有 runtime API，但缺文件启动、server 入口和�
 - R4. Unsupported or invalid persisted records must be skipped or surfaced as typed runtime errors without corrupting valid sessions.
 - R14. Runtime must durably persist runtime event envelopes separately from core checkpoints.
 - R15. Restored sessions must hydrate persisted event envelope history so server/frontends can replay session history after restart.
+- R16. Runtime durable file records must pass through a centralized migration layer so older compatible records can be upgraded instead of silently skipped.
 
 **Background and sub-agent lifecycle**
 
@@ -86,6 +87,7 @@ AgentSpec/SkillPack 已有 runtime API，但缺文件启动、server 入口和�
 - KTD4. Background child cancellation uses runtime-owned in-memory abort callbacks plus persisted lifecycle snapshots. Persisted snapshots restore visibility, while live callbacks handle active process cancellation.
 - KTD5. AgentSpec file launch goes through the same `launchAgentSpec()` path as inline launch. There is still one runtime session runner.
 - KTD6. Durable event replay belongs to runtime host storage, not core checkpoint state. Core checkpoints stay focused on safe resume state; runtime event envelope snapshots serve UI/server replay after process restart.
+- KTD7. Durable snapshot migration is an IO-bound runtime concern. FileDurableRunStore parses every JSON record through centralized migration functions, while runtime only receives current schema snapshots.
 
 ### High-Level Technical Design
 
@@ -167,6 +169,16 @@ stateDiagram-v2
 - **Test scenarios:** Event envelope snapshots survive new store instances; persisted error events restore their error message; deleting a runtime session removes its durable events; restored runtime sessions replay pre-restart envelope history and continue with the next run id.
 - **Verification:** Durable store and durable resume tests prove event replay survives process-style restart.
 
+### U7. Durable snapshot schema migration
+
+- **Goal:** Add a durable snapshot migration layer for runtime session, sub-agent, and event envelope records.
+- **Requirements:** R16.
+- **Dependencies:** U1, U6.
+- **Files:** `packages/runtime/src/durable/migrations.ts`, `packages/runtime/src/durable/file-store.ts`, `packages/runtime/src/durable/types.ts`, `packages/runtime/src/runtime.ts`, `packages/runtime/tests/durable-store.test.ts`.
+- **Approach:** Move record parsing out of `FileDurableRunStore` into migration helpers. Current v1 snapshots remain no-op parses; legacy v0 runtime snapshots migrate to current schema with conservative defaults. Event replay methods are optional on the runtime durable store contract so older custom stores still support session/sub-agent persistence.
+- **Test scenarios:** A v0 runtime session record migrates to current schema; v0 sub-agent and event records migrate; invalid records are still skipped; a runtime durable store without optional event replay methods is still accepted by the guard.
+- **Verification:** Durable store tests prove legacy records are migrated and optional event replay does not break custom durable stores.
+
 ### U4. AgentSpec file and server launch endpoint
 
 - **Goal:** Make AgentSpec usable as a product asset from runtime and remote clients.
@@ -195,6 +207,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | `bun test packages/runtime/tests/durable-store.test.ts packages/runtime/tests/durable-resume.test.ts` | U1, U2 | File durable store and restart-style restore pass. |
 | `bun test packages/runtime/tests/durable-store.test.ts packages/runtime/tests/durable-resume.test.ts` | U6 | Durable runtime event replay survives restart and preserves envelope ordering. |
+| `bun test packages/runtime/tests/durable-store.test.ts` | U7 | Durable snapshot migration upgrades legacy records and preserves custom-store compatibility. |
 | `bun test packages/runtime/tests/sub-agent.test.ts packages/runtime/tests/sub-agent-session.test.ts` | U3 | Parent abort and child snapshot lifecycle pass. |
 | `bun test packages/runtime/tests/agent-spec.test.ts packages/server/tests/server.test.ts packages/sdk/tests/exports.test.ts` | U4, U5 | Asset launch, server endpoint, and SDK helper exports pass. |
 | `bun run lint` | Whole repo | TypeScript no-emit succeeds. |
@@ -208,6 +221,7 @@ stateDiagram-v2
 - File-backed durable store is exported and covered by tests.
 - Runtime can restore durable sessions from a fresh process-style runtime instance using persisted metadata and checkpoints.
 - Runtime can restore durable event envelope history for server/frontend replay after process restart.
+- Runtime durable file records are parsed through centralized migration helpers before reaching runtime state.
 - Runtime abort/destroy cancels live background sub-agents where cooperative cancellation is available.
 - Sub-agent lifecycle summaries are persisted and hydrated for restored sessions.
 - AgentSpec can launch from JSON file and through server API.

@@ -1,16 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import type { AgentRunCheckpoint } from '@cortx/sdk';
-import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION } from '@cortx/sdk';
 import {
-  RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
-  RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
-  RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
-  type RuntimeDurableRunStore,
-  type RuntimeEventEnvelopeSnapshot,
-  type RuntimeSessionSnapshot,
-  type RuntimeSubAgentSessionSnapshot,
+  parseAgentRunCheckpoint,
+  parseRuntimeEventEnvelopeSnapshot,
+  parseRuntimeSessionSnapshot,
+  parseRuntimeSubAgentSessionSnapshot,
+  serializeRuntimeEventEnvelopeSnapshot,
+} from './migrations.js';
+import type { AgentRunCheckpoint } from '@cortx/sdk';
+import type {
+  RuntimeDurableRunStore,
+  RuntimeEventEnvelopeSnapshot,
+  RuntimeSessionSnapshot,
+  RuntimeSubAgentSessionSnapshot,
 } from './types.js';
 
 export interface FileDurableRunStoreOptions {
@@ -30,11 +33,11 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async loadCheckpoint(sessionId: string): Promise<AgentRunCheckpoint | undefined> {
-    return readJson(this.checkpointPath(sessionId), isAgentRunCheckpoint);
+    return readJson(this.checkpointPath(sessionId), parseAgentRunCheckpoint);
   }
 
   async listCheckpoints(): Promise<AgentRunCheckpoint[]> {
-    return listJson(join(this.root, 'checkpoints'), isAgentRunCheckpoint);
+    return listJson(join(this.root, 'checkpoints'), parseAgentRunCheckpoint);
   }
 
   async deleteCheckpoint(sessionId: string): Promise<void> {
@@ -46,11 +49,11 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async loadRuntimeSession(sessionId: string): Promise<RuntimeSessionSnapshot | undefined> {
-    return readJson(this.sessionPath(sessionId), isRuntimeSessionSnapshot);
+    return readJson(this.sessionPath(sessionId), parseRuntimeSessionSnapshot);
   }
 
   async listRuntimeSessions(): Promise<RuntimeSessionSnapshot[]> {
-    return listJson(join(this.root, 'sessions'), isRuntimeSessionSnapshot);
+    return listJson(join(this.root, 'sessions'), parseRuntimeSessionSnapshot);
   }
 
   async deleteRuntimeSession(sessionId: string): Promise<void> {
@@ -66,7 +69,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
     const next = previous
       .catch(() => {})
       .then(async () => {
-        const existing = await readJson(path, isRuntimeSubAgentSessionSnapshot);
+        const existing = await readJson(path, parseRuntimeSubAgentSessionSnapshot);
         if (existing && existing.status !== 'running' && snapshot.status === 'running') return;
         await writeJson(path, snapshot);
       });
@@ -78,7 +81,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async listSubAgentSessions(parentSessionId: string): Promise<RuntimeSubAgentSessionSnapshot[]> {
-    return listJson(join(this.root, 'sub-agents', encodeId(parentSessionId)), isRuntimeSubAgentSessionSnapshot);
+    return listJson(join(this.root, 'sub-agents', encodeId(parentSessionId)), parseRuntimeSubAgentSessionSnapshot);
   }
 
   async deleteSubAgentSessions(parentSessionId: string): Promise<void> {
@@ -86,11 +89,11 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): Promise<void> {
-    await writeJson(this.eventEnvelopePath(snapshot.sessionId, snapshot.sequence), serializeEnvelopeSnapshot(snapshot));
+    await writeJson(this.eventEnvelopePath(snapshot.sessionId, snapshot.sequence), serializeRuntimeEventEnvelopeSnapshot(snapshot));
   }
 
   async listEventEnvelopes(sessionId: string): Promise<RuntimeEventEnvelopeSnapshot[]> {
-    const records = await listJson(join(this.root, 'events', encodeId(sessionId)), isRuntimeEventEnvelopeSnapshot);
+    const records = await listJson(join(this.root, 'events', encodeId(sessionId)), parseRuntimeEventEnvelopeSnapshot);
     return records.sort((a, b) => a.sequence - b.sequence);
   }
 
@@ -126,16 +129,16 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await rename(temp, path);
 }
 
-async function readJson<T>(path: string, guard: (value: unknown) => value is T): Promise<T | undefined> {
+async function readJson<T>(path: string, parse: (value: unknown) => T | undefined): Promise<T | undefined> {
   try {
     const value = JSON.parse(await readFile(path, 'utf8')) as unknown;
-    return guard(value) ? value : undefined;
+    return parse(value);
   } catch {
     return undefined;
   }
 }
 
-async function listJson<T>(dir: string, guard: (value: unknown) => value is T): Promise<T[]> {
+async function listJson<T>(dir: string, parse: (value: unknown) => T | undefined): Promise<T[]> {
   let files: string[];
   try {
     files = await readdir(dir);
@@ -146,95 +149,8 @@ async function listJson<T>(dir: string, guard: (value: unknown) => value is T): 
   const records: T[] = [];
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
-    const record = await readJson(join(dir, file), guard);
+    const record = await readJson(join(dir, file), parse);
     if (record) records.push(record);
   }
   return records;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isAgentRunCheckpoint(value: unknown): value is AgentRunCheckpoint {
-  if (!isObject(value)) return false;
-  return (
-    value.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION &&
-    typeof value.sessionId === 'string' &&
-    typeof value.iteration === 'number' &&
-    isObject(value.state)
-  );
-}
-
-function isRuntimeSessionSnapshot(value: unknown): value is RuntimeSessionSnapshot {
-  if (!isObject(value)) return false;
-  return (
-    value.schemaVersion === RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION &&
-    typeof value.id === 'string' &&
-    typeof value.createdAt === 'number' &&
-    typeof value.lastActivityAt === 'number' &&
-    typeof value.workingDirectory === 'string' &&
-    typeof value.model === 'string' &&
-    typeof value.toolMode === 'string' &&
-    typeof value.approvalMode === 'string' &&
-    isObject(value.capabilities) &&
-    typeof value.runId === 'number' &&
-    typeof value.nextEventSequence === 'number'
-  );
-}
-
-function isRuntimeSubAgentSessionSnapshot(value: unknown): value is RuntimeSubAgentSessionSnapshot {
-  if (!isObject(value)) return false;
-  return (
-    value.schemaVersion === RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION &&
-    typeof value.runId === 'string' &&
-    typeof value.parentSessionId === 'string' &&
-    typeof value.toolCallId === 'string' &&
-    typeof value.description === 'string' &&
-    typeof value.isBackground === 'boolean' &&
-    (value.status === 'running' || value.status === 'completed' || value.status === 'error') &&
-    typeof value.output === 'string' &&
-    typeof value.iterations === 'number' &&
-    typeof value.toolCallCount === 'number' &&
-    typeof value.startedAt === 'number'
-  );
-}
-
-function serializeEnvelopeSnapshot(snapshot: RuntimeEventEnvelopeSnapshot): unknown {
-  if (snapshot.event.type !== 'error') return snapshot;
-  return {
-    ...snapshot,
-    event: {
-      ...snapshot.event,
-      error: {
-        name: snapshot.event.error.name,
-        message: snapshot.event.error.message,
-      },
-    },
-  };
-}
-
-function isRuntimeEventEnvelopeSnapshot(value: unknown): value is RuntimeEventEnvelopeSnapshot {
-  if (!isObject(value)) return false;
-  if (
-    value.schemaVersion !== RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION ||
-    typeof value.sequence !== 'number' ||
-    typeof value.timestamp !== 'number' ||
-    typeof value.sessionId !== 'string' ||
-    typeof value.runId !== 'number' ||
-    !isObject(value.event) ||
-    typeof value.event.type !== 'string'
-  ) {
-    return false;
-  }
-
-  if (value.event.type === 'error') {
-    const error = value.event.error;
-    if (error instanceof Error) return true;
-    if (!isObject(error) || typeof error.message !== 'string') return false;
-    const restored = new Error(error.message);
-    if (typeof error.name === 'string') restored.name = error.name;
-    value.event.error = restored;
-  }
-  return true;
 }

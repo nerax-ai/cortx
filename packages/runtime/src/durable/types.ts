@@ -53,9 +53,9 @@ export interface RuntimeDurableRunStore extends AgentDurableRunStore {
   saveSubAgentSession(snapshot: RuntimeSubAgentSessionSnapshot): void | Promise<void>;
   listSubAgentSessions(parentSessionId: string): RuntimeSubAgentSessionSnapshot[] | Promise<RuntimeSubAgentSessionSnapshot[]>;
   deleteSubAgentSessions(parentSessionId: string): void | Promise<void>;
-  saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): void | Promise<void>;
-  listEventEnvelopes(sessionId: string): RuntimeEventEnvelopeSnapshot[] | Promise<RuntimeEventEnvelopeSnapshot[]>;
-  deleteEventEnvelopes(sessionId: string): void | Promise<void>;
+  saveEventEnvelope?(snapshot: RuntimeEventEnvelopeSnapshot): void | Promise<void>;
+  listEventEnvelopes?(sessionId: string): RuntimeEventEnvelopeSnapshot[] | Promise<RuntimeEventEnvelopeSnapshot[]>;
+  deleteEventEnvelopes?(sessionId: string): void | Promise<void>;
 }
 
 export function isRuntimeDurableRunStore(store: AgentDurableRunStore | undefined): store is RuntimeDurableRunStore {
@@ -69,9 +69,6 @@ export function isRuntimeDurableRunStore(store: AgentDurableRunStore | undefined
       typeof (store as RuntimeDurableRunStore).deleteRuntimeSession === 'function' &&
       typeof (store as RuntimeDurableRunStore).saveSubAgentSession === 'function' &&
       typeof (store as RuntimeDurableRunStore).listSubAgentSessions === 'function' &&
-      typeof (store as RuntimeDurableRunStore).deleteSubAgentSessions === 'function' &&
-      typeof (store as RuntimeDurableRunStore).saveEventEnvelope === 'function' &&
-      typeof (store as RuntimeDurableRunStore).listEventEnvelopes === 'function' &&
-      typeof (store as RuntimeDurableRunStore).deleteEventEnvelopes === 'function',
+      typeof (store as RuntimeDurableRunStore).deleteSubAgentSessions === 'function',
   );
 }

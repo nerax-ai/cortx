@@ -75,6 +75,10 @@ function childSnapshot(parentSessionId: string): RuntimeSubAgentSessionSnapshot 
   };
 }
 
+function encodedId(value: string): string {
+  return Buffer.from(value).toString('base64url');
+}
+
 function eventSnapshot(sessionId: string, sequence: number): RuntimeEventEnvelopeSnapshot {
   return {
     schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
@@ -125,6 +129,81 @@ describe('FileDurableRunStore', () => {
     expect(await store.listEventEnvelopes('session-a')).toEqual([]);
   });
 
+  test('migrates legacy runtime durable snapshots to the current schema', async () => {
+    const store = new FileDurableRunStore(tmpDir);
+    mkdirSync(join(tmpDir, 'sessions'), { recursive: true });
+    mkdirSync(join(tmpDir, 'sub-agents', encodedId('legacy-session')), { recursive: true });
+    mkdirSync(join(tmpDir, 'events', encodedId('legacy-session')), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'sessions', `${encodedId('legacy-session')}.json`),
+      JSON.stringify({
+        schemaVersion: 0,
+        id: 'legacy-session',
+        createdAt: 10,
+        lastActivityAt: 20,
+        workingDirectory: tmpDir,
+        model: 'legacy-model',
+        metadata: { migrated: true },
+      }),
+      'utf8',
+    );
+    writeFileSync(
+      join(tmpDir, 'sub-agents', encodedId('legacy-session'), `${encodedId('agent-call')}.json`),
+      JSON.stringify({
+        schemaVersion: 0,
+        parentSessionId: 'legacy-session',
+        toolCallId: 'agent-call',
+        description: 'legacy child',
+        isBackground: true,
+        status: 'completed',
+        output: 'legacy output',
+        iterations: 2,
+        toolCallCount: 3,
+        startedAt: 30,
+        completedAt: 40,
+      }),
+      'utf8',
+    );
+    writeFileSync(
+      join(tmpDir, 'events', encodedId('legacy-session'), '0000000000000007.json'),
+      JSON.stringify({
+        schemaVersion: 0,
+        sequence: 7,
+        timestamp: 70,
+        sessionId: 'legacy-session',
+        runId: 1,
+        event: { type: 'text', content: 'legacy replay' },
+      }),
+      'utf8',
+    );
+
+    expect(await store.loadRuntimeSession('legacy-session')).toMatchObject({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: 'legacy-session',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      runId: 0,
+      nextEventSequence: 0,
+      metadata: { migrated: true },
+    });
+    expect(await store.listSubAgentSessions('legacy-session')).toMatchObject([
+      {
+        schemaVersion: RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
+        runId: 'legacy-session:agent-call',
+        status: 'completed',
+        output: 'legacy output',
+      },
+    ]);
+    expect(await store.listEventEnvelopes('legacy-session')).toMatchObject([
+      {
+        schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+        sequence: 7,
+        event: { type: 'text', content: 'legacy replay' },
+      },
+    ]);
+  });
+
   test('serializes sub-agent snapshot writes so completed status wins', async () => {
     const store = new FileDurableRunStore(tmpDir);
     const running = childSnapshot('session-a');
@@ -163,6 +242,17 @@ describe('FileDurableRunStore', () => {
 
   test('runtime store guard requires the full host-level contract', () => {
     const store = new FileDurableRunStore(tmpDir);
+    const storeWithoutEventReplay = {
+      saveCheckpoint: async () => {},
+      loadCheckpoint: async () => undefined,
+      saveRuntimeSession: async () => {},
+      loadRuntimeSession: async () => undefined,
+      listRuntimeSessions: async () => [],
+      deleteRuntimeSession: async () => {},
+      saveSubAgentSession: async () => {},
+      listSubAgentSessions: async () => [],
+      deleteSubAgentSessions: async () => {},
+    };
     const partialStore = {
       saveCheckpoint: async () => {},
       loadCheckpoint: async () => undefined,
@@ -171,6 +261,7 @@ describe('FileDurableRunStore', () => {
     };
 
     expect(isRuntimeDurableRunStore(store)).toBe(true);
+    expect(isRuntimeDurableRunStore(storeWithoutEventReplay)).toBe(true);
     expect(isRuntimeDurableRunStore(partialStore)).toBe(false);
   });
 });

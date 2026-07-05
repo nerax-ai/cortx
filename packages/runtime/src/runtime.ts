@@ -287,7 +287,9 @@ export class CortxRuntime {
       session.runId = snapshot.runId;
       session.nextEventSequence = snapshot.nextEventSequence;
       session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
-      this.restoreSessionEventHistory(session, await store.listEventEnvelopes(snapshot.id));
+      if (store.listEventEnvelopes) {
+        this.restoreSessionEventHistory(session, await store.listEventEnvelopes(snapshot.id));
+      }
       await this.persistRuntimeSession(session);
       restored.push(this.info(session));
 
@@ -599,7 +601,7 @@ export class CortxRuntime {
 
   private async persistEventEnvelope(envelope: RuntimeAgentEventEnvelope): Promise<void> {
     const store = this.runtimeDurableStore();
-    if (!store) return;
+    if (!store?.saveEventEnvelope) return;
     try {
       await store.saveEventEnvelope(this.eventEnvelopeSnapshot(envelope));
     } catch (error) {

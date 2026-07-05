@@ -17,7 +17,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 ## 2026-07-05 最新审计更新
 
-截至本轮工作，已经关闭本文件原先最硬的 P0/P1 后端产品化缺口，并补上一个 P2 持久化 replay 缺口：
+截至本轮工作，已经关闭本文件原先最硬的 P0/P1 后端产品化缺口，并补上两个 P2 运维缺口：
 
 - P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
 - P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
@@ -25,17 +25,18 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，server 暴露 `POST /agent-specs/launch`，Web bridge 与 TUI remote client 可直接调用该 endpoint；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
+- P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
 
 仍然没有被这轮完全关闭的项：
 
 - TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连、approval + abort/resume + sub-agent 组合流程。
-- schema migration、多用户 server 权限模型、长会话压测和 streaming-time token preemption 仍属于后续运维级增强。
+- 多用户 server 权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强。
 - `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`757 pass / 0 fail / 2140 expect`
+- 当前全量测试：`bun test` 通过，`758 pass / 0 fail / 2144 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -61,11 +62,10 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 ### 当前状态
 
-已关闭 P0。Runtime 已经有 `FileDurableRunStore`、checkpoint schema、`sessionId + runId` 语义、runtime session snapshot、sub-agent snapshot、event envelope snapshot，以及 `restoreDurableSessions({ autoResume })`。
+已关闭 P0。Runtime 已经有 `FileDurableRunStore`、checkpoint schema、`sessionId + runId` 语义、runtime session snapshot、sub-agent snapshot、event envelope snapshot、durable snapshot migration layer，以及 `restoreDurableSessions({ autoResume })`。
 
 ### 缺口
 
-- 缺 schemaVersion migration 策略。
 - 缺 sqlite/database backend；当前 file backend 足够支撑本地产品阶段。
 
 ### 后续验收
@@ -211,7 +211,7 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 ### 缺口
 
-- Runtime event history 已 bounded，真实 file-backed durable event envelope store 已落地；还缺数据库/压缩/归档策略。
+- Runtime event history 已 bounded，真实 file-backed durable event envelope store 与 snapshot migration layer 已落地；还缺数据库/压缩/归档策略。
 - Long-running session 的内存、timer、pending request、sub-agent store 需要压测。
 - Streaming token budget 目前仍以后验 usage 为主，缺 streaming-time preemption。
 - Server 多用户、多 token、多 workspace root 的权限模型还只是本地单用户级别。
@@ -226,7 +226,7 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 1. 做一次真人端到端 dogfood：TUI local、TUI remote、Web remote。
 2. 基于 dogfood 修 TUI 体验和 Web 基础产品能力。
-3. 补 durable schema migration、长会话压测和 streaming-time token preemption。
+3. 补长会话压测、streaming-time token preemption 和多用户权限模型。
 4. 打磨 SDK helper、类型测试、官方插件开发手册。
 5. 产品化 AgentSpec / SkillPack 的安装、发现、选择器和更多官方示例入口。
 
