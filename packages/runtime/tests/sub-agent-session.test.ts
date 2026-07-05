@@ -154,4 +154,28 @@ describe('SubAgentSessionStore', () => {
 
     expect(aborted).toEqual(['running:stop']);
   });
+
+  test('terminal child sessions clear abort handlers while completed history stays bounded', () => {
+    const store = new SubAgentSessionStore(2);
+    const aborted: string[] = [];
+
+    store.create('running', 'running child', true, 'parent');
+    store.registerAbort('running', (reason) => aborted.push(`running:${reason}`));
+
+    for (let index = 1; index <= 4; index++) {
+      const id = `done-${index}`;
+      store.create(id, `completed child ${index}`, true, 'parent');
+      store.registerAbort(id, (reason) => aborted.push(`${id}:${reason}`));
+      store.complete(id, index === 4);
+    }
+
+    store.abortRunning('stop');
+
+    expect(aborted).toEqual(['running:stop']);
+    expect(store.get('running')).toBeDefined();
+    expect(store.get('done-1')).toBeUndefined();
+    expect(store.get('done-2')).toBeUndefined();
+    expect(store.get('done-3')).toMatchObject({ status: 'completed' });
+    expect(store.get('done-4')).toMatchObject({ status: 'error' });
+  });
 });
