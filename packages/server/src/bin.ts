@@ -13,6 +13,7 @@ import {
   type WorkspaceToolMode,
 } from '@cortx/runtime';
 import { createServerRuntime } from './server.js';
+import type { ServerAuthKey } from './auth.js';
 
 interface CortxConfig {
   model: string;
@@ -20,6 +21,7 @@ interface CortxConfig {
   maxIterations?: number;
   workingDirectory?: string;
   allowedWorkspaceRoots?: string[];
+  apiKeys?: ServerAuthKey[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
   plugins?: string[];
@@ -94,6 +96,7 @@ async function main() {
     maxIterations: config.maxIterations,
     registry,
     plugins: config.agentPlugins,
+    apiKeys: config.apiKeys,
     defaultWorkingDirectory,
     allowedWorkspaceRoots,
     toolMode: config.toolMode ?? 'all',

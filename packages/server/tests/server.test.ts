@@ -456,3 +456,190 @@ describe('server logging', () => {
     expect(handle.runtime.listSessions()).toEqual([]);
   });
 });
+
+describe('server scoped API keys', () => {
+  test('scopes session create/list/access/action routes by API key workspace roots', async () => {
+    const rootA = mkdtempSync(join(tmpdir(), 'cortx-server-root-a-'));
+    const rootB = mkdtempSync(join(tmpdir(), 'cortx-server-root-b-'));
+    const handle = createServerRuntime({
+      ...config,
+      apiKey: 'admin-key',
+      defaultWorkingDirectory: rootA,
+      allowedWorkspaceRoots: [rootA],
+      apiKeys: [
+        { id: 'project-a', key: 'key-a', allowedWorkspaceRoots: [rootA], toolMode: 'read-only', approvalMode: 'interactive' },
+        { id: 'project-b', key: 'key-b', allowedWorkspaceRoots: [rootB], toolMode: 'all', approvalMode: 'full-access' },
+      ],
+    });
+
+    try {
+      const headersA = { Authorization: 'Bearer key-a', 'Content-Type': 'application/json' };
+      const headersB = { Authorization: 'Bearer key-b', 'Content-Type': 'application/json' };
+
+      const sessionARes = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({ workingDirectory: rootA }),
+      });
+      const sessionBRes = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: headersB,
+        body: JSON.stringify({ workingDirectory: rootB }),
+      });
+      expect(sessionARes.status).toBe(201);
+      expect(sessionBRes.status).toBe(201);
+
+      const sessionA = ((await sessionARes.json()) as { session: { id: string; toolMode: string; approvalMode: string } }).session;
+      const sessionB = ((await sessionBRes.json()) as { session: { id: string; toolMode: string; approvalMode: string } }).session;
+      expect(sessionA.toolMode).toBe('read-only');
+      expect(sessionA.approvalMode).toBe('interactive');
+      expect(sessionB.toolMode).toBe('all');
+      expect(sessionB.approvalMode).toBe('full-access');
+
+      const deniedCreate = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({ workingDirectory: rootB }),
+      });
+      expect(deniedCreate.status).toBe(403);
+      await expect(deniedCreate.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const listA = await handle.app.request('/sessions', { headers: { Authorization: 'Bearer key-a' } });
+      const visibleA = ((await listA.json()) as { sessions: Array<{ id: string }> }).sessions;
+      expect(visibleA.map((item) => item.id)).toContain(sessionA.id);
+      expect(visibleA.map((item) => item.id)).not.toContain(sessionB.id);
+
+      const crossGet = await handle.app.request(`/sessions/${sessionB.id}`, {
+        headers: { Authorization: 'Bearer key-a' },
+      });
+      expect(crossGet.status).toBe(403);
+      await expect(crossGet.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const crossPrompt = await handle.app.request(`/sessions/${sessionB.id}/prompt`, {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({ message: 'should not run' }),
+      });
+      expect(crossPrompt.status).toBe(403);
+
+      const ownGet = await handle.app.request(`/sessions/${sessionB.id}`, {
+        headers: { Authorization: 'Bearer key-b' },
+      });
+      expect(ownGet.status).toBe(200);
+    } finally {
+      handle.dispose();
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
+  test('scopes token-authenticated requests and prevents mode escalation', async () => {
+    const rootA = mkdtempSync(join(tmpdir(), 'cortx-server-token-root-a-'));
+    const handle = createServerRuntime({
+      ...config,
+      apiKey: 'admin-key',
+      defaultWorkingDirectory: rootA,
+      allowedWorkspaceRoots: [rootA],
+      apiKeys: [
+        { id: 'project-a', key: 'key-a', allowedWorkspaceRoots: [rootA], toolMode: 'read-only', approvalMode: 'interactive' },
+      ],
+    });
+
+    try {
+      const tokenRes = await handle.app.request('/auth/token', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer key-a' },
+      });
+      const { token } = (await tokenRes.json()) as { token: string };
+
+      const escalatedTool = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDirectory: rootA, toolMode: 'all' }),
+      });
+      expect(escalatedTool.status).toBe(403);
+      await expect(escalatedTool.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const invalidTool = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDirectory: rootA, toolMode: 'everything' }),
+      });
+      expect(invalidTool.status).toBe(400);
+      await expect(invalidTool.json()).resolves.toMatchObject({ kind: 'invalid_request' });
+
+      const escalatedApproval = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDirectory: rootA, approvalMode: 'full-access' }),
+      });
+      expect(escalatedApproval.status).toBe(403);
+      await expect(escalatedApproval.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const narrowerSession = await handle.app.request('/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDirectory: rootA, toolMode: 'none', approvalMode: 'deny' }),
+      });
+      expect(narrowerSession.status).toBe(201);
+      await expect(narrowerSession.json()).resolves.toMatchObject({
+        session: { toolMode: 'none', approvalMode: 'deny' },
+      });
+    } finally {
+      handle.dispose();
+      rmSync(rootA, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects AgentSpec file launches outside the current API key workspace scope', async () => {
+    const rootA = mkdtempSync(join(tmpdir(), 'cortx-server-spec-root-a-'));
+    const rootB = mkdtempSync(join(tmpdir(), 'cortx-server-spec-root-b-'));
+    const handle = createServerRuntime({
+      ...config,
+      apiKey: 'admin-key',
+      defaultWorkingDirectory: rootA,
+      allowedWorkspaceRoots: [rootA],
+      apiKeys: [
+        { id: 'project-a', key: 'key-a', allowedWorkspaceRoots: [rootA] },
+        { id: 'project-b', key: 'key-b', allowedWorkspaceRoots: [rootB] },
+      ],
+    });
+
+    try {
+      const specPath = join(rootB, 'agent.json');
+      writeFileSync(
+        specPath,
+        JSON.stringify({
+          name: 'project-b-agent',
+          prompt: 'hello from project b',
+          workingDirectory: rootB,
+          toolMode: 'none',
+          capabilities: { skills: false, subAgents: false, approval: false },
+        }),
+        'utf8',
+      );
+
+      const crossLaunch = await handle.app.request('/agent-specs/launch', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer key-a', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: specPath }),
+      });
+      expect(crossLaunch.status).toBe(403);
+      await expect(crossLaunch.json()).resolves.toMatchObject({ kind: 'permission_denied' });
+
+      const ownLaunch = await handle.app.request('/agent-specs/launch', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer key-b', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: specPath }),
+      });
+      expect(ownLaunch.status).toBe(201);
+      const body = (await ownLaunch.json()) as { sessionId: string; session: { metadata?: Record<string, unknown> } };
+      expect(body.session.metadata).toMatchObject({ agentSpec: 'project-b-agent' });
+      await waitForRuntimeEnvelope(handle, body.sessionId, 'done');
+    } finally {
+      handle.dispose();
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+});

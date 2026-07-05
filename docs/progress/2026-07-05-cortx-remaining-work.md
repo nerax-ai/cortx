@@ -13,7 +13,7 @@ language: zh-CN
 
 Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最小 agent kernel，`@cortx/runtime` 承担多 session、多目录、workspace tools、skills、sub-agent、approval、AgentSpec 和 SkillPack 等 host 能力，server/TUI/Web 也已经按薄前端和 runtime host 分层。
 
-因此当前缺口不再是“核心方向是否正确”，而是从架构底座走向长期可用产品所需的最后几块：真实持久化、完整生命周期、SDK 易用性、TUI/Web 体验和真实端到端验证。
+因此当前缺口不再是“核心方向是否正确”，而是从架构底座走向长期可用产品所需的最后几块：真实端到端验证、TUI/Web 体验、SDK 易用性、AgentSpec/SkillPack 产品入口，以及更高阶的运维能力。
 
 ## 2026-07-05 最新审计更新
 
@@ -26,11 +26,12 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
+- P2 server 权限边界：server 已支持多 API key principal、短 token 继承 principal scope、按 token workspace roots 过滤 session list，并在 session action/SSE/AgentSpec file launch 前做 scope 检查；tool/control mode scope 也不能被 request body 越权。
 
 仍然没有被这轮完全关闭的项：
 
 - TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连、approval + abort/resume + sub-agent 组合流程。
-- 多用户 server 权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强；其中 file-backed event replay 已具备默认 bounded retention。
+- 完整 SaaS 级多用户权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强；其中 file-backed event replay 已具备默认 bounded retention，server 已具备本地产品阶段的 token-scoped workspace/mode 授权边界。
 - `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
@@ -50,8 +51,8 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 | Server adapter | 较成熟 | HTTP/SSE、token、session action、runtime delegation 已稳定 |
 | SDK | 可用但还不够顺手 | 底层类型清楚，但缺更高层插件作者 helper 和版本策略 |
 | TUI | 能用但仍需打磨 | local/remote adapter 已通，真实日常体验还不够成熟 |
-| Web | 桌面工作台骨架已成型 | remote-only 方向正确，已有 sidebar/conversation/inspector/composer，但多 session 产品能力还少 |
-| 产品化完整度 | 未完成 | 还缺真实持久化、端到端验证、插件/asset 生态入口 |
+| Web | 桌面工作台骨架已成型 | remote-only 方向正确，已有 sidebar/conversation/inspector/composer/session list，但真实长流程体验仍要 dogfood |
+| 产品化完整度 | 未完成 | 还缺端到端验证、TUI/Web polish、插件/asset 生态入口和高阶运维能力 |
 
 整体判断：
 
@@ -131,8 +132,7 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 缺口
 
-- 缺 session 列表和多 session 切换。
-- 缺多目录、多 agent 管理界面。
+- session 列表、多 project 分组和同 project 多 session 切换已有第一版；多目录、多 agent 管理体验还需要真实 dogfood 后继续打磨。
 - 缺完整 event replay UI。
 - Approval dialog、tool/result、sub-agent 可视化已有第一版，但还缺真实长会话 dogfood 后的细节打磨。
 - 缺断线、重连、恢复体验。
@@ -214,13 +214,14 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 - Runtime event history 已 bounded，真实 file-backed durable event envelope store、snapshot migration layer、event retention window 已落地；数据库/压缩/归档策略仍可作为更高阶后端增强。
 - Long-running session 的内存、timer、pending request、sub-agent store 需要压测。
 - Streaming token budget 目前仍以后验 usage 为主，缺 streaming-time preemption。
-- Server 多用户、多 token、多 workspace root 的权限模型还只是本地单用户级别。
+- Server 已有多 token / 多 workspace root 的本地产品级授权边界，但完整多用户账号、审计、TLS、组织权限仍未做。
 
 ### 后续验收
 
 - 长会话不会无限增长内存，file-backed event replay 也不会无限增长 event files。
 - abort/dispose 后不会留下 pending timer 或 pending user request。
 - 多 session 并发时 event envelope sequence 和 session attribution 稳定。
+- API key A 不能访问、操作或订阅 API key B workspace 下的 session。
 
 ## 建议推进顺序
 
@@ -234,4 +235,4 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 Cortx 当前已经从“架构是否自洽”的阶段，进入“是否能成为长期可用 Agent 产品底座”的阶段。
 
-下一轮不应再优先大改 core。更应该围绕 runtime 的真实持久化、生命周期闭环、SDK 体验、TUI/Web dogfood 和 asset 产品化继续推进。只要这些补齐，Cortx 就能从 95% 左右的架构完成度，推进到接近 9.5 分的整体可用度。
+下一轮不应再优先大改 core。更应该围绕 TUI/Web dogfood、SDK 体验、asset 产品化和高阶运维能力继续推进。只要这些补齐，Cortx 就能从 95% 左右的架构完成度，推进到接近 9.5 分的整体可用度。

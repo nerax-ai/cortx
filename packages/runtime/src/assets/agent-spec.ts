@@ -2,6 +2,7 @@ import type { Tool } from '@cortx/sdk';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
+import type { RuntimeApprovalMode } from '../session.js';
 import type { WorkspaceToolMode } from '../tool-mount.js';
 
 export interface AgentSpec {
@@ -11,7 +12,7 @@ export interface AgentSpec {
   model?: string;
   workingDirectory?: string;
   toolMode?: WorkspaceToolMode;
-  approvalMode?: 'deny' | 'interactive';
+  approvalMode?: RuntimeApprovalMode;
   capabilities?: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   skillPacks?: string[];
@@ -32,7 +33,7 @@ export function parseAgentSpec(value: unknown): AgentSpec {
   assertOptionalString(spec, 'model');
   assertOptionalString(spec, 'workingDirectory');
   assertOptionalEnum(spec, 'toolMode', ['none', 'read-only', 'coding', 'all']);
-  assertOptionalEnum(spec, 'approvalMode', ['deny', 'interactive']);
+  assertOptionalEnum(spec, 'approvalMode', ['deny', 'interactive', 'full-access']);
   assertOptionalStringArray(spec, 'skillPaths');
   assertOptionalStringArray(spec, 'skillPacks');
   assertOptionalCapabilities(spec);

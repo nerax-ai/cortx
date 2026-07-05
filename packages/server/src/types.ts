@@ -3,9 +3,11 @@ import type { AgentDurableRunStore, Logger } from '@cortx/sdk';
 import type { CortxRegistry, PluginConfig } from '@cortx/runtime';
 import type { WorkspaceToolMode } from '@cortx/runtime';
 import type { RuntimeApprovalMode } from '@cortx/runtime';
+import type { ServerAuthKey } from './auth.js';
 
 export interface ServerConfig {
   apiKey: string;
+  apiKeys?: ServerAuthKey[];
   port?: number;
   host?: string;
   corsOrigin?: string;

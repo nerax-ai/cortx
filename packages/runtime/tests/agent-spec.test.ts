@@ -53,6 +53,7 @@ describe('AgentSpec asset launch', () => {
     expect(() => parseAgentSpec({ prompt: 'ok', skillPaths: [1] })).toThrow('AgentSpec.skillPaths');
     expect(() => parseAgentSpec({ prompt: 'ok', toolMode: 'everything' })).toThrow('AgentSpec.toolMode');
     expect(() => parseAgentSpec({ prompt: 'ok', approvalMode: 'ask' })).toThrow('AgentSpec.approvalMode');
+    expect(parseAgentSpec({ prompt: 'ok', approvalMode: 'full-access' }).approvalMode).toBe('full-access');
     expect(() => parseAgentSpec({ prompt: 'ok', capabilities: { skills: 'yes' } })).toThrow(
       'AgentSpec.capabilities',
     );

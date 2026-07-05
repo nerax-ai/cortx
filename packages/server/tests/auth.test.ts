@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { Hono } from 'hono';
-import { handleTokenExchange, extractApiKey, createAuthHandlers } from '../src/auth';
+import { handleTokenExchange, extractApiKey, createAuthHandlers, getAuthPrincipal } from '../src/auth';
 import type { Context } from 'hono';
 
 function mockContext(headers: Record<string, string> = {}, query: Record<string, string> = {}): Context {
@@ -71,5 +71,81 @@ describe('auth', () => {
 
     expect(sameServer.status).toBe(200);
     expect(otherServer.status).toBe(401);
+  });
+
+  test('multiple API keys expose scoped principals and tokens inherit the same scope', async () => {
+    const auth = createAuthHandlers({
+      apiKey: 'primary-key',
+      apiKeys: [
+        {
+          id: 'project-a',
+          key: 'key-a',
+          allowedWorkspaceRoots: ['/repo/a'],
+          toolMode: 'read-only',
+          approvalMode: 'interactive',
+        },
+        {
+          id: 'project-b',
+          key: 'key-b',
+          allowedWorkspaceRoots: ['/repo/b'],
+          toolMode: 'all',
+          approvalMode: 'full-access',
+        },
+      ],
+    });
+    const app = new Hono();
+
+    app.use('*', auth.middleware);
+    app.post('/auth/token', auth.tokenExchange);
+    app.get('/principal', (c) => c.json({ principal: getAuthPrincipal(c) }));
+
+    const direct = await app.request('/principal', {
+      headers: { Authorization: 'Bearer key-a' },
+    });
+    expect(await direct.json()).toEqual({
+      principal: {
+        id: 'project-a',
+        allowedWorkspaceRoots: ['/repo/a'],
+        toolMode: 'read-only',
+        approvalMode: 'interactive',
+      },
+    });
+
+    const tokenRes = await app.request('/auth/token', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer key-b' },
+    });
+    const { token } = (await tokenRes.json()) as { token: string };
+    const viaToken = await app.request(`/principal?token=${token}`);
+
+    expect(await viaToken.json()).toEqual({
+      principal: {
+        id: 'project-b',
+        allowedWorkspaceRoots: ['/repo/b'],
+        toolMode: 'all',
+        approvalMode: 'full-access',
+      },
+    });
+  });
+
+  test('explicit API key entries can scope the default API key', async () => {
+    const auth = createAuthHandlers({
+      apiKey: 'primary-key',
+      apiKeys: [{ id: 'scoped-primary', key: 'primary-key', allowedWorkspaceRoots: ['/repo/scoped'] }],
+    });
+    const app = new Hono();
+    app.use('*', auth.middleware);
+    app.get('/principal', (c) => c.json({ principal: getAuthPrincipal(c) }));
+
+    const res = await app.request('/principal', {
+      headers: { Authorization: 'Bearer primary-key' },
+    });
+
+    expect(await res.json()).toEqual({
+      principal: {
+        id: 'scoped-primary',
+        allowedWorkspaceRoots: ['/repo/scoped'],
+      },
+    });
   });
 });
