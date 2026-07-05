@@ -204,6 +204,17 @@ describe('FileDurableRunStore', () => {
     ]);
   });
 
+  test('prunes durable event envelopes to the configured per-session limit', async () => {
+    const store = new FileDurableRunStore({ root: tmpDir, maxEventEnvelopesPerSession: 2 });
+
+    await store.saveEventEnvelope(eventSnapshot('session-a', 1));
+    await store.saveEventEnvelope(eventSnapshot('session-a', 2));
+    await store.saveEventEnvelope(eventSnapshot('session-a', 3));
+    await store.saveEventEnvelope(eventSnapshot('session-a', 4));
+
+    expect((await store.listEventEnvelopes('session-a')).map((event) => event.sequence)).toEqual([3, 4]);
+  });
+
   test('serializes sub-agent snapshot writes so completed status wins', async () => {
     const store = new FileDurableRunStore(tmpDir);
     const running = childSnapshot('session-a');

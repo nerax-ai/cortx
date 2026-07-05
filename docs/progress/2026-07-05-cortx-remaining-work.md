@@ -24,13 +24,13 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试与文档。
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，server 暴露 `POST /agent-specs/launch`，Web bridge 与 TUI remote client 可直接调用该 endpoint；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
-- P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
+- P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
 
 仍然没有被这轮完全关闭的项：
 
 - TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连、approval + abort/resume + sub-agent 组合流程。
-- 多用户 server 权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强。
+- 多用户 server 权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强；其中 file-backed event replay 已具备默认 bounded retention。
 - `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
@@ -211,14 +211,14 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 ### 缺口
 
-- Runtime event history 已 bounded，真实 file-backed durable event envelope store 与 snapshot migration layer 已落地；还缺数据库/压缩/归档策略。
+- Runtime event history 已 bounded，真实 file-backed durable event envelope store、snapshot migration layer、event retention window 已落地；数据库/压缩/归档策略仍可作为更高阶后端增强。
 - Long-running session 的内存、timer、pending request、sub-agent store 需要压测。
 - Streaming token budget 目前仍以后验 usage 为主，缺 streaming-time preemption。
 - Server 多用户、多 token、多 workspace root 的权限模型还只是本地单用户级别。
 
 ### 后续验收
 
-- 长会话不会无限增长内存。
+- 长会话不会无限增长内存，file-backed event replay 也不会无限增长 event files。
 - abort/dispose 后不会留下 pending timer 或 pending user request。
 - 多 session 并发时 event envelope sequence 和 session attribution 稳定。
 

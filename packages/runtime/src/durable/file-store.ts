@@ -18,14 +18,21 @@ import type {
 
 export interface FileDurableRunStoreOptions {
   root: string;
+  maxEventEnvelopesPerSession?: number;
 }
+
+const DEFAULT_MAX_EVENT_ENVELOPES_PER_SESSION = 10_000;
 
 export class FileDurableRunStore implements RuntimeDurableRunStore {
   private readonly root: string;
+  private readonly maxEventEnvelopesPerSession: number;
   private readonly subAgentWrites = new Map<string, Promise<void>>();
 
   constructor(options: FileDurableRunStoreOptions | string) {
     this.root = resolve(typeof options === 'string' ? options : options.root);
+    this.maxEventEnvelopesPerSession = normalizeEventLimit(
+      typeof options === 'string' ? undefined : options.maxEventEnvelopesPerSession,
+    );
   }
 
   async saveCheckpoint(checkpoint: AgentRunCheckpoint): Promise<void> {
@@ -90,6 +97,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
 
   async saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): Promise<void> {
     await writeJson(this.eventEnvelopePath(snapshot.sessionId, snapshot.sequence), serializeRuntimeEventEnvelopeSnapshot(snapshot));
+    await this.pruneEventEnvelopes(snapshot.sessionId);
   }
 
   async listEventEnvelopes(sessionId: string): Promise<RuntimeEventEnvelopeSnapshot[]> {
@@ -116,6 +124,24 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   private eventEnvelopePath(sessionId: string, sequence: number): string {
     return join(this.root, 'events', encodeId(sessionId), `${String(sequence).padStart(16, '0')}.json`);
   }
+
+  private async pruneEventEnvelopes(sessionId: string): Promise<void> {
+    const dir = join(this.root, 'events', encodeId(sessionId));
+    let files: string[];
+    try {
+      files = (await readdir(dir)).filter((file) => file.endsWith('.json')).sort();
+    } catch {
+      return;
+    }
+    const stale = files.slice(0, Math.max(0, files.length - this.maxEventEnvelopesPerSession));
+    await Promise.all(stale.map((file) => rm(join(dir, file), { force: true })));
+  }
+}
+
+function normalizeEventLimit(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_MAX_EVENT_ENVELOPES_PER_SESSION;
+  if (!Number.isFinite(value)) return DEFAULT_MAX_EVENT_ENVELOPES_PER_SESSION;
+  return Math.max(1, Math.floor(value));
 }
 
 function encodeId(value: string): string {

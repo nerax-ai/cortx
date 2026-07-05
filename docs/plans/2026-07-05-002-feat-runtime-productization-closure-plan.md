@@ -50,6 +50,7 @@ AgentSpec/SkillPack 已有 runtime API，但缺文件启动、server 入口和�
 - R14. Runtime must durably persist runtime event envelopes separately from core checkpoints.
 - R15. Restored sessions must hydrate persisted event envelope history so server/frontends can replay session history after restart.
 - R16. Runtime durable file records must pass through a centralized migration layer so older compatible records can be upgraded instead of silently skipped.
+- R17. File-backed durable event replay must have a retention limit so long-running sessions do not grow event files without bound.
 
 **Background and sub-agent lifecycle**
 
@@ -88,6 +89,7 @@ AgentSpec/SkillPack 已有 runtime API，但缺文件启动、server 入口和�
 - KTD5. AgentSpec file launch goes through the same `launchAgentSpec()` path as inline launch. There is still one runtime session runner.
 - KTD6. Durable event replay belongs to runtime host storage, not core checkpoint state. Core checkpoints stay focused on safe resume state; runtime event envelope snapshots serve UI/server replay after process restart.
 - KTD7. Durable snapshot migration is an IO-bound runtime concern. FileDurableRunStore parses every JSON record through centralized migration functions, while runtime only receives current schema snapshots.
+- KTD8. File-backed event retention is owned by the durable backend. Runtime keeps its bounded in-memory history; FileDurableRunStore keeps a larger bounded replay tape and exposes an override for local products that need different retention.
 
 ### High-Level Technical Design
 
@@ -179,6 +181,16 @@ stateDiagram-v2
 - **Test scenarios:** A v0 runtime session record migrates to current schema; v0 sub-agent and event records migrate; invalid records are still skipped; a runtime durable store without optional event replay methods is still accepted by the guard.
 - **Verification:** Durable store tests prove legacy records are migrated and optional event replay does not break custom durable stores.
 
+### U8. Durable event retention
+
+- **Goal:** Bound file-backed event replay storage for long-running sessions.
+- **Requirements:** R17.
+- **Dependencies:** U6.
+- **Files:** `packages/runtime/src/durable/file-store.ts`, `packages/runtime/tests/durable-store.test.ts`.
+- **Approach:** Add a per-session event envelope retention limit to `FileDurableRunStore`, defaulting to a product-safe replay window while allowing embedded hosts to override it through constructor options. Prune oldest event files after each persisted envelope.
+- **Test scenarios:** A store configured with limit 2 retains only the latest two event envelopes; replay ordering remains ascending after pruning.
+- **Verification:** Durable store tests prove file-backed event replay is bounded.
+
 ### U4. AgentSpec file and server launch endpoint
 
 - **Goal:** Make AgentSpec usable as a product asset from runtime and remote clients.
@@ -208,6 +220,7 @@ stateDiagram-v2
 | `bun test packages/runtime/tests/durable-store.test.ts packages/runtime/tests/durable-resume.test.ts` | U1, U2 | File durable store and restart-style restore pass. |
 | `bun test packages/runtime/tests/durable-store.test.ts packages/runtime/tests/durable-resume.test.ts` | U6 | Durable runtime event replay survives restart and preserves envelope ordering. |
 | `bun test packages/runtime/tests/durable-store.test.ts` | U7 | Durable snapshot migration upgrades legacy records and preserves custom-store compatibility. |
+| `bun test packages/runtime/tests/durable-store.test.ts` | U8 | Durable event files are pruned to the configured retention window. |
 | `bun test packages/runtime/tests/sub-agent.test.ts packages/runtime/tests/sub-agent-session.test.ts` | U3 | Parent abort and child snapshot lifecycle pass. |
 | `bun test packages/runtime/tests/agent-spec.test.ts packages/server/tests/server.test.ts packages/sdk/tests/exports.test.ts` | U4, U5 | Asset launch, server endpoint, and SDK helper exports pass. |
 | `bun run lint` | Whole repo | TypeScript no-emit succeeds. |
@@ -222,6 +235,7 @@ stateDiagram-v2
 - Runtime can restore durable sessions from a fresh process-style runtime instance using persisted metadata and checkpoints.
 - Runtime can restore durable event envelope history for server/frontend replay after process restart.
 - Runtime durable file records are parsed through centralized migration helpers before reaching runtime state.
+- File-backed durable event replay is bounded by a configurable per-session retention limit.
 - Runtime abort/destroy cancels live background sub-agents where cooperative cancellation is available.
 - Sub-agent lifecycle summaries are persisted and hydrated for restored sessions.
 - AgentSpec can launch from JSON file and through server API.
