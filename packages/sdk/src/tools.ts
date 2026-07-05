@@ -8,6 +8,7 @@ export interface ToolResult {
 
 export interface ToolContext {
   sessionId: string;
+  runId?: number;
   toolCallId: string;
   workingDirectory: string;
   logger: Logger;

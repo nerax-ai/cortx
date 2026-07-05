@@ -1,5 +1,5 @@
 export { CortxRuntime } from './runtime.js';
-export type { CortxRuntimeOptions, SubscribeEnvelopeOptions, SubscribeOptions } from './runtime.js';
+export type { CortxRuntimeOptions, RestoreDurableSessionsOptions, SubscribeEnvelopeOptions, SubscribeOptions } from './runtime.js';
 export type { CortxFactoryMap, CortxExtensionType, CortxRegistry, PluginConfig } from '@cortx/core';
 export { RuntimeError, isRuntimeError, toRuntimeError } from './errors.js';
 export type { RuntimeErrorKind } from './errors.js';
@@ -10,7 +10,18 @@ export type { WorkspaceToolMode } from './tool-mount.js';
 export { resolveWorkspace, resolveWorkspaceRoot } from './workspace.js';
 export type { WorkspaceResolution } from './workspace.js';
 export { MemoryDurableRunStore } from './durable/memory-store.js';
-export { parseAgentSpec } from './assets/agent-spec.js';
+export { FileDurableRunStore } from './durable/file-store.js';
+export {
+  RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+  RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
+  isRuntimeDurableRunStore,
+} from './durable/types.js';
+export type {
+  RuntimeDurableRunStore,
+  RuntimeSessionSnapshot,
+  RuntimeSubAgentSessionSnapshot,
+} from './durable/types.js';
+export { loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
 export type { AgentSpec } from './assets/agent-spec.js';
 export { resolveSkillPack } from './assets/skill-pack.js';
 export type { SkillPack } from './assets/skill-pack.js';

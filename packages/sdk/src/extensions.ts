@@ -226,6 +226,27 @@ export function defineCortxPlugin<T extends InlinePlugin<CortxExtensionType, Cor
   return plugin;
 }
 
+export type CortxContributionFactory<T extends CortxExtensionType> = CortxFactoryMap[T];
+
+export function defineContributionFactory<T extends CortxExtensionType>(
+  _type: T,
+  factory: CortxContributionFactory<T>,
+): CortxContributionFactory<T> {
+  return factory;
+}
+
+export function defineToolFactory<T extends CortxFactoryMap[typeof AGENT_TOOL]>(factory: T): T {
+  return factory;
+}
+
+export function defineSessionPolicyFactory<T extends CortxFactoryMap[typeof AGENT_SESSION_POLICY]>(factory: T): T {
+  return factory;
+}
+
+export function defineEventObserverFactory<T extends CortxFactoryMap[typeof AGENT_EVENT_OBSERVER]>(factory: T): T {
+  return factory;
+}
+
 export function defineSystemTransform<T extends AgentSystemTransformContribution>(contribution: T): T {
   return contribution;
 }

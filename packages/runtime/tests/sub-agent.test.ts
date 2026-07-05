@@ -6,7 +6,13 @@ import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentRuntimeExtensions, Tool } from '@cortx/sdk';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 import { createEmptyAgentRuntimeExtensions } from '@cortx/sdk';
-import { CortxRuntime, SubAgentSessionStore, createDefaultSafetyExtensions, createSubAgentTool } from '../src/index';
+import {
+  CortxRuntime,
+  FileDurableRunStore,
+  SubAgentSessionStore,
+  createDefaultSafetyExtensions,
+  createSubAgentTool,
+} from '../src/index';
 
 let tmpDir: string;
 
@@ -55,6 +61,16 @@ function captureToolsLanguage(captured: { tools?: unknown[] }): LanguageClient {
         finishReason: 'stop',
         usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
       };
+    },
+  } as unknown as LanguageClient;
+}
+
+function abortAwareLanguage(): LanguageClient {
+  return {
+    stream: async function* (_request: unknown, options?: { signal?: AbortSignal }) {
+      await new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new Error('child aborted')), { once: true });
+      });
     },
   } as unknown as LanguageClient;
 }
@@ -192,6 +208,7 @@ describe('runtime sub-agent capability', () => {
   });
 
   test('runtime envelopes child lifecycle events with parent attribution', async () => {
+    const durableStore = new FileDurableRunStore(join(tmpDir, 'durable'));
     const runtime = new CortxRuntime({
       language: mockLanguage([
         toolCallResponse(
@@ -207,6 +224,7 @@ describe('runtime sub-agent capability', () => {
       allowedWorkspaceRoots: [tmpDir],
       toolMode: 'none',
       capabilities: { skills: false, subAgents: true, approval: false },
+      durableStore,
     });
     const session = await runtime.createSession({ id: 'parent-session' });
     const events: AgentEvent[] = [];
@@ -224,6 +242,19 @@ describe('runtime sub-agent capability', () => {
       parent: { sessionId: 'parent-session', runId: 1, toolCallId: 'agent-call' },
       event: { type: 'agent_started', toolCallId: 'agent-call' },
     });
+    await waitFor(async () =>
+      (await durableStore.listSubAgentSessions('parent-session')).some((snapshot) => snapshot.status === 'completed'),
+      3_000,
+    );
+    expect(await durableStore.listSubAgentSessions('parent-session')).toMatchObject([
+      {
+        parentSessionId: 'parent-session',
+        parentRunId: 1,
+        toolCallId: 'agent-call',
+        status: 'completed',
+        output: 'child output',
+      },
+    ]);
     runtime.dispose();
   });
 
@@ -249,6 +280,34 @@ describe('runtime sub-agent capability', () => {
     await waitFor(() => store.get('agent-call')?.status === 'completed');
     expect(store.get('agent-call')).toMatchObject({ isBackground: true, output: 'background output' });
     expect(events.some((event) => event.type === 'agent_completed')).toBe(true);
+  });
+
+  test('background agent can be cancelled after the tool returns', async () => {
+    const events: AgentEvent[] = [];
+    const store = new SubAgentSessionStore();
+    const tool = createSubAgentTool({
+      language: abortAwareLanguage(),
+      model: 'test',
+      agentSessions: store,
+      getTools: () => [],
+      getExtensions: () => createEmptyAgentRuntimeExtensions(),
+      onAgentEvent: (event) => events.push(event),
+    });
+
+    const result = await tool.execute(
+      { prompt: 'long child work', description: 'background task', run_in_background: true },
+      toolContext() as never,
+    );
+    expect(result.success).toBe(true);
+
+    store.abortRunning('stop child');
+
+    await waitFor(() => store.get('agent-call')?.status === 'error');
+    expect(events.find((event) => event.type === 'agent_completed')).toMatchObject({
+      type: 'agent_completed',
+      toolCallId: 'agent-call',
+      isError: true,
+    });
   });
 
   test('beforeSubAgent policy can deny before creating a child session', async () => {
@@ -285,10 +344,10 @@ async function waitForEvent(events: AgentEvent[], type: AgentEvent['type'], time
   throw new Error(`Timed out waiting for ${type}`);
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('Timed out waiting for condition');

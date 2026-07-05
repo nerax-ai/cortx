@@ -1,5 +1,5 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { Logger } from '@cortx/sdk';
+import type { AgentDurableRunStore, Logger } from '@cortx/sdk';
 import type { CortxRegistry, PluginConfig } from '@cortx/runtime';
 import type { WorkspaceToolMode } from '@cortx/runtime';
 import type { RuntimeApprovalMode } from '@cortx/runtime';
@@ -23,6 +23,7 @@ export interface ServerConfig {
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
   logger?: Logger;
+  durableStore?: AgentDurableRunStore;
 }
 
 export interface SessionInfo {

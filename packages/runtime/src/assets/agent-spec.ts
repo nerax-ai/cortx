@@ -1,4 +1,6 @@
 import type { Tool } from '@cortx/sdk';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { WorkspaceToolMode } from '../tool-mount.js';
 
@@ -35,6 +37,11 @@ export function parseAgentSpec(value: unknown): AgentSpec {
   assertOptionalStringArray(spec, 'skillPacks');
   assertOptionalCapabilities(spec);
   return spec as unknown as AgentSpec;
+}
+
+export async function loadAgentSpecFile(path: string): Promise<AgentSpec> {
+  const value = JSON.parse(await readFile(resolve(path), 'utf8')) as unknown;
+  return parseAgentSpec(value);
 }
 
 function assertOptionalString(spec: Record<string, unknown>, key: string): void {

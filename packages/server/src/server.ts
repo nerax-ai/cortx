@@ -3,8 +3,9 @@ import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { dirname, resolve } from 'node:path';
 import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope } from '@cortx/sdk';
-import { CortxRuntime, isRuntimeError, RuntimeError, type RuntimeSessionCreateRequest } from '@cortx/runtime';
+import { CortxRuntime, isRuntimeError, resolveWorkspace, RuntimeError, type RuntimeSessionCreateRequest } from '@cortx/runtime';
 import type { ServerConfig } from './types.js';
 import { createAuthHandlers } from './auth.js';
 
@@ -67,6 +68,28 @@ function readMessage(body: Record<string, unknown>): string {
   return body.message;
 }
 
+async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, path: string) {
+  const defaultWorkingDirectory = config.defaultWorkingDirectory ?? process.cwd();
+  const specPath = resolve(defaultWorkingDirectory, path);
+  await resolveWorkspace({
+    requested: dirname(specPath),
+    defaultWorkingDirectory,
+    allowedRoots: config.allowedWorkspaceRoots ?? [defaultWorkingDirectory],
+  });
+  return launchAgentSpecSafely(() => runtime.launchAgentSpecFile(specPath));
+}
+
+async function launchAgentSpecSafely(fn: () => Promise<Awaited<ReturnType<CortxRuntime['launchAgentSpec']>>>) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof Error && (error.message.startsWith('AgentSpec.') || error.message.startsWith('AgentSpec '))) {
+      throw new RuntimeError('invalid_request', error.message);
+    }
+    throw error;
+  }
+}
+
 export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
   const app = new Hono();
   const logger = config.logger ?? noopLogger;
@@ -91,6 +114,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     allowedWorkspaceRoots: config.allowedWorkspaceRoots,
     toolMode: config.toolMode,
     approvalMode: config.approvalMode ?? 'interactive',
+    durableStore: config.durableStore,
     logger,
   });
 
@@ -117,6 +141,21 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     try {
       const body = await readOptionalJson(c);
       const session = await runtime.createSession(body as RuntimeSessionCreateRequest);
+      return c.json({ sessionId: session.id, session }, 201);
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.post('/agent-specs/launch', async (c) => {
+    try {
+      const body = await readOptionalJson(c);
+      const specPath = body.path;
+      const session =
+        typeof specPath === 'string'
+          ? await launchAgentSpecPath(runtime, config, specPath)
+          : await launchAgentSpecSafely(() => runtime.launchAgentSpec(body.spec ?? body));
       return c.json({ sessionId: session.id, session }, 201);
     } catch (error) {
       const response = errorResponse(error);

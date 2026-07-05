@@ -2,13 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import {
   AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
   AGENT_EXTENSION_BUCKETS,
+  AGENT_EVENT_OBSERVER,
   AGENT_SESSION_POLICY,
   AGENT_TOOL,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
+  defineContributionFactory,
   defineEventObserver,
+  defineEventObserverFactory,
   defineSessionPolicy,
+  defineSessionPolicyFactory,
   defineTool,
+  defineToolFactory,
   type AgentModelRequestPolicyDecision,
   type AgentToolPolicyDecision,
   type Tool,
@@ -96,5 +101,43 @@ describe('sdk exports', () => {
     ).toMatchObject({ action: 'deny' });
     await observer.onAgentEvent({ type: 'done' });
     expect(AGENT_RUN_CHECKPOINT_SCHEMA_VERSION).toBe(1);
+  });
+
+  test('contribution factory helpers preserve registry factory shapes', async () => {
+    const toolFactory = defineToolFactory(() =>
+      defineTool({
+        name: 'factoryEcho',
+        inputSchema: {},
+        execute: async () => ({ success: true, output: 'factory' }),
+      }),
+    );
+    const policyFactory = defineSessionPolicyFactory(() =>
+      defineSessionPolicy({
+        beforeModelRequest() {
+          return { action: 'rewriteTools', tools: [] };
+        },
+      }),
+    );
+    const observerFactory = defineEventObserverFactory(() =>
+      defineEventObserver({
+        onAgentEvent() {},
+      }),
+    );
+    const genericFactory = defineContributionFactory(AGENT_TOOL, toolFactory);
+
+    expect((await genericFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })).name).toBe(
+      'factoryEcho',
+    );
+    expect(
+      await (
+        await policyFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })
+      ).beforeModelRequest?.({ sessionId: 's', iteration: 1, messages: [], tools: [] }),
+    ).toMatchObject({ action: 'rewriteTools', tools: [] });
+    expect(
+      typeof (
+        await observerFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })
+      ).onAgentEvent,
+    ).toBe('function');
+    expect(AGENT_EVENT_OBSERVER).toBe('agent.eventObserver');
   });
 });

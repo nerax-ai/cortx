@@ -302,6 +302,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
       runtime.askUserForTool = resolvedAskUser;
       const baseCtx = {
         sessionId,
+        runId: opts.runId,
         workingDirectory,
         logger,
         signal: abortController.signal,

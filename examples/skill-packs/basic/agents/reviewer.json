@@ -1,0 +1,17 @@
+{
+  "name": "basic-reviewer",
+  "prompt": "/review current changes",
+  "toolMode": "read-only",
+  "approvalMode": "deny",
+  "capabilities": {
+    "skills": true,
+    "subAgents": false,
+    "approval": false
+  },
+  "skillPacks": [
+    "examples/skill-packs/basic"
+  ],
+  "metadata": {
+    "example": "basic-skill-pack"
+  }
+}

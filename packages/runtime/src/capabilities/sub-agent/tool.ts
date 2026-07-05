@@ -136,7 +136,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
       });
       if (policyResult) return policyResult;
 
-      const session = options.agentSessions.create(toolCallId, description, isBackground, ctx.sessionId);
+      const session = options.agentSessions.create(toolCallId, description, isBackground, ctx.sessionId, ctx.runId);
       ctx.reportProgress?.(`starting ${description}...`);
       options.onAgentEvent({ type: 'agent_started', toolCallId, description, isBackground });
 
@@ -144,6 +144,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
       const abortChild = () => childController.abort('parent aborted');
       if (ctx.signal?.aborted) abortChild();
       ctx.signal?.addEventListener('abort', abortChild, { once: true });
+      options.agentSessions.registerAbort(toolCallId, (reason) => childController.abort(reason ?? 'parent aborted'));
       const bridgeAskUser = ctx.askUser
         ? async (event: Extract<AgentEvent, { type: 'user_request' | 'user_question' }>) => {
             const childToolCallId = event.type === 'user_request' ? event.request.requestId : event.toolCallId;
@@ -218,6 +219,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
             });
           } finally {
             ctx.signal?.removeEventListener('abort', abortChild);
+            options.agentSessions.clearAbort(toolCallId);
           }
         })();
 
@@ -264,6 +266,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
         return { success: false, error: `Sub-agent failed: ${error instanceof Error ? error.message : String(error)}` };
       } finally {
         ctx.signal?.removeEventListener('abort', abortChild);
+        options.agentSessions.clearAbort(toolCallId);
       }
     },
   };

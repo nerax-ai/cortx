@@ -11,6 +11,14 @@ export class MemoryDurableRunStore implements AgentDurableRunStore {
     return this.checkpoints.get(sessionId);
   }
 
+  listCheckpoints(): AgentRunCheckpoint[] {
+    return Array.from(this.checkpoints.values());
+  }
+
+  deleteCheckpoint(sessionId: string): void {
+    this.checkpoints.delete(sessionId);
+  }
+
   clear(sessionId?: string): void {
     if (sessionId) {
       this.checkpoints.delete(sessionId);

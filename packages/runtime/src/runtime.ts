@@ -8,7 +8,12 @@ import type {
   RuntimeAgentEventEnvelope,
   Tool,
 } from '@cortx/sdk';
-import { createEmptyAgentRuntimeExtensions, mergeAgentRuntimeExtensions, noopLogger } from '@cortx/sdk';
+import {
+  AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
+  createEmptyAgentRuntimeExtensions,
+  mergeAgentRuntimeExtensions,
+  noopLogger,
+} from '@cortx/sdk';
 import { Cortx, type CortxRegistry, type PluginConfig } from '@cortx/core';
 import { RuntimeError, toRuntimeError } from './errors.js';
 import { DEFAULT_RUNTIME_CAPABILITIES, type RuntimeDefaultCapabilities } from './default-capabilities.js';
@@ -21,8 +26,14 @@ import {
   createSubAgentTool,
   discoverSkills,
 } from './capabilities/index.js';
-import { parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
+import { loadAgentSpecFile, parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
 import { resolveSkillPack } from './assets/skill-pack.js';
+import {
+  RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+  isRuntimeDurableRunStore,
+  type RuntimeDurableRunStore,
+  type RuntimeSessionSnapshot,
+} from './durable/types.js';
 import type {
   ManagedRuntimeSession,
   RuntimeApprovalMode,
@@ -58,6 +69,10 @@ export interface SubscribeOptions {
 
 export interface SubscribeEnvelopeOptions {
   replay?: boolean;
+}
+
+export interface RestoreDurableSessionsOptions {
+  autoResume?: boolean;
 }
 
 function createSessionId(): string {
@@ -155,6 +170,8 @@ export class CortxRuntime {
       approvalMode === 'full-access'
         ? { ...requestedCapabilities, approval: false }
         : requestedCapabilities;
+    const skillPaths = request.skillPaths;
+    const system = request.system ?? this.system;
     const agentSessions = new SubAgentSessionStore();
     const mountedTools = [
       ...this.tools,
@@ -184,7 +201,7 @@ export class CortxRuntime {
     const cortx = new Cortx(this.language, {
       appName: this.appName,
       model,
-      system: request.system ?? this.system,
+      system,
       maxIterations,
       registry: request.registry ?? this.registry,
       plugins: request.plugins ?? this.plugins,
@@ -205,9 +222,12 @@ export class CortxRuntime {
       lastActivityAt: now,
       workingDirectory: workspace.workingDirectory,
       model,
+      system,
       maxIterations,
       toolMode,
       approvalMode,
+      capabilities,
+      skillPaths,
       events: [],
       eventEnvelopes: [],
       subscribers: new Set(),
@@ -226,12 +246,53 @@ export class CortxRuntime {
 
     this.sessions.set(id, session);
     this.resetIdleTimer(session);
+    await this.persistRuntimeSession(session);
     this.logger.info(`[runtime] Session created: ${id}`);
     return this.info(session);
   }
 
   listSessions(): RuntimeSessionInfo[] {
     return Array.from(this.sessions.values()).map((session) => this.info(session));
+  }
+
+  async restoreDurableSessions(options: RestoreDurableSessionsOptions = {}): Promise<RuntimeSessionInfo[]> {
+    const store = this.runtimeDurableStore();
+    if (!store) return [];
+
+    const restored: RuntimeSessionInfo[] = [];
+    for (const snapshot of await store.listRuntimeSessions()) {
+      if (this.sessions.has(snapshot.id)) continue;
+      const checkpoint = await this.durableStore?.loadCheckpoint(snapshot.id);
+      if (!checkpoint || checkpoint.schemaVersion !== AGENT_RUN_CHECKPOINT_SCHEMA_VERSION || checkpoint.state.terminal) {
+        continue;
+      }
+
+      const info = await this.createSession({
+        id: snapshot.id,
+        workingDirectory: snapshot.workingDirectory,
+        model: snapshot.model,
+        system: snapshot.system,
+        maxIterations: snapshot.maxIterations,
+        toolMode: snapshot.toolMode,
+        approvalMode: snapshot.approvalMode,
+        capabilities: snapshot.capabilities,
+        skillPaths: snapshot.skillPaths,
+        metadata: snapshot.metadata,
+      });
+      const session = this.requireSession(info.id);
+      session.createdAt = snapshot.createdAt;
+      session.lastActivityAt = snapshot.lastActivityAt;
+      session.runId = snapshot.runId;
+      session.nextEventSequence = snapshot.nextEventSequence;
+      session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
+      await this.persistRuntimeSession(session);
+      restored.push(this.info(session));
+
+      if (options.autoResume) {
+        await this.resume(session.id);
+      }
+    }
+    return restored;
   }
 
   async launchAgentSpec(value: unknown): Promise<RuntimeSessionInfo> {
@@ -253,7 +314,11 @@ export class CortxRuntime {
       metadata: { ...spec.metadata, agentSpec: spec.name ?? 'inline' },
     });
     await this.prompt(session.id, spec.prompt);
-    return session;
+    return this.getSession(session.id);
+  }
+
+  async launchAgentSpecFile(path: string): Promise<RuntimeSessionInfo> {
+    return this.launchAgentSpec(await loadAgentSpecFile(path));
   }
 
   getSession(sessionId: string): RuntimeSessionInfo {
@@ -314,16 +379,18 @@ export class CortxRuntime {
   abort(sessionId: string): void {
     const session = this.requireSession(sessionId);
     session.cortx.abort('User aborted via runtime');
+    session.agentSessions.abortRunning('Session aborted');
     session.cortx.controller.rejectPendingQuestions('Session aborted');
     session.runId++;
     session.isRunning = false;
     session.lastActivityAt = Date.now();
+    void this.persistRuntimeSession(session);
     this.resetIdleTimer(session);
   }
 
   deleteSession(sessionId: string): void {
     const session = this.requireSession(sessionId);
-    this.destroy(session);
+    this.destroy(session, { deleteDurable: true });
     this.logger.info(`[runtime] Session deleted: ${sessionId}`);
   }
 
@@ -364,6 +431,7 @@ export class CortxRuntime {
     session.isRunning = true;
     const runId = ++session.runId;
     session.cortx.setRunId(runId);
+    void this.persistRuntimeSession(session);
 
     (async () => {
       try {
@@ -376,6 +444,7 @@ export class CortxRuntime {
         this.broadcast(session, eventError(toRuntimeError(error)));
       } finally {
         if (session.runId === runId) session.isRunning = false;
+        void this.persistRuntimeSession(session);
       }
     })();
   }
@@ -399,6 +468,8 @@ export class CortxRuntime {
     if (session.eventEnvelopes.length > this.maxEventsPerSession) {
       session.eventEnvelopes.splice(0, session.eventEnvelopes.length - this.maxEventsPerSession);
     }
+    void this.persistRuntimeSession(session);
+    void this.persistSubAgentSession(session, event);
     for (const subscriber of session.subscribers) {
       try {
         subscriber(event);
@@ -425,14 +496,20 @@ export class CortxRuntime {
     session.idleTimer.unref?.();
   }
 
-  private destroy(session: ManagedRuntimeSession): void {
+  private destroy(session: ManagedRuntimeSession, options: { deleteDurable?: boolean } = {}): void {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.cortx.abort('Session cleaned up');
+    session.agentSessions.abortRunning('Session cleaned up');
     session.cortx.controller.rejectPendingQuestions('Session destroyed');
     session.subscribers.clear();
     session.envelopeSubscribers.clear();
     session.isRunning = false;
     this.sessions.delete(session.id);
+    if (options.deleteDurable) {
+      void this.runtimeDurableStore()?.deleteRuntimeSession(session.id);
+    } else {
+      void this.persistRuntimeSession(session);
+    }
   }
 
   private requireSession(sessionId: string): ManagedRuntimeSession {
@@ -448,13 +525,65 @@ export class CortxRuntime {
       lastActivityAt: session.lastActivityAt,
       workingDirectory: session.workingDirectory,
       model: session.model,
+      system: session.system,
       maxIterations: session.maxIterations,
       toolMode: session.toolMode,
       approvalMode: session.approvalMode,
+      capabilities: session.capabilities,
+      skillPaths: session.skillPaths,
       isRunning: session.isRunning,
       eventCount: session.events.length,
       metadata: session.metadata,
     };
+  }
+
+  private runtimeDurableStore(): RuntimeDurableRunStore | undefined {
+    return isRuntimeDurableRunStore(this.durableStore) ? this.durableStore : undefined;
+  }
+
+  private sessionSnapshot(session: ManagedRuntimeSession): RuntimeSessionSnapshot {
+    return {
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: session.id,
+      createdAt: session.createdAt,
+      lastActivityAt: session.lastActivityAt,
+      workingDirectory: session.workingDirectory,
+      model: session.model,
+      system: session.system,
+      maxIterations: session.maxIterations,
+      toolMode: session.toolMode,
+      approvalMode: session.approvalMode,
+      capabilities: session.capabilities,
+      skillPaths: session.skillPaths,
+      runId: session.runId,
+      nextEventSequence: session.nextEventSequence,
+      metadata: session.metadata,
+    };
+  }
+
+  private async persistRuntimeSession(session: ManagedRuntimeSession): Promise<void> {
+    const store = this.runtimeDurableStore();
+    if (!store) return;
+    try {
+      await store.saveRuntimeSession(this.sessionSnapshot(session));
+    } catch (error) {
+      this.logger.warn(`Failed to persist runtime session "${session.id}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async persistSubAgentSession(session: ManagedRuntimeSession, event: AgentEvent): Promise<void> {
+    if (event.type !== 'agent_started' && event.type !== 'agent_progress' && event.type !== 'agent_completed') return;
+    const store = this.runtimeDurableStore();
+    if (!store) return;
+    const snapshot = session.agentSessions.snapshot(event.toolCallId);
+    if (!snapshot) return;
+    try {
+      await store.saveSubAgentSession(snapshot);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to persist sub-agent session "${event.toolCallId}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private async createOfficialExtensions(input: {

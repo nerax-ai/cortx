@@ -4,8 +4,15 @@ import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
 import { existsSync } from 'fs';
 import { dirname, resolve } from 'path';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry, RuntimeApprovalMode, WorkspaceToolMode } from '@cortx/runtime';
-import { createServer } from './server.js';
+import {
+  FileDurableRunStore,
+  type CortxFactoryMap,
+  type CortxExtensionType,
+  type CortxRegistry,
+  type RuntimeApprovalMode,
+  type WorkspaceToolMode,
+} from '@cortx/runtime';
+import { createServerRuntime } from './server.js';
 
 interface CortxConfig {
   model: string;
@@ -79,7 +86,7 @@ async function main() {
     ...(config.allowedWorkspaceRoots ?? []),
   ].map((path) => resolve(path)))];
 
-  const app = createServer({
+  const handle = createServerRuntime({
     apiKey,
     language: synax.language,
     model: config.model,
@@ -91,14 +98,16 @@ async function main() {
     allowedWorkspaceRoots,
     toolMode: config.toolMode ?? 'all',
     approvalMode: config.approvalMode ?? 'interactive',
+    durableStore: new FileDurableRunStore(process.env.CORTX_DURABLE_DIR || resolve(defaultWorkingDirectory, '.cortx', 'runtime')),
     logger: log.scope('server'),
     maxSessions: 10,
     idleTimeoutMs: 30 * 60 * 1000,
   });
+  await handle.runtime.restoreDurableSessions({ autoResume: false });
 
   const port = Number(process.env.PORT) || 3000;
 
-  Bun.serve({ port, fetch: app.fetch, idleTimeout: 255 });
+  Bun.serve({ port, fetch: handle.app.fetch, idleTimeout: 255 });
 
   console.log(`\n  cortx web server`);
   console.log(`  ─────────────────`);

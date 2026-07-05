@@ -60,4 +60,6 @@ export interface AgentRunResumeState {
 export interface AgentDurableRunStore {
   saveCheckpoint(checkpoint: AgentRunCheckpoint): void | Promise<void>;
   loadCheckpoint(sessionId: string): AgentRunCheckpoint | undefined | Promise<AgentRunCheckpoint | undefined>;
+  listCheckpoints?(): AgentRunCheckpoint[] | Promise<AgentRunCheckpoint[]>;
+  deleteCheckpoint?(sessionId: string): void | Promise<void>;
 }

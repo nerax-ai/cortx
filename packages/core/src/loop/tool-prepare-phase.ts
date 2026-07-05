@@ -28,7 +28,7 @@ export interface ToolPreparePhaseInput extends AgentLoopPhaseInput {
 
 export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGenerator<AgentEvent, ToolPrepareOutcome> {
   const { toolCalls, toolMap, runtime, iteration } = input;
-  const { sessionId, workingDirectory = process.cwd(), logger, extensions, controller } = runtime;
+  const { sessionId, runId, workingDirectory = process.cwd(), logger, extensions, controller } = runtime;
   const askUser = runtime.askUserForTool;
   const pendingTools: PendingToolExecution[] = [];
 
@@ -52,7 +52,7 @@ export async function* prepareToolPhase(input: ToolPreparePhaseInput): AsyncGene
     }
 
     const beforeProgress: string[] = [];
-    const toolContext = createToolContext({ toolCall, tool, sessionId, workingDirectory, logger, beforeProgress, askUser });
+    const toolContext = createToolContext({ toolCall, tool, sessionId, runId, workingDirectory, logger, beforeProgress, askUser });
     let skipped = false;
     let inputError = parseToolInputError(toolCall.input);
     let parsedInput = inputError ? {} : parseToolInput(toolCall.input);
@@ -242,14 +242,16 @@ function createToolContext(input: {
   toolCall: LanguageToolCallContent;
   tool: Tool;
   sessionId: string;
+  runId?: number;
   workingDirectory: string;
   logger: Logger;
   beforeProgress: string[];
   askUser?: (question: string, toolCallId: string) => Promise<string>;
 }): ToolContext {
-  const { toolCall, tool, sessionId, workingDirectory, logger, beforeProgress, askUser } = input;
+  const { toolCall, tool, sessionId, runId, workingDirectory, logger, beforeProgress, askUser } = input;
   return {
     sessionId,
+    runId,
     toolCallId: toolCall.toolCallId,
     workingDirectory,
     logger: logger.scope(tool.name),

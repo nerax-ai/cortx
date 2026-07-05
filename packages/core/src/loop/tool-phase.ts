@@ -27,6 +27,7 @@ export interface PendingToolExecution {
 
 export interface ToolPhaseBaseContext {
   sessionId: string;
+  runId?: number;
   workingDirectory: string;
   logger: Logger;
   signal?: AbortSignal;
@@ -123,6 +124,7 @@ export async function runToolCall(
   const toolAbort = createChildAbortController(baseCtx.signal);
   const ctx: ToolContext = {
     sessionId: baseCtx.sessionId,
+    runId: baseCtx.runId,
     toolCallId: tc.toolCallId,
     workingDirectory: baseCtx.workingDirectory,
     logger: baseCtx.logger.scope(tc.toolName),

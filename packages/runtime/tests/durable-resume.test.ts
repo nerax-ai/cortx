@@ -4,7 +4,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent } from '@cortx/sdk';
-import { CortxRuntime, MemoryDurableRunStore } from '../src/index';
+import {
+  CortxRuntime,
+  FileDurableRunStore,
+  MemoryDurableRunStore,
+  RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
+} from '../src/index';
 
 let tmpDir: string;
 
@@ -78,6 +83,76 @@ describe('runtime durable resume', () => {
     await waitForEvent(secondEvents, 'done');
 
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed' });
+    first.dispose();
+    second.dispose();
+  });
+
+  test('restores durable sessions from file snapshots and auto-resumes non-terminal checkpoints', async () => {
+    const durableDir = join(tmpDir, 'durable');
+    const firstStore = new FileDurableRunStore(durableDir);
+    const first = new CortxRuntime({
+      language: neverFinishingLanguage(),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'read-only',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      durableStore: firstStore,
+    });
+    const firstSession = await first.createSession({
+      id: 'file-backed-session',
+      metadata: { source: 'durable-test' },
+    });
+    const firstEvents: AgentEvent[] = [];
+    first.subscribe(firstSession.id, (event) => firstEvents.push(event));
+
+    await first.prompt(firstSession.id, 'resume me');
+    await waitForEvent(firstEvents, 'turn_start');
+    await firstStore.saveSubAgentSession({
+      schemaVersion: RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      runId: 'file-backed-session:agent-call',
+      parentSessionId: 'file-backed-session',
+      parentRunId: 1,
+      toolCallId: 'agent-call',
+      description: 'restored child',
+      isBackground: true,
+      status: 'running',
+      output: 'partial child output',
+      iterations: 1,
+      toolCallCount: 2,
+      startedAt: Date.now(),
+    });
+    const secondStore = new FileDurableRunStore(durableDir);
+    const second = new CortxRuntime({
+      language: textLanguage('resumed from disk'),
+      model: 'fallback',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore: secondStore,
+    });
+
+    const restored = await second.restoreDurableSessions({ autoResume: true });
+    const secondEvents: AgentEvent[] = [];
+    second.subscribe('file-backed-session', (event) => secondEvents.push(event));
+    await waitForEvent(secondEvents, 'done');
+
+    expect(restored).toHaveLength(1);
+    expect(second.getSession('file-backed-session')).toMatchObject({
+      workingDirectory: tmpDir,
+      model: 'test',
+      toolMode: 'read-only',
+      approvalMode: 'deny',
+      metadata: { source: 'durable-test' },
+    });
+    expect(second.getLocalState('file-backed-session').agentSessions.get('agent-call')).toMatchObject({
+      description: 'restored child',
+      parentRunId: 1,
+      output: 'partial child output',
+      status: 'running',
+    });
+    expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed from disk' });
     first.dispose();
     second.dispose();
   });

@@ -25,6 +25,10 @@ SDK 也提供薄 helper，用于让插件代码保持类型清晰：
 - `defineErrorRecover(hook)`
 - `defineContextOverflow(hook)`
 - `defineEventObserver(observer)`
+- `defineToolFactory(factory)`
+- `defineSessionPolicyFactory(factory)`
+- `defineEventObserverFactory(factory)`
+- `defineContributionFactory(type, factory)`
 
 这些 helper 不做运行时包装，只保留 TypeScript 的窄类型推断。
 
@@ -188,6 +192,7 @@ export default defineCortxPlugin({
 ```
 
 工具建议用 `defineTool()` 声明。`ToolContext.signal` 是合作式取消入口：当用户 abort、turn timeout、tool timeout 发生时，Core 会触发 signal。旧工具可以忽略它，新工具应该在长任务、轮询、外部请求前检查它。
+`ToolContext.runId` 是可选 host 事实，runtime-mounted tools 可用它记录 parent/child attribution；普通工具不需要依赖它。
 
 ```ts
 import { defineTool } from '@cortx/sdk';
@@ -205,6 +210,28 @@ export const fetchTool = defineTool({
     return { success: true, output: await response.text() };
   },
 });
+```
+
+如果要把贡献注册到插件 registry，优先用 factory helper 包住注册函数，避免插件作者手写 `CortxFactoryMap[...]` 泛型：
+
+```ts
+import { AGENT_TOOL, defineContributionFactory, defineTool } from '@cortx/sdk';
+
+ctx.register(
+  AGENT_TOOL,
+  'fetch-url',
+  defineContributionFactory(AGENT_TOOL, () =>
+    defineTool({
+      name: 'fetch_url',
+      sideEffects: 'read',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+      async execute(input, toolCtx) {
+        const response = await fetch(String(input.url), { signal: toolCtx.signal });
+        return { success: true, output: await response.text() };
+      },
+    }),
+  ),
+);
 ```
 
 常用策略场景：

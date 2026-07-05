@@ -15,9 +15,12 @@ export interface RuntimeSessionInfo {
   lastActivityAt: number;
   workingDirectory: string;
   model: string;
+  system?: string;
   maxIterations?: number;
   toolMode: import('./tool-mount.js').WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
+  capabilities: RuntimeDefaultCapabilities;
+  skillPaths?: string[];
   isRunning: boolean;
   eventCount: number;
   metadata?: RuntimeSessionMetadata;
@@ -46,9 +49,12 @@ export interface ManagedRuntimeSession {
   lastActivityAt: number;
   workingDirectory: string;
   model: string;
+  system?: string;
   maxIterations?: number;
   toolMode: import('./tool-mount.js').WorkspaceToolMode;
   approvalMode: RuntimeApprovalMode;
+  capabilities: RuntimeDefaultCapabilities;
+  skillPaths?: string[];
   events: AgentEvent[];
   eventEnvelopes: import('@cortx/sdk').RuntimeAgentEventEnvelope[];
   subscribers: Set<(event: AgentEvent) => void>;

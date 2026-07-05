@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer, createServerRuntime, type ServerRuntimeHandle } from '../src/server';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ServerConfig } from '../src/types';
@@ -120,6 +120,70 @@ describe('server routes', () => {
     const body = await res.json();
     expect(body.sessionId).toBeTruthy();
     expect(body.session.metadata).toMatchObject({ source: 'test' });
+  });
+
+  test('launches an inline AgentSpec through the server endpoint', async () => {
+    const res = await fetch(`${BASE}/agent-specs/launch`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        spec: {
+          name: 'server-inline-agent',
+          prompt: 'hello from spec',
+          toolMode: 'none',
+          capabilities: { skills: false, subAgents: false, approval: false },
+        },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.session.metadata).toMatchObject({ agentSpec: 'server-inline-agent' });
+    await waitForRuntimeEnvelope(handle!, body.sessionId, 'done');
+  });
+
+  test('launches an AgentSpec file through the server endpoint', async () => {
+    const fixtureDir = mkdtempSync(join(process.cwd(), '.tmp-cortx-server-spec-'));
+    try {
+      const specPath = join(fixtureDir, 'agent.json');
+      writeFileSync(
+        specPath,
+        JSON.stringify({
+          name: 'server-file-agent',
+          prompt: 'hello from file',
+          toolMode: 'none',
+          capabilities: { skills: false, subAgents: false, approval: false },
+        }),
+        'utf8',
+      );
+      const res = await fetch(`${BASE}/agent-specs/launch`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: specPath }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.session.metadata).toMatchObject({ agentSpec: 'server-file-agent' });
+      await waitForRuntimeEnvelope(handle!, body.sessionId, 'done');
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  test('AgentSpec file launch rejects paths outside allowed roots', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'cortx-server-spec-outside-'));
+    try {
+      const specPath = join(outside, 'agent.json');
+      writeFileSync(specPath, JSON.stringify({ prompt: 'outside' }), 'utf8');
+      const res = await fetch(`${BASE}/agent-specs/launch`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: specPath }),
+      });
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({ kind: 'invalid_workspace' });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   test('create session rejects invalid JSON body', async () => {

@@ -1,5 +1,8 @@
 import { describe, test, expect } from 'bun:test';
-import { SubAgentSessionStore } from '../src/capabilities/sub-agent/session-store';
+import {
+  RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
+  SubAgentSessionStore,
+} from '../src/index';
 
 describe('SubAgentSessionStore', () => {
   test('create adds a running session', () => {
@@ -107,5 +110,48 @@ describe('SubAgentSessionStore', () => {
     // tc1 is still there because it's running
     expect(store.get('tc1')).toBeDefined();
     expect(store.get('tc1')!.status).toBe('running');
+  });
+
+  test('snapshots and hydrates persisted child sessions', () => {
+    const store = new SubAgentSessionStore();
+    const session = store.create('call-1', 'child task', true, 'parent-session', 7);
+    session.output = 'partial';
+    session.iterations = 2;
+    session.toolCallCount = 3;
+    store.complete('call-1', false);
+
+    const snapshot = store.snapshot('call-1');
+    expect(snapshot).toMatchObject({
+      schemaVersion: RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      parentSessionId: 'parent-session',
+      parentRunId: 7,
+      toolCallId: 'call-1',
+      status: 'completed',
+      output: 'partial',
+    });
+
+    const restored = new SubAgentSessionStore();
+    restored.hydrate(snapshot ? [snapshot] : []);
+    expect(restored.get('call-1')).toMatchObject({
+      parentRunId: 7,
+      output: 'partial',
+      iterations: 2,
+      toolCallCount: 3,
+      status: 'completed',
+    });
+  });
+
+  test('abortRunning invokes registered aborters for running sessions', () => {
+    const store = new SubAgentSessionStore();
+    store.create('running', 'running child', true, 'parent');
+    store.create('completed', 'completed child', true, 'parent');
+    store.complete('completed', false);
+    const aborted: string[] = [];
+    store.registerAbort('running', (reason) => aborted.push(`running:${reason}`));
+    store.registerAbort('completed', (reason) => aborted.push(`completed:${reason}`));
+
+    store.abortRunning('stop');
+
+    expect(aborted).toEqual(['running:stop']);
   });
 });
