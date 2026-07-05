@@ -17,6 +17,7 @@ import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
 import type { TuiFactoryMap, TuiExtensionType, CommandDef } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
 import type { TuiAgentSpecInfo, TuiSkillPackInfo } from '../runtime-session.js';
+import type { RuntimeSessionInfo } from '@cortx/runtime';
 
 export interface CommandPluginDeps {
   exit: () => void;
@@ -26,6 +27,9 @@ export interface CommandPluginDeps {
   listAgentSpecs: () => Promise<TuiAgentSpecInfo[]>;
   launchAgentSpec: (identifier: string) => void | Promise<void>;
   openAgentSpecPicker: () => void | Promise<void>;
+  listSessions: () => Promise<RuntimeSessionInfo[]>;
+  switchSession: (sessionId: string) => void | Promise<void>;
+  createWorkspaceSession: (workingDirectory: string) => void | Promise<void>;
   listSkillPacks: () => Promise<TuiSkillPackInfo[]>;
   installSkillPack: (path: string, id?: string) => Promise<TuiSkillPackInfo>;
   createSkillPackSession: (ids: string[]) => void | Promise<void>;
@@ -70,6 +74,31 @@ export function parseSkillPackSessionIds(value: string): string[] {
     .filter(Boolean);
 }
 
+function compactPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length === 0) return path || '/';
+  return parts.slice(-2).join('/');
+}
+
+function compactSessionId(id: string): string {
+  return id.length <= 15 ? id : id.slice(0, 15);
+}
+
+export function formatRuntimeSessionList(sessions: RuntimeSessionInfo[]): string {
+  if (sessions.length === 0) return 'No remote sessions available.';
+  const sorted = [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  const maxIdLen = Math.max(...sorted.map((session) => compactSessionId(session.id).length));
+  return [
+    'Remote sessions:',
+    ...sorted.map((session) => {
+      const id = compactSessionId(session.id).padEnd(maxIdLen);
+      const state = session.isRunning ? 'running' : 'ready';
+      return `  ${id}  - ${state} · ${compactPath(session.workingDirectory)} · ${session.toolMode}/${session.approvalMode}`;
+    }),
+  ].join('\n');
+}
+
 /**
  * Create the built-in command plugin.
  * Accepts dependency injection for testability.
@@ -82,6 +111,9 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
   const listAgentSpecs = deps?.listAgentSpecs;
   const launchAgentSpec = deps?.launchAgentSpec;
   const openAgentSpecPicker = deps?.openAgentSpecPicker;
+  const listSessions = deps?.listSessions;
+  const switchSession = deps?.switchSession;
+  const createWorkspaceSession = deps?.createWorkspaceSession;
   const listSkillPacks = deps?.listSkillPacks;
   const installSkillPack = deps?.installSkillPack;
   const createSkillPackSession = deps?.createSkillPackSession;
@@ -151,6 +183,64 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
         handler: async (args, _cmdCtx) => {
           const message = args.trim();
           if (message) steer(message);
+        },
+      }));
+
+      ctx.register(TUI_COMMAND, 'sessions', (_ctx) => ({
+        name: '/sessions',
+        description: 'List server runtime sessions',
+        handler: async () => {
+          if (!listSessions) {
+            showError('Server session listing is not available in this session.');
+            return;
+          }
+          try {
+            showNotice(formatRuntimeSessionList(await listSessions()));
+          } catch (error) {
+            showError(`Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        },
+      }));
+
+      ctx.register(TUI_COMMAND, 'session', (_ctx) => ({
+        name: '/session',
+        description: 'Switch to a server session or create one for a workspace',
+        handler: async (args) => {
+          const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+          if (!action) {
+            showError('Usage: /session <session-id> or /session new <workspace>');
+            return;
+          }
+
+          if (action === 'new') {
+            if (!createWorkspaceSession) {
+              showError('Server session creation is not available in this session.');
+              return;
+            }
+            const workingDirectory = rest.join(' ').trim();
+            if (!workingDirectory) {
+              showError('Usage: /session new <workspace>');
+              return;
+            }
+            try {
+              await createWorkspaceSession(workingDirectory);
+              showNotice(`Started session for: ${workingDirectory}`);
+            } catch (error) {
+              showError(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return;
+          }
+
+          if (!switchSession) {
+            showError('Server session switching is not available in this session.');
+            return;
+          }
+          try {
+            await switchSession(action);
+            showNotice(`Switched to session: ${action}`);
+          } catch (error) {
+            showError(`Failed to switch session: ${error instanceof Error ? error.message : String(error)}`);
+          }
         },
       }));
 
@@ -280,7 +370,7 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
             );
           } else {
             ctx.logger.info(
-              'Available commands: /exit, /quit, /clear, /config, /help, /steer, /agents, /agent, /skill-packs, /skill-pack',
+              'Available commands: /exit, /quit, /clear, /config, /help, /steer, /sessions, /session, /agents, /agent, /skill-packs, /skill-pack',
             );
           }
         },

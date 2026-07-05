@@ -33,6 +33,9 @@ export interface TuiSessionAdapter {
   getInfo(): RuntimeSessionInfo;
   subscribe(listener: (event: import('@cortx/sdk').AgentEvent) => void): () => void;
   prompt(message: string): Promise<void>;
+  listSessions(): Promise<RuntimeSessionInfo[]>;
+  switchSession(sessionId: string): Promise<TuiSessionAdapter>;
+  createSessionForWorkspace(workingDirectory: string): Promise<TuiSessionAdapter>;
   listAgentSpecs(): Promise<TuiAgentSpecInfo[]>;
   launchAgentSpec(identifier: string): Promise<TuiSessionAdapter>;
   listSkillPacks(): Promise<TuiSkillPackInfo[]>;
@@ -97,6 +100,20 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
       roots: [this.getInfo().workingDirectory],
       installedSkillPackRegistryPath: this.skillPackRegistryPath,
     });
+  }
+
+  async listSessions(): Promise<RuntimeSessionInfo[]> {
+    return this.runtime.listSessions();
+  }
+
+  async switchSession(sessionId: string): Promise<TuiSessionAdapter> {
+    const info = this.runtime.getSession(sessionId);
+    this.ownsRuntime = false;
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath, true);
+  }
+
+  createSessionForWorkspace(workingDirectory: string): Promise<TuiSessionAdapter> {
+    return this.createSession({ workingDirectory });
   }
 
   async launchAgentSpec(identifier: string): Promise<TuiSessionAdapter> {
@@ -216,6 +233,20 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
   async prompt(message: string): Promise<void> {
     await this.client.prompt(this.info.id, message);
     await this.refresh();
+  }
+
+  listSessions(): Promise<RuntimeSessionInfo[]> {
+    return this.client.listSessions();
+  }
+
+  async switchSession(sessionId: string): Promise<TuiSessionAdapter> {
+    const info = await this.client.getSession(sessionId);
+    this.dispose();
+    return new RemoteRuntimeSessionAdapter(this.client, info);
+  }
+
+  createSessionForWorkspace(workingDirectory: string): Promise<TuiSessionAdapter> {
+    return this.createSession({ workingDirectory });
   }
 
   listAgentSpecs(): Promise<TuiAgentSpecInfo[]> {

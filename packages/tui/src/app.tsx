@@ -217,6 +217,15 @@ export default function App({ session, logger }: AppProps) {
         steer: (message) => {
           void activeSession.steer(message);
         },
+        listSessions: () => activeSession.listSessions(),
+        switchSession: async (sessionId) => {
+          const next = await activeSession.switchSession(sessionId);
+          setActiveSession(next);
+        },
+        createWorkspaceSession: async (workingDirectory) => {
+          const next = await activeSession.createSessionForWorkspace(workingDirectory);
+          setActiveSession(next);
+        },
         listAgentSpecs: () => activeSession.listAgentSpecs(),
         launchAgentSpec: async (identifier) => {
           const next = await activeSession.launchAgentSpec(identifier);

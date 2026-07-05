@@ -7,7 +7,7 @@ import {
 import type { CommandDef } from '../types/tui-plugin.js';
 import { TUI_COMMAND } from '../types/tui-plugin.js';
 import { TuiRegistry } from '../tui-registry.js';
-import { commandPlugin, formatAgentSpecList, formatSkillPackList, parseSkillPackSessionIds } from '../plugins/command-plugin.js';
+import { commandPlugin, formatAgentSpecList, formatRuntimeSessionList, formatSkillPackList, parseSkillPackSessionIds } from '../plugins/command-plugin.js';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -247,6 +247,44 @@ describe('SkillPack command helpers', () => {
   });
 });
 
+describe('Runtime session command helpers', () => {
+  test('formats remote runtime sessions by recent activity', () => {
+    const text = formatRuntimeSessionList([
+      {
+        id: 'sess_old',
+        createdAt: 1,
+        lastActivityAt: 2,
+        workingDirectory: '/repo/old',
+        model: 'default',
+        toolMode: 'read-only',
+        approvalMode: 'deny',
+        isRunning: false,
+        eventCount: 1,
+      },
+      {
+        id: 'sess_running_long_identifier',
+        createdAt: 1,
+        lastActivityAt: 3,
+        workingDirectory: '/repo/new',
+        model: 'default',
+        toolMode: 'all',
+        approvalMode: 'interactive',
+        isRunning: true,
+        eventCount: 2,
+      },
+    ]);
+
+    expect(text).toContain('Remote sessions:');
+    expect(text.indexOf('sess_running_l')).toBeLessThan(text.indexOf('sess_old'));
+    expect(text).toContain('running · repo/new · all/interactive');
+    expect(text).toContain('ready · repo/old · read-only/deny');
+  });
+
+  test('formats empty remote runtime sessions', () => {
+    expect(formatRuntimeSessionList([])).toBe('No remote sessions available.');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration: plugin registers new command -> appears in palette
 // ---------------------------------------------------------------------------
@@ -275,7 +313,7 @@ describe('Integration: plugin commands in palette', () => {
     });
 
     const commands = registry.getCommands();
-    expect(commands.length).toBe(11); // 10 built-in + 1 custom
+    expect(commands.length).toBe(13); // 12 built-in + 1 custom
     expect(commands.some((c) => c.name === '/custom')).toBe(true);
 
     // Verify it appears in palette filtering
@@ -314,10 +352,77 @@ describe('Integration: plugin commands in palette', () => {
     expect(helpText).toContain('/clear');
     expect(helpText).toContain('/help');
     expect(helpText).toContain('/steer');
+    expect(helpText).toContain('/sessions');
+    expect(helpText).toContain('/session');
     expect(helpText).toContain('/agents');
     expect(helpText).toContain('/agent');
     expect(helpText).toContain('/skill-packs');
     expect(helpText).toContain('/skill-pack');
+  });
+
+  test('runtime session commands list, switch and create through injected dependencies', async () => {
+    const notices: string[] = [];
+    const switches: string[] = [];
+    const creates: string[] = [];
+    const registry = new TuiRegistry();
+    await registry.registerPlugin(commandPlugin({
+      exit: () => {},
+      clear: () => {},
+      getConfig: () => ({}),
+      listSessions: async () => [
+        {
+          id: 'sess_remote',
+          createdAt: 1,
+          lastActivityAt: 2,
+          workingDirectory: '/remote/repo',
+          model: 'default',
+          toolMode: 'all',
+          approvalMode: 'interactive',
+          isRunning: false,
+          eventCount: 0,
+        },
+      ],
+      switchSession: async (sessionId) => {
+        switches.push(sessionId);
+      },
+      createWorkspaceSession: async (workingDirectory) => {
+        creates.push(workingDirectory);
+      },
+      showNotice: (message) => notices.push(message),
+      showError: (message) => notices.push(`ERROR: ${message}`),
+    }));
+
+    await registry.executeCommand('/sessions', '', { args: '', abort: () => {} });
+    await registry.executeCommand('/session', 'sess_remote', { args: 'sess_remote', abort: () => {} });
+    await registry.executeCommand('/session', 'new /remote/other', { args: 'new /remote/other', abort: () => {} });
+
+    expect(notices[0]).toContain('Remote sessions:');
+    expect(notices[1]).toBe('Switched to session: sess_remote');
+    expect(notices[2]).toBe('Started session for: /remote/other');
+    expect(switches).toEqual(['sess_remote']);
+    expect(creates).toEqual(['/remote/other']);
+  });
+
+  test('/session without dependencies reports a clear command error', async () => {
+    const notices: string[] = [];
+    const registry = new TuiRegistry();
+    await registry.registerPlugin(commandPlugin({
+      exit: () => {},
+      clear: () => {},
+      getConfig: () => ({}),
+      showNotice: (message) => notices.push(message),
+      showError: (message) => notices.push(`ERROR: ${message}`),
+    }));
+
+    await registry.executeCommand('/sessions', '', { args: '', abort: () => {} });
+    await registry.executeCommand('/session', 'sess_remote', { args: 'sess_remote', abort: () => {} });
+    await registry.executeCommand('/session', 'new /remote/repo', { args: 'new /remote/repo', abort: () => {} });
+
+    expect(notices).toEqual([
+      'ERROR: Server session listing is not available in this session.',
+      'ERROR: Server session switching is not available in this session.',
+      'ERROR: Server session creation is not available in this session.',
+    ]);
   });
 
   test('AgentSpec commands list and launch through injected dependencies', async () => {

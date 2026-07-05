@@ -323,11 +323,13 @@ describe('TuiRegistry', () => {
     expect(names).toContain('/config');
     expect(names).toContain('/help');
     expect(names).toContain('/steer');
+    expect(names).toContain('/sessions');
+    expect(names).toContain('/session');
     expect(names).toContain('/agents');
     expect(names).toContain('/agent');
     expect(names).toContain('/skill-packs');
     expect(names).toContain('/skill-pack');
-    expect(names.length).toBe(10);
+    expect(names.length).toBe(12);
   });
 
   // --- Integration: built-in /exit command calls the exit callback ---

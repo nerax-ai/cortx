@@ -254,6 +254,7 @@ describe('product dogfood smoke', () => {
 
       const webSessions = await web.listSessions();
       expect(webSessions.map((session) => session.id)).toEqual([webSession.id]);
+      expect((await tuiB.listSessions()).map((session) => session.id)).toEqual([tuiSession.id]);
       await expect(tuiB.getSession(webSession.id)).rejects.toMatchObject({ kind: 'permission_denied' });
       await expect(web.getSession(tuiSession.id)).rejects.toBeInstanceOf(EventBridgeError);
       await expect(web.getSession(tuiSession.id)).rejects.toMatchObject({ kind: 'permission_denied' });

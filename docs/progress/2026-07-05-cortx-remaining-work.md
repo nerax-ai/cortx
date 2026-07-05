@@ -26,6 +26,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - Web event replay / recovery：Web bridge 现在暴露 typed event stream lifecycle，workspace header 能显示 replay/live/reconnecting/disconnected 状态、last event sequence，并提供不需要重新输入 API key 或 workspace 的 recover stream 操作。
 - P1 自动 product smoke：新增 `tests/product-dogfood-smoke.test.ts`，用 fake provider 但走真实 `createServerRuntime()`、Web `EventBridge`、TUI `RemoteRuntimeClient` 和 server SSE/token/auth 路径，覆盖多 workspace/session scope、approval answer、event replay、abort/resume route、sub-agent lifecycle attribution、SkillPack install/list 和 AgentSpec discovery。
+- TUI remote session switching：TUI remote 现在可通过 server client 列出授权 sessions，并通过 `/sessions`、`/session <id>`、`/session new <workspace>` 进行 server-owned session 列表、切换和新 workspace session 创建；本地 `/resume` transcript restore 语义保持不变。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
 - P2 server 权限边界：server 已支持多 API key principal、短 token 继承 principal scope、按 token workspace roots 过滤 session list，并在 session action/SSE/AgentSpec file launch 前做 scope 检查；tool/control mode scope 也不能被 request body 越权。
@@ -39,7 +40,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`813 pass / 0 fail / 2366 expect`
+- 当前全量测试：`bun test` 通过，`819 pass / 0 fail / 2390 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -101,7 +102,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 ### 当前状态
 
-TUI 已经支持 local runtime 和 remote server 两种模式，输入历史、steer、markdown、thinking、tool region、session restore、AgentSpec 列表/直接启动/选择器 overlay，以及 SkillPack 列表/安装/新 session 启用命令都有测试覆盖。
+TUI 已经支持 local runtime 和 remote server 两种模式，输入历史、steer、markdown、thinking、tool region、session restore、AgentSpec 列表/直接启动/选择器 overlay，以及 SkillPack 列表/安装/新 session 启用命令都有测试覆盖。Remote TUI 也已有 server-owned session 列表/切换/创建命令：`/sessions`、`/session <id>`、`/session new <workspace>`。
 
 ### 缺口
 
@@ -109,7 +110,7 @@ TUI 已经支持 local runtime 和 remote server 两种模式，输入历史、s
 - tool/sub-agent 展示还不够接近 Claude Code / Codex 的成熟感。
 - approval 交互还需要更清楚的默认体验。
 - markdown/code block/thinking 展示仍需要继续 polish。
-- 多 session、多目录、多 agent 切换还没有完整产品化；AgentSpec 选择器和 SkillPack 命令入口已有第一版，还需要真实终端 dogfood 后打磨交互细节。
+- 多 session、多目录、多 agent 的 server-owned remote TUI 命令入口已有第一版；AgentSpec 选择器和 SkillPack 命令入口也已有第一版，还需要真实终端 dogfood 后打磨交互细节。
 
 ### 后续验收
 
@@ -192,12 +193,12 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 ### 当前状态
 
-已有大量单测、conformance、smoke test。它们证明架构边界和主要协议成立；新增 product dogfood smoke 进一步用真实 server/Web/TUI client contract 覆盖多 workspace/session、approval、event replay、abort/resume route、sub-agent attribution 和 SkillPack/AgentSpec 资产路径。但仍缺真人真实环境的完整回归。
+已有大量单测、conformance、smoke test。它们证明架构边界和主要协议成立；新增 product dogfood smoke 进一步用真实 server/Web/TUI client contract 覆盖多 workspace/session、approval、event replay、abort/resume route、sub-agent attribution、SkillPack/AgentSpec 资产路径和 TUI remote session list path。但仍缺真人真实环境的完整回归。
 
 ### 缺口
 
 - 缺 TUI local mode 完整 coding session。
-- 缺 TUI remote mode 连接 server 跑完整 session。
+- TUI remote mode 的 server session list/switch/create 已有自动覆盖；仍缺连接真实 server/provider 后的完整长流程终端 dogfood。
 - 缺 Web 连接 server 跑完整 session。
 - 多目录、多 session、多 agent、abort/resume/approval/sub-agent 的协议组合已有自动 smoke；仍缺真实 provider、真实浏览器和真实终端里的长流程验证。
 

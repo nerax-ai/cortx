@@ -97,6 +97,11 @@ export class RemoteRuntimeClient {
     return data.session;
   }
 
+  async listSessions(): Promise<RuntimeSessionInfo[]> {
+    const data = await this.request<{ sessions: RuntimeSessionInfo[] }>('/sessions');
+    return data.sessions;
+  }
+
   async launchAgentSpec(request: RemoteAgentSpecLaunchRequest): Promise<RuntimeSessionInfo> {
     const data = await this.request<{ session: RuntimeSessionInfo }>('/agent-specs/launch', {
       method: 'POST',

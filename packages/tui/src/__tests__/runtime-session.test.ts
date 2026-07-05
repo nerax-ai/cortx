@@ -64,6 +64,20 @@ function sessionBody(isRunning = false) {
   };
 }
 
+function runtimeSession(id: string, workingDirectory = '/remote/repo') {
+  return {
+    id,
+    createdAt: 1,
+    lastActivityAt: id === 'sess_remote_b' ? 3 : 2,
+    workingDirectory,
+    model: 'default',
+    toolMode: 'all',
+    approvalMode: 'interactive',
+    isRunning: false,
+    eventCount: 0,
+  };
+}
+
 describe('TUI runtime session adapters', () => {
   test('local adapter embeds runtime and streams events to the existing TUI store path', async () => {
     const session = await createLocalRuntimeSession({
@@ -230,6 +244,70 @@ describe('TUI runtime session adapters', () => {
 
     unsubscribe();
     session.dispose();
+  });
+
+  test('remote adapter lists, switches and creates server-owned workspace sessions', async () => {
+    const calls: Array<{ path: string; method: string; body?: unknown }> = [];
+    const client = new RemoteRuntimeClient({
+      baseUrl: 'http://server',
+      apiKey: 'key',
+      fetch: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const method = init?.method ?? 'GET';
+        calls.push({
+          path,
+          method,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        if (path === '/sessions' && method === 'GET') {
+          return jsonResponse({ sessions: [runtimeSession('sess_remote_a'), runtimeSession('sess_remote_b', '/remote/other')] });
+        }
+        if (path === '/sessions/sess_remote_b') {
+          return jsonResponse({ session: runtimeSession('sess_remote_b', '/remote/other') });
+        }
+        if (path === '/sessions' && method === 'POST') {
+          const body = init.body ? JSON.parse(String(init.body)) : {};
+          return jsonResponse({
+            session: {
+              ...runtimeSession(body.workingDirectory === '/remote/new' ? 'sess_new' : 'sess_remote_a', body.workingDirectory),
+              model: body.model ?? 'default',
+              toolMode: body.toolMode ?? 'all',
+              approvalMode: body.approvalMode ?? 'interactive',
+            },
+          });
+        }
+        return jsonResponse(sessionBody());
+      },
+    });
+    const session = await createRemoteRuntimeSession({ client, create: { workingDirectory: '/remote/repo' } });
+
+    const listed = await session.listSessions();
+    const switched = await session.switchSession('sess_remote_b');
+    const created = await session.createSessionForWorkspace('/remote/new');
+
+    expect(listed.map((item) => item.id)).toEqual(['sess_remote_a', 'sess_remote_b']);
+    expect(switched.getInfo()).toMatchObject({ id: 'sess_remote_b', workingDirectory: '/remote/other' });
+    expect(created.getInfo()).toMatchObject({ id: 'sess_new', workingDirectory: '/remote/new' });
+    expect(calls).toEqual([
+      { path: '/sessions', method: 'POST', body: { workingDirectory: '/remote/repo', metadata: { tuiMode: 'remote' } } },
+      { path: '/sessions', method: 'GET', body: undefined },
+      { path: '/sessions/sess_remote_b', method: 'GET', body: undefined },
+      {
+        path: '/sessions',
+        method: 'POST',
+        body: {
+          workingDirectory: '/remote/new',
+          model: 'default',
+          toolMode: 'all',
+          approvalMode: 'interactive',
+          metadata: { tuiMode: 'remote' },
+        },
+      },
+    ]);
+
+    session.dispose();
+    switched.dispose();
+    created.dispose();
   });
 
   test('remote adapter lists and launches AgentSpec assets through the server client', async () => {

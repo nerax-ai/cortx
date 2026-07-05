@@ -75,6 +75,50 @@ describe('RemoteRuntimeClient', () => {
     }
   });
 
+  test('lists runtime sessions through the remote server contract', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = new RemoteRuntimeClient({
+      baseUrl: 'http://localhost:3000/',
+      apiKey: 'test-key',
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        return jsonResponse({
+          sessions: [
+            {
+              id: 'sess_a',
+              createdAt: 1,
+              lastActivityAt: 3,
+              workingDirectory: '/repo-a',
+              model: 'default',
+              toolMode: 'all',
+              approvalMode: 'interactive',
+              isRunning: false,
+              eventCount: 2,
+            },
+            {
+              id: 'sess_b',
+              createdAt: 2,
+              lastActivityAt: 4,
+              workingDirectory: '/repo-b',
+              model: 'default',
+              toolMode: 'read-only',
+              approvalMode: 'deny',
+              isRunning: true,
+              eventCount: 5,
+            },
+          ],
+        });
+      },
+    });
+
+    const sessions = await client.listSessions();
+
+    expect(sessions.map((session) => session.id)).toEqual(['sess_a', 'sess_b']);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0].url).pathname).toBe('/sessions');
+    expect(new Headers(calls[0].init?.headers).get('Authorization')).toBe('Bearer test-key');
+  });
+
   test('launches AgentSpec assets through the remote server contract', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const client = new RemoteRuntimeClient({
