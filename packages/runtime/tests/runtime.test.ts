@@ -233,6 +233,30 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
+  test('runtime owns the active run promise until the session finishes', async () => {
+    const runtime = new CortxRuntime({
+      language: delayedLanguage(20),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'tracked-run' });
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    await runtime.prompt(session.id, 'track this run');
+    const internal = (runtime as unknown as { sessions: Map<string, { runPromise?: Promise<void> }> }).sessions.get(session.id);
+    expect(internal?.runPromise).toBeInstanceOf(Promise);
+    await waitForEvent(events, 'done');
+    await internal?.runPromise;
+
+    expect(internal?.runPromise).toBeUndefined();
+    expect(runtime.getSession(session.id).isRunning).toBe(false);
+    runtime.dispose();
+  });
+
   test('routes steer, follow-up, answer and resume through the hosted controller', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(100),

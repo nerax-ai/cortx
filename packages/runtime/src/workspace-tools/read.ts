@@ -1,6 +1,5 @@
-import { readFile } from 'fs/promises';
 import type { Tool } from '@cortx/sdk';
-import { isWorkspacePathError, resolveWorkspacePath } from './path-safety.js';
+import { isWorkspacePathError, readTextNoFollow, resolveWorkspacePath } from './path-safety.js';
 
 const MAX_LINES = 2000;
 
@@ -27,7 +26,7 @@ export function createReadTool(cwd: string): Tool {
         if (isWorkspacePathError(error)) return { success: false, error: error.message };
         throw error;
       }
-      const text = await readFile(abs, 'utf-8');
+      const text = await readTextNoFollow(abs);
       const lines = text.split('\n');
       const start = offset ? Math.max(0, Number(offset) - 1) : 0;
       const end = limit ? Math.min(start + Number(limit), lines.length) : Math.min(start + MAX_LINES, lines.length);

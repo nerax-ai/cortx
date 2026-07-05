@@ -1,6 +1,5 @@
-import { readFile } from 'fs/promises';
 import type { Tool } from '@cortx/sdk';
-import { isWorkspacePathError, resolveWorkspacePath } from './path-safety.js';
+import { isWorkspacePathError, readTextNoFollow, resolveWorkspacePath } from './path-safety.js';
 import { collectWorkspaceFiles, globToRegExp, workspaceDisplayPath } from './search.js';
 
 export function createGrepTool(cwd: string): Tool {
@@ -20,9 +19,11 @@ export function createGrepTool(cwd: string): Tool {
     execute: async ({ pattern, path, glob }) => {
       if (typeof pattern !== 'string' || !pattern) return { success: false, error: 'pattern is required' };
       let target: string;
+      let displayRoot: string;
       let regex: RegExp;
       try {
         target = await resolveWorkspacePath(cwd, path ? String(path) : '.');
+        displayRoot = await resolveWorkspacePath(cwd, '.');
         regex = new RegExp(pattern);
       } catch (e: unknown) {
         if (isWorkspacePathError(e)) return { success: false, error: e.message };
@@ -35,10 +36,10 @@ export function createGrepTool(cwd: string): Tool {
         for (const file of files) {
           const name = file.split(/[\\/]/).pop() ?? file;
           if (!include.test(name)) continue;
-          const text = await readFile(file, 'utf-8');
+          const text = await readTextNoFollow(file);
           const lines = text.split('\n');
           for (let i = 0; i < lines.length; i++) {
-            if (regex.test(lines[i])) matches.push(`${workspaceDisplayPath(cwd, file)}:${i + 1}:${lines[i]}`);
+            if (regex.test(lines[i])) matches.push(`${workspaceDisplayPath(displayRoot, file)}:${i + 1}:${lines[i]}`);
             regex.lastIndex = 0;
           }
         }

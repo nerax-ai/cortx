@@ -18,8 +18,10 @@ export function createFindTool(cwd: string): Tool {
     execute: async ({ pattern, path }) => {
       if (typeof pattern !== 'string' || !pattern) return { success: false, error: 'pattern is required' };
       let target: string;
+      let displayRoot: string;
       try {
         target = await resolveWorkspacePath(cwd, path ? String(path) : '.');
+        displayRoot = await resolveWorkspacePath(cwd, '.');
       } catch (e: unknown) {
         if (isWorkspacePathError(e)) return { success: false, error: e.message };
         throw e;
@@ -29,7 +31,7 @@ export function createFindTool(cwd: string): Tool {
         const files = await collectWorkspaceFiles(cwd, target);
         const matches = files
           .filter((file) => matcher.test(file.split(/[\\/]/).pop() ?? file))
-          .map((file) => workspaceDisplayPath(cwd, file))
+          .map((file) => workspaceDisplayPath(displayRoot, file))
           .sort();
         return { success: true, output: matches.join('\n') || '(no files found)' };
       } catch (e: unknown) {

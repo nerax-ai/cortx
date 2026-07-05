@@ -1,6 +1,7 @@
-import { readFile, writeFile, access, constants } from 'fs/promises';
+import { constants } from 'fs';
+import { access } from 'fs/promises';
 import type { Tool } from '@cortx/sdk';
-import { isWorkspacePathError, resolveWorkspacePath } from './path-safety.js';
+import { isWorkspacePathError, readTextNoFollow, replaceTextNoFollow, resolveWorkspacePath } from './path-safety.js';
 
 export function createEditTool(cwd: string): Tool {
   return {
@@ -27,13 +28,13 @@ export function createEditTool(cwd: string): Tool {
         throw error;
       }
       await access(abs, constants.R_OK | constants.W_OK);
-      const content = await readFile(abs, 'utf-8');
+      const content = await readTextNoFollow(abs);
       if (!content.includes(oldText)) return { success: false, error: `Text not found in ${path}` };
       if (content.indexOf(oldText) !== content.lastIndexOf(oldText)) {
         return { success: false, error: `Text is not unique in ${path}; provide a more specific oldText.` };
       }
       const updated = content.replace(oldText, newText);
-      await writeFile(abs, updated, 'utf-8');
+      await replaceTextNoFollow(abs, updated);
       return { success: true, output: `Edited ${path}` };
     },
   };

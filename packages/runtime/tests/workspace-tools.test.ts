@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, realpathSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createReadTool } from '../src/workspace-tools/read';
@@ -9,6 +9,7 @@ import { createBashTool } from '../src/workspace-tools/bash';
 import { createGrepTool } from '../src/workspace-tools/grep';
 import { createFindTool } from '../src/workspace-tools/find';
 import { createLsTool } from '../src/workspace-tools/ls';
+import { resolveWritableWorkspacePath, resolveWorkspacePath } from '../src/workspace-tools/path-safety';
 
 let tmpDir: string;
 let outsideDir: string;
@@ -76,6 +77,27 @@ describe('createReadTool', () => {
     const result = await tool.execute({ path: 'secret-link.txt' }, { sessionId: '1', workingDirectory: tmpDir, logger: {} as any });
     expect(result.success).toBe(false);
     expect(result.error).toContain('workspace');
+  });
+});
+
+describe('workspace path safety', () => {
+  test('canonicalizes existing symlinked paths to their real target', async () => {
+    mkdirSync(join(tmpDir, 'real'));
+    writeFileSync(join(tmpDir, 'real', 'safe.txt'), 'safe');
+    symlinkSync(join(tmpDir, 'real', 'safe.txt'), join(tmpDir, 'safe-link.txt'));
+
+    await expect(resolveWorkspacePath(tmpDir, 'safe-link.txt')).resolves.toBe(
+      realpathSync(join(tmpDir, 'real', 'safe.txt')),
+    );
+  });
+
+  test('canonicalizes writable symlinked parent directories before file operations', async () => {
+    mkdirSync(join(tmpDir, 'real-parent'));
+    symlinkSync(join(tmpDir, 'real-parent'), join(tmpDir, 'parent-link'));
+
+    await expect(resolveWritableWorkspacePath(tmpDir, 'parent-link/new.txt')).resolves.toBe(
+      join(realpathSync(join(tmpDir, 'real-parent')), 'new.txt'),
+    );
   });
 });
 

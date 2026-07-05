@@ -27,6 +27,24 @@ function createUserMessage(text: string): LanguageMessage {
   return { role: 'user', content: [{ type: 'text', text }] } as LanguageMessage;
 }
 
+function summarizeValue(value: unknown, maxLength = 160): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+function childProgressForEvent(event: AgentEvent): string | undefined {
+  if (event.type === 'tool_progress') return `  .. ${event.text}`;
+  if (event.type === 'tool_result') {
+    const prefix = event.isError ? '  <- tool error' : '  <- tool result';
+    return `${prefix}: ${summarizeValue(event.result)}`;
+  }
+  if (event.type === 'thinking') return `  thinking: ${summarizeValue(event.content)}`;
+  if (event.type === 'text') return `  ${summarizeValue(event.content)}`;
+  if (event.type === 'error') return `  error: ${event.error.message}`;
+  return undefined;
+}
+
 async function runSubAgentLoop(input: {
   loopOpts: Parameters<typeof agentLoop>[0];
   session: SubAgentSession;
@@ -58,6 +76,11 @@ async function runSubAgentLoop(input: {
         const progressText = `  -> ${event.toolCall.toolName}${summary ? ': ' + summary : ''}`;
         reportProgress?.(progressText);
         onAgentEvent({ type: 'agent_progress', toolCallId, text: progressText });
+      }
+      const childProgress = childProgressForEvent(event);
+      if (childProgress) {
+        reportProgress?.(childProgress);
+        onAgentEvent({ type: 'agent_progress', toolCallId, text: childProgress });
       }
       if (event.type === 'text') session.output += event.content;
       if (event.type === 'error') throw event.error;

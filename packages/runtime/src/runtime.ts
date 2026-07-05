@@ -115,6 +115,17 @@ function parentAttributionFor(session: ManagedRuntimeSession, event: AgentEvent)
   }
 }
 
+function workspaceToolNeedsApproval(tool: Tool): boolean {
+  return tool.sideEffects === 'write' || tool.sideEffects === 'destructive';
+}
+
+function requireApprovalForExternalTool(tool: Tool): Tool {
+  return {
+    ...tool,
+    sideEffects: tool.sideEffects === 'destructive' ? 'destructive' : 'write',
+  };
+}
+
 export class CortxRuntime {
   private readonly sessions = new Map<string, ManagedRuntimeSession>();
   private readonly appName: string;
@@ -193,30 +204,40 @@ export class CortxRuntime {
     const skillPaths = resolvedSkillPaths.length ? resolvedSkillPaths : undefined;
     const system = request.system ?? this.system;
     const agentSessions = new SubAgentSessionStore();
-    const mountedTools = [
-      ...this.tools,
-      ...createWorkspaceTools(workspace.workingDirectory, toolMode),
-      ...(request.tools ?? []),
-    ];
+    const toolApprovalRequirements = new WeakMap<Tool, boolean>();
+    const runtimeTools = this.tools.map((tool) => {
+      const wrapped = requireApprovalForExternalTool(tool);
+      toolApprovalRequirements.set(wrapped, true);
+      return wrapped;
+    });
+    const workspaceTools = createWorkspaceTools(workspace.workingDirectory, toolMode);
+    for (const tool of workspaceTools) toolApprovalRequirements.set(tool, workspaceToolNeedsApproval(tool));
+    const requestTools = (request.tools ?? []).map((tool) => {
+      const wrapped = requireApprovalForExternalTool(tool);
+      toolApprovalRequirements.set(wrapped, true);
+      return wrapped;
+    });
+    const mountedTools = [...runtimeTools, ...workspaceTools, ...requestTools];
     const officialExtensions = await this.createOfficialExtensions({
       workingDirectory: workspace.workingDirectory,
       capabilities,
       skillPaths,
+      needsToolApproval: (tool) => (tool ? toolApprovalRequirements.get(tool) ?? true : true),
     });
     let session: ManagedRuntimeSession;
     if (capabilities.subAgents !== false) {
-      mountedTools.push(
-        createSubAgentTool({
-          language: this.language,
-          model,
-          registry: request.registry ?? this.registry,
-          plugins: request.plugins ?? this.plugins,
-          agentSessions,
-          getTools: () => mountedTools,
-          getExtensions: () => officialExtensions,
-          onAgentEvent: (event) => this.broadcast(session, event),
-        }),
-      );
+      const subAgentTool = createSubAgentTool({
+        language: this.language,
+        model,
+        registry: request.registry ?? this.registry,
+        plugins: request.plugins ?? this.plugins,
+        agentSessions,
+        getTools: () => mountedTools,
+        getExtensions: () => officialExtensions,
+        onAgentEvent: (event) => this.broadcast(session, event),
+      });
+      toolApprovalRequirements.set(subAgentTool, true);
+      mountedTools.push(subAgentTool);
     }
     const cortx = new Cortx(this.language, {
       appName: this.appName,
@@ -255,6 +276,7 @@ export class CortxRuntime {
       envelopeSubscribers: new Set(),
       idleTimer: undefined,
       isRunning: false,
+      runPromise: undefined,
       runId: 0,
       nextEventSequence: 0,
       agentSessions,
@@ -404,6 +426,7 @@ export class CortxRuntime {
     session.cortx.controller.rejectPendingQuestions('Session aborted');
     session.runId++;
     session.isRunning = false;
+    session.runPromise = undefined;
     session.lastActivityAt = Date.now();
     void this.persistRuntimeSession(session);
     this.resetIdleTimer(session);
@@ -454,20 +477,29 @@ export class CortxRuntime {
     session.cortx.setRunId(runId);
     void this.persistRuntimeSession(session);
 
-    (async () => {
-      try {
-        for await (const event of createGenerator()) {
-          if (!this.sessions.has(session.id) || session.runId !== runId) break;
-          this.broadcast(session, event);
-        }
-      } catch (error) {
-        if (!this.sessions.has(session.id) || session.runId !== runId) return;
-        this.broadcast(session, eventError(toRuntimeError(error)));
-      } finally {
-        if (session.runId === runId) session.isRunning = false;
-        void this.persistRuntimeSession(session);
+    const runPromise = this.consumeRun(session, runId, createGenerator);
+    session.runPromise = runPromise;
+    void runPromise;
+  }
+
+  private async consumeRun(
+    session: ManagedRuntimeSession,
+    runId: number,
+    createGenerator: () => AsyncGenerator<AgentEvent>,
+  ): Promise<void> {
+    try {
+      for await (const event of createGenerator()) {
+        if (!this.sessions.has(session.id) || session.runId !== runId) break;
+        this.broadcast(session, event);
       }
-    })();
+    } catch (error) {
+      if (!this.sessions.has(session.id) || session.runId !== runId) return;
+      this.broadcast(session, eventError(toRuntimeError(error)));
+    } finally {
+      if (session.runId === runId) session.isRunning = false;
+      if (session.runPromise && session.runId === runId) session.runPromise = undefined;
+      void this.persistRuntimeSession(session);
+    }
   }
 
   private broadcast(session: ManagedRuntimeSession, event: AgentEvent): void {
@@ -648,6 +680,7 @@ export class CortxRuntime {
     workingDirectory: string;
     capabilities: RuntimeDefaultCapabilities;
     skillPaths?: string[];
+    needsToolApproval?: (tool: Tool | undefined, input: Record<string, unknown>) => boolean;
   }): Promise<AgentRuntimeExtensions> {
     const sets: AgentRuntimeExtensions[] = [createEmptyAgentRuntimeExtensions()];
     if (input.capabilities.skills !== false) {
@@ -655,7 +688,7 @@ export class CortxRuntime {
       if (skills.length) sets.push(createSkillExtensions(skills));
     }
     if (input.capabilities.approval !== false) {
-      sets.push(createDefaultSafetyExtensions());
+      sets.push(createDefaultSafetyExtensions({ needsApproval: input.needsToolApproval }));
     }
     return mergeAgentRuntimeExtensions(...sets);
   }

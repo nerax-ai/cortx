@@ -33,6 +33,16 @@ function textResponse(text: string): LanguageStreamPart[] {
   ];
 }
 
+function thinkingTextResponse(thinking: string, text: string): LanguageStreamPart[] {
+  return [
+    { type: 'reasoning-delta', id: 'r1', delta: thinking },
+    { type: 'text-start', id: 't1' },
+    { type: 'text-delta', id: 't1', delta: text },
+    { type: 'text-end', id: 't1' },
+    { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
+  ];
+}
+
 function toolCallResponse(toolCallId: string, toolName: string, input: string): LanguageStreamPart[] {
   return [
     { type: 'tool-input-start', id: toolCallId, toolName },
@@ -205,6 +215,88 @@ describe('runtime sub-agent capability', () => {
       toolCallId: 'agent-call',
     });
     expect((events.find((event) => event.type === 'agent_completed') as { isError?: boolean }).isError).not.toBe(true);
+  });
+
+  test('foreground agent bridges direct child tool askUser calls', async () => {
+    const events: AgentEvent[] = [];
+    const store = new SubAgentSessionStore();
+    const tool = createSubAgentTool({
+      language: mockLanguage([
+        toolCallResponse('child-question', 'confirm', '{"message":"continue?"}'),
+        textResponse('confirmed'),
+      ]),
+      model: 'test',
+      agentSessions: store,
+      getTools: () => [
+        {
+          name: 'confirm',
+          sideEffects: 'read',
+          inputSchema: {},
+          execute: async (_input, ctx) => {
+            const answer = await ctx.askUser?.('continue?');
+            return { success: answer === 'yes', output: `answer=${answer}` };
+          },
+        } satisfies Tool,
+      ],
+      getExtensions: () => createEmptyAgentRuntimeExtensions(),
+      onAgentEvent: (event) => events.push(event),
+    });
+
+    const result = await tool.execute(
+      { prompt: 'ask from child', description: 'child question' },
+      toolContext({ askUser: async () => 'yes' }) as never,
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(String(result.output)).toContain('confirmed');
+    expect(events.find((event) => event.type === 'user_request')).toMatchObject({
+      type: 'user_request',
+      request: {
+        requestId: 'agent-call',
+        kind: 'question',
+        context: { childToolCallId: 'child-question', parentToolCallId: 'agent-call' },
+      },
+    });
+    const completed = events.find((event) => event.type === 'agent_completed');
+    expect(completed).toMatchObject({ type: 'agent_completed' });
+    expect((completed as { isError?: boolean } | undefined)?.isError).not.toBe(true);
+  });
+
+  test('foreground agent forwards child text thinking and tool results as parent progress', async () => {
+    const events: AgentEvent[] = [];
+    const store = new SubAgentSessionStore();
+    const tool = createSubAgentTool({
+      language: mockLanguage([
+        toolCallResponse('child-read', 'readFile', '{"path":"child.txt"}'),
+        thinkingTextResponse('checking result', 'child final answer'),
+      ]),
+      model: 'test',
+      agentSessions: store,
+      getTools: () => [
+        {
+          name: 'readFile',
+          sideEffects: 'read',
+          inputSchema: {},
+          execute: async () => ({ success: true, output: 'child tool output' }),
+        } satisfies Tool,
+      ],
+      getExtensions: () => createEmptyAgentRuntimeExtensions(),
+      onAgentEvent: (event) => events.push(event),
+    });
+
+    const result = await tool.execute(
+      { prompt: 'inspect child state', description: 'child progress' },
+      toolContext() as never,
+    );
+
+    expect(result).toMatchObject({ success: true });
+    const progress = events
+      .filter((event): event is Extract<AgentEvent, { type: 'agent_progress' }> => event.type === 'agent_progress')
+      .map((event) => event.text);
+    expect(progress.some((text) => text.includes('readFile'))).toBe(true);
+    expect(progress.some((text) => text.includes('child tool output'))).toBe(true);
+    expect(progress.some((text) => text.includes('checking result'))).toBe(true);
+    expect(progress.some((text) => text.includes('child final answer'))).toBe(true);
   });
 
   test('runtime envelopes child lifecycle events with parent attribution', async () => {

@@ -9,6 +9,11 @@ import { AgentLoopController } from './types.js';
 import { agentLoop } from './loop.js';
 import { getRegistry, resolveExtensions } from './plugin-resolver.js';
 
+type ResumeCheckpointResult =
+  | { kind: 'none' }
+  | { kind: 'checkpoint'; checkpoint: AgentRunCheckpoint }
+  | { kind: 'unsupported_schema'; schemaVersion: number };
+
 export class Cortx {
   private readonly language: LanguageClient;
   private readonly config: CortxConfig;
@@ -86,7 +91,16 @@ export class Cortx {
     const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
     const extensions = mergeAgentRuntimeExtensions(this.config.extensions, configuredExtensions);
-    const checkpoint = await this.loadResumeCheckpoint();
+    const resumeCheckpoint = await this.loadResumeCheckpoint();
+    if (resumeCheckpoint.kind === 'unsupported_schema') {
+      yield {
+        type: 'error',
+        error: new Error(`Unsupported checkpoint schema version: ${resumeCheckpoint.schemaVersion}`),
+        code: 'client_error',
+      };
+      return;
+    }
+    const checkpoint = resumeCheckpoint.kind === 'checkpoint' ? resumeCheckpoint.checkpoint : undefined;
     const messages = checkpoint?.state.messages?.map((message) => ({ ...message })) ?? [...this._messages];
     for await (const event of agentLoop({
       ...this.config,
@@ -120,13 +134,15 @@ export class Cortx {
     this._messages = messages.slice();
   }
 
-  private async loadResumeCheckpoint(): Promise<AgentRunCheckpoint | undefined> {
+  private async loadResumeCheckpoint(): Promise<ResumeCheckpointResult> {
     const checkpoint = await this.config.durableStore?.loadCheckpoint(this._sessionId);
-    if (!checkpoint) return undefined;
-    if (checkpoint.schemaVersion !== AGENT_RUN_CHECKPOINT_SCHEMA_VERSION) return checkpoint;
-    if (checkpoint.state.terminal) return undefined;
-    if (!checkpoint.state.messages?.length) return undefined;
-    return checkpoint;
+    if (!checkpoint) return { kind: 'none' };
+    if (checkpoint.schemaVersion !== AGENT_RUN_CHECKPOINT_SCHEMA_VERSION) {
+      return { kind: 'unsupported_schema', schemaVersion: checkpoint.schemaVersion };
+    }
+    if (checkpoint.state.terminal) return { kind: 'none' };
+    if (!checkpoint.state.messages?.length) return { kind: 'none' };
+    return { kind: 'checkpoint', checkpoint };
   }
 
   private resetControllerIfAborted(): void {

@@ -64,6 +64,7 @@ export interface ManagedRuntimeSession {
   envelopeSubscribers: Set<(event: import('@cortx/sdk').RuntimeAgentEventEnvelope) => void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   isRunning: boolean;
+  runPromise?: Promise<void>;
   runId: number;
   nextEventSequence: number;
   agentSessions: SubAgentSessionStore;

@@ -1,6 +1,5 @@
-import { writeFile } from 'fs/promises';
 import type { Tool } from '@cortx/sdk';
-import { isWorkspacePathError, resolveWritableWorkspacePath } from './path-safety.js';
+import { isWorkspacePathError, resolveWritableWorkspacePath, writeTextNoFollow } from './path-safety.js';
 
 export function createWriteTool(cwd: string): Tool {
   return {
@@ -25,7 +24,7 @@ export function createWriteTool(cwd: string): Tool {
         if (isWorkspacePathError(error)) return { success: false, error: error.message };
         throw error;
       }
-      await writeFile(abs, content, 'utf-8');
+      await writeTextNoFollow(abs, content);
       return { success: true, output: `Wrote ${content.length} bytes to ${path}` };
     },
   };

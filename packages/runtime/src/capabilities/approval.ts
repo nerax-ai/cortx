@@ -3,7 +3,11 @@ import { createEmptyAgentRuntimeExtensions } from '@cortx/sdk';
 
 const APPROVAL_RESPONSES = new Set(['y', 'yes', 'approve', 'approved', 'allow', 'allowed']);
 
-function needsApproval(tool: Tool | undefined): boolean {
+export interface ToolApprovalPolicyOptions {
+  needsApproval?: (tool: Tool | undefined, input: Record<string, unknown>) => boolean;
+}
+
+function defaultNeedsApproval(tool: Tool | undefined): boolean {
   const sideEffects = tool?.sideEffects ?? 'write';
   return sideEffects === 'write' || sideEffects === 'destructive';
 }
@@ -18,10 +22,11 @@ function isApproved(response: string | undefined): boolean {
   return APPROVAL_RESPONSES.has(String(response ?? '').trim().toLowerCase());
 }
 
-export function createDefaultToolApprovalPolicy(): AgentSessionPolicyContribution {
+export function createDefaultToolApprovalPolicy(options: ToolApprovalPolicyOptions = {}): AgentSessionPolicyContribution {
   return {
     async beforeToolCall({ tool, input, toolContext }) {
-      if (!needsApproval(tool)) return { action: 'allow' };
+      const needsApproval = options.needsApproval ?? ((candidate: Tool | undefined) => defaultNeedsApproval(candidate));
+      if (!needsApproval(tool, input)) return { action: 'allow' };
       if (!toolContext.askUser) {
         return { action: 'deny', reason: `Tool ${tool?.name ?? 'unknown'} requires approval, but no approval channel is available.` };
       }
@@ -40,8 +45,8 @@ export function createDefaultToolApprovalPolicy(): AgentSessionPolicyContributio
   };
 }
 
-export function createDefaultSafetyExtensions(): AgentRuntimeExtensions {
+export function createDefaultSafetyExtensions(options: ToolApprovalPolicyOptions = {}): AgentRuntimeExtensions {
   const extensions = createEmptyAgentRuntimeExtensions();
-  extensions.sessionPolicies.push(createDefaultToolApprovalPolicy());
+  extensions.sessionPolicies.push(createDefaultToolApprovalPolicy(options));
   return extensions;
 }
