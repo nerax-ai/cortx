@@ -2,7 +2,7 @@
 date: 2026-07-05
 topic: cortx-remaining-work
 baseline_commit: c06a513
-latest_audit_commit: 9f55fee
+latest_audit_commit: 6301cc5
 status: partially-closed
 language: zh-CN
 ---
@@ -17,24 +17,25 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 ## 2026-07-05 最新审计更新
 
-`9f55fee feat(runtime): close durable agent lifecycle gaps` 已经关闭本文件原先最硬的 P0/P1 后端产品化缺口：
+截至本轮工作，已经关闭本文件原先最硬的 P0/P1 后端产品化缺口，并补上一个 P2 持久化 replay 缺口：
 
 - P0 真实持久化 resume：已新增 `FileDurableRunStore`，持久化 checkpoint、runtime session snapshot 和 sub-agent snapshot；runtime 已提供 `restoreDurableSessions({ autoResume })`，server 启动时使用 file durable store 并显式 restore。
 - P0 Background/Sub-Agent 生命周期：parent abort/destroy 已取消 live child controller；child snapshot 已持久化并可在 restore 后 hydrate；child lifecycle envelope 保留 parent session/run/toolCall attribution。
 - P1 SDK 作者体验：已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试与文档。
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，server 暴露 `POST /agent-specs/launch`，Web bridge 与 TUI remote client 可直接调用该 endpoint；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
+- P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 
 仍然没有被这轮完全关闭的项：
 
 - TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连、approval + abort/resume + sub-agent 组合流程。
-- durable event store、schema migration、多用户 server 权限模型和 streaming-time token preemption 仍属于后续运维级增强。
+- schema migration、多用户 server 权限模型、长会话压测和 streaming-time token preemption 仍属于后续运维级增强。
 - `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`730 pass / 0 fail / 2019 expect`
+- 当前全量测试：`bun test` 通过，`757 pass / 0 fail / 2140 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -44,7 +45,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 | 维度 | 当前状态 | 判断 |
 | --- | --- | --- |
 | Core 架构 | 已基本完成 | `@cortx/core` 已接近通用 agent kernel |
-| Runtime host | 已基本完成 | 多 session、多目录、能力挂载、event envelope、durable resume 基础能力已落地 |
+| Runtime host | 已基本完成 | 多 session、多目录、能力挂载、event envelope、durable resume、durable event replay 已落地 |
 | Server adapter | 较成熟 | HTTP/SSE、token、session action、runtime delegation 已稳定 |
 | SDK | 可用但还不够顺手 | 底层类型清楚，但缺更高层插件作者 helper 和版本策略 |
 | TUI | 能用但仍需打磨 | local/remote adapter 已通，真实日常体验还不够成熟 |
@@ -54,20 +55,18 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 整体判断：
 
 - 作为通用 Agent 底座：约 `95% - 97%`
-- 作为完整可长期使用产品：约 `78% - 83%`
+- 作为完整可长期使用产品：约 `84% - 88%`
 
 ## P0：真实持久化 Resume
 
 ### 当前状态
 
-Runtime 已经有 durable resume 的接口、checkpoint schema、`sessionId + runId` 语义和内存测试。当前能力能证明恢复模型成立，但还没有产品级持久化 backend。
+已关闭 P0。Runtime 已经有 `FileDurableRunStore`、checkpoint schema、`sessionId + runId` 语义、runtime session snapshot、sub-agent snapshot、event envelope snapshot，以及 `restoreDurableSessions({ autoResume })`。
 
 ### 缺口
 
-- 缺 file/sqlite/storage adapter 之类真实 durable store。
-- 缺进程崩溃后自动扫描并恢复 session 的完整闭环。
-- 缺 checkpoint、event history、session metadata 的统一落盘策略。
 - 缺 schemaVersion migration 策略。
+- 缺 sqlite/database backend；当前 file backend 足够支撑本地产品阶段。
 
 ### 后续验收
 
@@ -81,12 +80,10 @@ Runtime 已经有 durable resume 的接口、checkpoint schema、`sessionId + ru
 
 ### 当前状态
 
-Sub-agent 已经从 core 迁入 runtime capability，支持 foreground/background，runtime envelope 也已经带 parent attribution。
+已关闭 P0。Sub-agent 已经从 core 迁入 runtime capability，支持 foreground/background，parent abort/destroy 会取消 live child controller；child snapshot 和 parent attribution 已可持久化并恢复。
 
 ### 缺口
 
-- parent abort 时，child cancellation 语义还需要更强。
-- background child 的 checkpoint、resume、event history 还没有产品级闭环。
 - 多 child 并发时 UI 归属、排序、失败状态需要统一。
 - child run 的资源释放、超时、错误传播策略需要更明确。
 
@@ -152,12 +149,12 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 当前状态
 
-底层 extension/policy/tool/event 类型已经拆清楚，core/runtime 边界也比之前稳定。
+底层 extension/policy/tool/event 类型已经拆清楚，core/runtime 边界也比之前稳定。SDK 已新增 `defineContributionFactory()`、`defineToolFactory()`、`defineSessionPolicyFactory()`、`defineEventObserverFactory()`，并有导出测试和文档。
 
 ### 缺口
 
-- 缺 `defineTool()`、`defineRuntimeCapability()`、`defineSessionPolicy()`、`defineEventObserver()` 等高层 helper。
-- 缺编译期类型测试，例如 tsd 或类型用例。
+- helper 已有第一版，但还可以继续打磨更贴近官方插件模板的 `defineRuntimeCapability()` 等组合 helper。
+- 缺 tsd 级别的独立编译期类型测试。
 - 缺 extension schemaVersion 和 migration 策略。
 - 缺官方插件开发手册。
 - 缺错误示例、推荐组合方式和最小可运行样例。
@@ -172,14 +169,14 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 
 ### 当前状态
 
-AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-only 或 skill-pack-backed session。
+AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-only 或 skill-pack-backed session。Runtime 支持 JSON 文件启动，server/Web bridge/TUI remote client 已有启动入口。
 
 ### 缺口
 
 - 缺安装、发现、启用入口。
 - 缺 manifest 规范和版本策略。
-- 缺官方示例包。
-- 缺从 CLI/server API/UI 启动 AgentSpec 的稳定入口。
+- 官方示例包已有 basic 版本，但还缺覆盖更多真实官方插件集场景的示例。
+- 缺 Web/TUI 中面向用户的 AgentSpec 选择器；底层 API 已就绪。
 - 缺 skill pack 与普通 `SKILL.md`、companion files、prompt template 的完整官方约定。
 
 ### 后续验收
@@ -214,7 +211,7 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 ### 缺口
 
-- Runtime event history 已 bounded，但真实 durable event store 还未落地。
+- Runtime event history 已 bounded，真实 file-backed durable event envelope store 已落地；还缺数据库/压缩/归档策略。
 - Long-running session 的内存、timer、pending request、sub-agent store 需要压测。
 - Streaming token budget 目前仍以后验 usage 为主，缺 streaming-time preemption。
 - Server 多用户、多 token、多 workspace root 的权限模型还只是本地单用户级别。
@@ -227,12 +224,11 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 ## 建议推进顺序
 
-1. 做真实持久化 store 与 resume 闭环。
-2. 补 background/sub-agent cancellation、checkpoint、event attribution 的完整生命周期。
-3. 做一次真人端到端 dogfood：TUI local、TUI remote、Web remote。
-4. 基于 dogfood 修 TUI 体验和 Web 基础产品能力。
-5. 打磨 SDK helper、类型测试、官方插件开发手册。
-6. 产品化 AgentSpec / SkillPack 的安装、发现和启动入口。
+1. 做一次真人端到端 dogfood：TUI local、TUI remote、Web remote。
+2. 基于 dogfood 修 TUI 体验和 Web 基础产品能力。
+3. 补 durable schema migration、长会话压测和 streaming-time token preemption。
+4. 打磨 SDK helper、类型测试、官方插件开发手册。
+5. 产品化 AgentSpec / SkillPack 的安装、发现、选择器和更多官方示例入口。
 
 ## 结论
 

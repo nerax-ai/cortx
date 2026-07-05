@@ -6,9 +6,11 @@ import { join } from 'node:path';
 import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION, type AgentRunCheckpoint } from '@cortx/sdk';
 import {
   FileDurableRunStore,
+  RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
   isRuntimeDurableRunStore,
+  type RuntimeEventEnvelopeSnapshot,
   type RuntimeSessionSnapshot,
   type RuntimeSubAgentSessionSnapshot,
 } from '../src/index';
@@ -73,6 +75,17 @@ function childSnapshot(parentSessionId: string): RuntimeSubAgentSessionSnapshot 
   };
 }
 
+function eventSnapshot(sessionId: string, sequence: number): RuntimeEventEnvelopeSnapshot {
+  return {
+    schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+    sequence,
+    timestamp: sequence,
+    sessionId,
+    runId: 1,
+    event: sequence === 2 ? { type: 'error', error: new Error('durable failure'), code: 'stream_error' } : { type: 'turn_start', iteration: 1 },
+  };
+}
+
 describe('FileDurableRunStore', () => {
   test('persists checkpoints across store instances', async () => {
     const first = new FileDurableRunStore(tmpDir);
@@ -91,6 +104,8 @@ describe('FileDurableRunStore', () => {
     const store = new FileDurableRunStore(tmpDir);
     await store.saveRuntimeSession(sessionSnapshot('session-a'));
     await store.saveSubAgentSession(childSnapshot('session-a'));
+    await store.saveEventEnvelope(eventSnapshot('session-a', 2));
+    await store.saveEventEnvelope(eventSnapshot('session-a', 1));
 
     expect(await store.loadRuntimeSession('session-a')).toMatchObject({
       id: 'session-a',
@@ -99,10 +114,15 @@ describe('FileDurableRunStore', () => {
     });
     expect(await store.listRuntimeSessions()).toHaveLength(1);
     expect(await store.listSubAgentSessions('session-a')).toEqual([childSnapshot('session-a')]);
+    expect((await store.listEventEnvelopes('session-a')).map((event) => event.sequence)).toEqual([1, 2]);
+    const errorEvent = (await store.listEventEnvelopes('session-a'))[1].event;
+    expect(errorEvent.type).toBe('error');
+    expect(errorEvent.type === 'error' ? errorEvent.error.message : '').toBe('durable failure');
 
     await store.deleteRuntimeSession('session-a');
     expect(await store.loadRuntimeSession('session-a')).toBeUndefined();
     expect(await store.listSubAgentSessions('session-a')).toEqual([]);
+    expect(await store.listEventEnvelopes('session-a')).toEqual([]);
   });
 
   test('serializes sub-agent snapshot writes so completed status wins', async () => {

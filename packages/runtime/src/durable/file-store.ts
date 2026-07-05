@@ -4,9 +4,11 @@ import { dirname, join, resolve } from 'node:path';
 import type { AgentRunCheckpoint } from '@cortx/sdk';
 import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION } from '@cortx/sdk';
 import {
+  RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
   type RuntimeDurableRunStore,
+  type RuntimeEventEnvelopeSnapshot,
   type RuntimeSessionSnapshot,
   type RuntimeSubAgentSessionSnapshot,
 } from './types.js';
@@ -55,6 +57,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
     await rm(this.sessionPath(sessionId), { force: true });
     await this.deleteCheckpoint(sessionId);
     await this.deleteSubAgentSessions(sessionId);
+    await this.deleteEventEnvelopes(sessionId);
   }
 
   async saveSubAgentSession(snapshot: RuntimeSubAgentSessionSnapshot): Promise<void> {
@@ -82,6 +85,19 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
     await rm(join(this.root, 'sub-agents', encodeId(parentSessionId)), { recursive: true, force: true });
   }
 
+  async saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): Promise<void> {
+    await writeJson(this.eventEnvelopePath(snapshot.sessionId, snapshot.sequence), serializeEnvelopeSnapshot(snapshot));
+  }
+
+  async listEventEnvelopes(sessionId: string): Promise<RuntimeEventEnvelopeSnapshot[]> {
+    const records = await listJson(join(this.root, 'events', encodeId(sessionId)), isRuntimeEventEnvelopeSnapshot);
+    return records.sort((a, b) => a.sequence - b.sequence);
+  }
+
+  async deleteEventEnvelopes(sessionId: string): Promise<void> {
+    await rm(join(this.root, 'events', encodeId(sessionId)), { recursive: true, force: true });
+  }
+
   private checkpointPath(sessionId: string): string {
     return join(this.root, 'checkpoints', `${encodeId(sessionId)}.json`);
   }
@@ -92,6 +108,10 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
 
   private subAgentPath(parentSessionId: string, toolCallId: string): string {
     return join(this.root, 'sub-agents', encodeId(parentSessionId), `${encodeId(toolCallId)}.json`);
+  }
+
+  private eventEnvelopePath(sessionId: string, sequence: number): string {
+    return join(this.root, 'events', encodeId(sessionId), `${String(sequence).padStart(16, '0')}.json`);
   }
 }
 
@@ -178,4 +198,43 @@ function isRuntimeSubAgentSessionSnapshot(value: unknown): value is RuntimeSubAg
     typeof value.toolCallCount === 'number' &&
     typeof value.startedAt === 'number'
   );
+}
+
+function serializeEnvelopeSnapshot(snapshot: RuntimeEventEnvelopeSnapshot): unknown {
+  if (snapshot.event.type !== 'error') return snapshot;
+  return {
+    ...snapshot,
+    event: {
+      ...snapshot.event,
+      error: {
+        name: snapshot.event.error.name,
+        message: snapshot.event.error.message,
+      },
+    },
+  };
+}
+
+function isRuntimeEventEnvelopeSnapshot(value: unknown): value is RuntimeEventEnvelopeSnapshot {
+  if (!isObject(value)) return false;
+  if (
+    value.schemaVersion !== RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION ||
+    typeof value.sequence !== 'number' ||
+    typeof value.timestamp !== 'number' ||
+    typeof value.sessionId !== 'string' ||
+    typeof value.runId !== 'number' ||
+    !isObject(value.event) ||
+    typeof value.event.type !== 'string'
+  ) {
+    return false;
+  }
+
+  if (value.event.type === 'error') {
+    const error = value.event.error;
+    if (error instanceof Error) return true;
+    if (!isObject(error) || typeof error.message !== 'string') return false;
+    const restored = new Error(error.message);
+    if (typeof error.name === 'string') restored.name = error.name;
+    value.event.error = restored;
+  }
+  return true;
 }

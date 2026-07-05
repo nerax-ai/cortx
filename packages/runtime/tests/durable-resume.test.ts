@@ -109,6 +109,7 @@ describe('runtime durable resume', () => {
 
     await first.prompt(firstSession.id, 'resume me');
     await waitForEvent(firstEvents, 'turn_start');
+    await waitForDurableEnvelope(firstStore, 'file-backed-session', 'turn_start');
     await firstStore.saveSubAgentSession({
       schemaVersion: RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
       runId: 'file-backed-session:agent-call',
@@ -137,6 +138,7 @@ describe('runtime durable resume', () => {
     const secondEvents: AgentEvent[] = [];
     second.subscribe('file-backed-session', (event) => secondEvents.push(event));
     await waitForEvent(secondEvents, 'done');
+    const replayedHistory = second.getEventEnvelopeHistory('file-backed-session');
 
     expect(restored).toHaveLength(1);
     expect(second.getSession('file-backed-session')).toMatchObject({
@@ -151,6 +153,15 @@ describe('runtime durable resume', () => {
       parentRunId: 1,
       output: 'partial child output',
       status: 'running',
+    });
+    expect(replayedHistory.find((event) => event.event.type === 'turn_start')).toMatchObject({
+      sessionId: 'file-backed-session',
+      runId: 1,
+      sequence: 1,
+    });
+    expect(replayedHistory.find((event) => event.event.type === 'done')).toMatchObject({
+      sessionId: 'file-backed-session',
+      runId: 2,
     });
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed from disk' });
     first.dispose();
@@ -202,4 +213,19 @@ async function waitForEvent(events: AgentEvent[], type: AgentEvent['type'], time
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for ${type}`);
+}
+
+async function waitForDurableEnvelope(
+  store: FileDurableRunStore,
+  sessionId: string,
+  type: AgentEvent['type'],
+  timeoutMs = 1_000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const event = (await store.listEventEnvelopes(sessionId)).find((item) => item.event.type === type);
+    if (event) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for durable ${type}`);
 }

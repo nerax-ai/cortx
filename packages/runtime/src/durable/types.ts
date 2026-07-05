@@ -1,10 +1,11 @@
-import type { AgentDurableRunStore } from '@cortx/sdk';
+import type { AgentDurableRunStore, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode, RuntimeSessionMetadata } from '../session.js';
 import type { WorkspaceToolMode } from '../tool-mount.js';
 
 export const RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 
 export interface RuntimeSessionSnapshot {
   schemaVersion: typeof RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION;
@@ -40,6 +41,10 @@ export interface RuntimeSubAgentSessionSnapshot {
   completedAt?: number;
 }
 
+export interface RuntimeEventEnvelopeSnapshot extends RuntimeAgentEventEnvelope {
+  schemaVersion: typeof RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION;
+}
+
 export interface RuntimeDurableRunStore extends AgentDurableRunStore {
   saveRuntimeSession(snapshot: RuntimeSessionSnapshot): void | Promise<void>;
   loadRuntimeSession(sessionId: string): RuntimeSessionSnapshot | undefined | Promise<RuntimeSessionSnapshot | undefined>;
@@ -48,6 +53,9 @@ export interface RuntimeDurableRunStore extends AgentDurableRunStore {
   saveSubAgentSession(snapshot: RuntimeSubAgentSessionSnapshot): void | Promise<void>;
   listSubAgentSessions(parentSessionId: string): RuntimeSubAgentSessionSnapshot[] | Promise<RuntimeSubAgentSessionSnapshot[]>;
   deleteSubAgentSessions(parentSessionId: string): void | Promise<void>;
+  saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): void | Promise<void>;
+  listEventEnvelopes(sessionId: string): RuntimeEventEnvelopeSnapshot[] | Promise<RuntimeEventEnvelopeSnapshot[]>;
+  deleteEventEnvelopes(sessionId: string): void | Promise<void>;
 }
 
 export function isRuntimeDurableRunStore(store: AgentDurableRunStore | undefined): store is RuntimeDurableRunStore {
@@ -61,6 +69,9 @@ export function isRuntimeDurableRunStore(store: AgentDurableRunStore | undefined
       typeof (store as RuntimeDurableRunStore).deleteRuntimeSession === 'function' &&
       typeof (store as RuntimeDurableRunStore).saveSubAgentSession === 'function' &&
       typeof (store as RuntimeDurableRunStore).listSubAgentSessions === 'function' &&
-      typeof (store as RuntimeDurableRunStore).deleteSubAgentSessions === 'function',
+      typeof (store as RuntimeDurableRunStore).deleteSubAgentSessions === 'function' &&
+      typeof (store as RuntimeDurableRunStore).saveEventEnvelope === 'function' &&
+      typeof (store as RuntimeDurableRunStore).listEventEnvelopes === 'function' &&
+      typeof (store as RuntimeDurableRunStore).deleteEventEnvelopes === 'function',
   );
 }

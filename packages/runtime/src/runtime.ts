@@ -29,8 +29,10 @@ import {
 import { loadAgentSpecFile, parseAgentSpec, type AgentSpec } from './assets/agent-spec.js';
 import { resolveSkillPack } from './assets/skill-pack.js';
 import {
+  RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
   isRuntimeDurableRunStore,
+  type RuntimeEventEnvelopeSnapshot,
   type RuntimeDurableRunStore,
   type RuntimeSessionSnapshot,
 } from './durable/types.js';
@@ -285,6 +287,7 @@ export class CortxRuntime {
       session.runId = snapshot.runId;
       session.nextEventSequence = snapshot.nextEventSequence;
       session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
+      this.restoreSessionEventHistory(session, await store.listEventEnvelopes(snapshot.id));
       await this.persistRuntimeSession(session);
       restored.push(this.info(session));
 
@@ -469,6 +472,7 @@ export class CortxRuntime {
       session.eventEnvelopes.splice(0, session.eventEnvelopes.length - this.maxEventsPerSession);
     }
     void this.persistRuntimeSession(session);
+    void this.persistEventEnvelope(envelope);
     void this.persistSubAgentSession(session, event);
     for (const subscriber of session.subscribers) {
       try {
@@ -561,6 +565,28 @@ export class CortxRuntime {
     };
   }
 
+  private restoreSessionEventHistory(session: ManagedRuntimeSession, snapshots: RuntimeEventEnvelopeSnapshot[]): void {
+    const bounded = snapshots.slice(-this.maxEventsPerSession);
+    session.eventEnvelopes = bounded.map((snapshot) => ({
+      sequence: snapshot.sequence,
+      timestamp: snapshot.timestamp,
+      sessionId: snapshot.sessionId,
+      runId: snapshot.runId,
+      event: snapshot.event,
+      parent: snapshot.parent,
+    }));
+    session.events = session.eventEnvelopes.map((envelope) => envelope.event);
+    const lastSequence = session.eventEnvelopes.at(-1)?.sequence ?? 0;
+    session.nextEventSequence = Math.max(session.nextEventSequence, lastSequence);
+  }
+
+  private eventEnvelopeSnapshot(envelope: RuntimeAgentEventEnvelope): RuntimeEventEnvelopeSnapshot {
+    return {
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      ...envelope,
+    };
+  }
+
   private async persistRuntimeSession(session: ManagedRuntimeSession): Promise<void> {
     const store = this.runtimeDurableStore();
     if (!store) return;
@@ -568,6 +594,18 @@ export class CortxRuntime {
       await store.saveRuntimeSession(this.sessionSnapshot(session));
     } catch (error) {
       this.logger.warn(`Failed to persist runtime session "${session.id}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async persistEventEnvelope(envelope: RuntimeAgentEventEnvelope): Promise<void> {
+    const store = this.runtimeDurableStore();
+    if (!store) return;
+    try {
+      await store.saveEventEnvelope(this.eventEnvelopeSnapshot(envelope));
+    } catch (error) {
+      this.logger.warn(
+        `Failed to persist runtime event "${envelope.sessionId}:${envelope.sequence}": ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

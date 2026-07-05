@@ -12,12 +12,14 @@ export type { WorkspaceResolution } from './workspace.js';
 export { MemoryDurableRunStore } from './durable/memory-store.js';
 export { FileDurableRunStore } from './durable/file-store.js';
 export {
+  RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
   RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION,
   isRuntimeDurableRunStore,
 } from './durable/types.js';
 export type {
   RuntimeDurableRunStore,
+  RuntimeEventEnvelopeSnapshot,
   RuntimeSessionSnapshot,
   RuntimeSubAgentSessionSnapshot,
 } from './durable/types.js';

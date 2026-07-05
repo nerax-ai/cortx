@@ -16,7 +16,7 @@ language: zh-CN
 
 | Field | Value |
 | --- | --- |
-| Objective | 修复当前 Cortx 从架构正确走向长期可用产品时最关键的缺口：真实持久化 resume、background/sub-agent 生命周期闭环、AgentSpec/SkillPack 使用入口、SDK 作者体验。 |
+| Objective | 修复当前 Cortx 从架构正确走向长期可用产品时最关键的缺口：真实持久化 resume、durable event replay、background/sub-agent 生命周期闭环、AgentSpec/SkillPack 使用入口、SDK 作者体验。 |
 | Product authority | `docs/architecture/cortx-runtime-host-final-design.md` 是分层和边界权威；本计划不处理本地测试阶段仍需要的 `link:@synax-ai/*` 依赖。 |
 | Baseline | `f0ab492` 已完成 Web 多会话基础、runtime host、workspace tools 收敛、core boundary/conformance tests。 |
 | Execution profile | Standard cross-package runtime hardening；优先补 runtime/sdk/server 测试，再实现。 |
@@ -47,6 +47,8 @@ AgentSpec/SkillPack 已有 runtime API，但缺文件启动、server 入口和�
 - R2. Runtime must persist enough serializable session metadata to recreate sessions after process restart.
 - R3. Runtime must expose an explicit restore method that scans durable sessions, recreates non-terminal sessions, and can optionally resume them.
 - R4. Unsupported or invalid persisted records must be skipped or surfaced as typed runtime errors without corrupting valid sessions.
+- R14. Runtime must durably persist runtime event envelopes separately from core checkpoints.
+- R15. Restored sessions must hydrate persisted event envelope history so server/frontends can replay session history after restart.
 
 **Background and sub-agent lifecycle**
 
@@ -83,6 +85,7 @@ AgentSpec/SkillPack 已有 runtime API，但缺文件启动、server 入口和�
 - KTD3. Restore is explicit rather than constructor-side async work. Callers choose when to scan and whether to auto-resume, which keeps server/TUI startup deterministic.
 - KTD4. Background child cancellation uses runtime-owned in-memory abort callbacks plus persisted lifecycle snapshots. Persisted snapshots restore visibility, while live callbacks handle active process cancellation.
 - KTD5. AgentSpec file launch goes through the same `launchAgentSpec()` path as inline launch. There is still one runtime session runner.
+- KTD6. Durable event replay belongs to runtime host storage, not core checkpoint state. Core checkpoints stay focused on safe resume state; runtime event envelope snapshots serve UI/server replay after process restart.
 
 ### High-Level Technical Design
 
@@ -154,6 +157,16 @@ stateDiagram-v2
 - **Test scenarios:** Parent abort cancels a running background child and records error completion; destroyed session cancels running children; child snapshots persist and hydrate into a restored session; parent attribution remains on lifecycle envelopes.
 - **Verification:** Existing foreground/background behavior remains unchanged while new cancellation and persistence tests pass.
 
+### U6. Durable runtime event replay
+
+- **Goal:** Persist runtime event envelopes and hydrate bounded replay history when sessions are restored.
+- **Requirements:** R14, R15.
+- **Dependencies:** U1, U2.
+- **Files:** `packages/runtime/src/durable/types.ts`, `packages/runtime/src/durable/file-store.ts`, `packages/runtime/src/runtime.ts`, `packages/runtime/tests/durable-store.test.ts`, `packages/runtime/tests/durable-resume.test.ts`.
+- **Approach:** Add event envelope snapshots to the runtime durable store contract. File storage writes one envelope file per sequence and restores them in sequence order. Runtime broadcasts remain live and non-blocking, while restore hydrates the in-memory bounded event history from durable snapshots.
+- **Test scenarios:** Event envelope snapshots survive new store instances; persisted error events restore their error message; deleting a runtime session removes its durable events; restored runtime sessions replay pre-restart envelope history and continue with the next run id.
+- **Verification:** Durable store and durable resume tests prove event replay survives process-style restart.
+
 ### U4. AgentSpec file and server launch endpoint
 
 - **Goal:** Make AgentSpec usable as a product asset from runtime and remote clients.
@@ -181,6 +194,7 @@ stateDiagram-v2
 | Gate | Scope | Done signal |
 | --- | --- | --- |
 | `bun test packages/runtime/tests/durable-store.test.ts packages/runtime/tests/durable-resume.test.ts` | U1, U2 | File durable store and restart-style restore pass. |
+| `bun test packages/runtime/tests/durable-store.test.ts packages/runtime/tests/durable-resume.test.ts` | U6 | Durable runtime event replay survives restart and preserves envelope ordering. |
 | `bun test packages/runtime/tests/sub-agent.test.ts packages/runtime/tests/sub-agent-session.test.ts` | U3 | Parent abort and child snapshot lifecycle pass. |
 | `bun test packages/runtime/tests/agent-spec.test.ts packages/server/tests/server.test.ts packages/sdk/tests/exports.test.ts` | U4, U5 | Asset launch, server endpoint, and SDK helper exports pass. |
 | `bun run lint` | Whole repo | TypeScript no-emit succeeds. |
@@ -193,6 +207,7 @@ stateDiagram-v2
 
 - File-backed durable store is exported and covered by tests.
 - Runtime can restore durable sessions from a fresh process-style runtime instance using persisted metadata and checkpoints.
+- Runtime can restore durable event envelope history for server/frontend replay after process restart.
 - Runtime abort/destroy cancels live background sub-agents where cooperative cancellation is available.
 - Sub-agent lifecycle summaries are persisted and hydrated for restored sessions.
 - AgentSpec can launch from JSON file and through server API.
