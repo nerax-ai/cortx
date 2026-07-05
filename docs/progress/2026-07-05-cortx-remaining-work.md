@@ -25,20 +25,21 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；runtime 已新增本地 SkillPack install registry，session 和 AgentSpec 均可通过已安装 pack id/name 启用 skills；server 暴露 `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec，也能列出/安装 SkillPack 并为新 session 选择 pack；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动、`/agent` 选择器 overlay，以及 `/skill-packs`、`/skill-pack install`、`/skill-pack session` 的第一版 SkillPack 入口；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - Web event replay / recovery：Web bridge 现在暴露 typed event stream lifecycle，workspace header 能显示 replay/live/reconnecting/disconnected 状态、last event sequence，并提供不需要重新输入 API key 或 workspace 的 recover stream 操作。
+- P1 自动 product smoke：新增 `tests/product-dogfood-smoke.test.ts`，用 fake provider 但走真实 `createServerRuntime()`、Web `EventBridge`、TUI `RemoteRuntimeClient` 和 server SSE/token/auth 路径，覆盖多 workspace/session scope、approval answer、event replay、abort/resume route、sub-agent lifecycle attribution、SkillPack install/list 和 AgentSpec discovery。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
 - P2 server 权限边界：server 已支持多 API key principal、短 token 继承 principal scope、按 token workspace roots 过滤 session list，并在 session action/SSE/AgentSpec file launch 前做 scope 检查；tool/control mode scope 也不能被 request body 越权。
 
 仍然没有被这轮完全关闭的项：
 
-- TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连、approval + abort/resume + sub-agent 组合流程。
+- TUI 与 Web 的真实长会话 dogfood 仍需要人工/真实 provider 回归，尤其长输出复制、断线重连和真实视觉/终端交互；approval + abort/resume + sub-agent 的跨层协议已有自动 smoke，但还没有真实 provider 和真人 UI 回归。
 - 完整 SaaS 级多用户权限模型、长会话压测、数据库/压缩/归档策略和 streaming-time token preemption 仍属于后续运维级增强；其中 file-backed event replay 已具备默认 bounded retention，server 已具备本地产品阶段的 token-scoped workspace/mode 授权边界。
 - `@synax-ai/*` `link:` 依赖按本轮要求暂不清理，因为当前仍以本地测试为主。
 
 当前参考验证状态：
 
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`768 pass / 0 fail / 2194 expect`
+- 当前全量测试：`bun test` 通过，`813 pass / 0 fail / 2366 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -191,15 +192,14 @@ AgentSpec 和 SkillPack v1 已落地，可以作为 runtime asset 启动 prompt-
 
 ### 当前状态
 
-已有大量单测、conformance、smoke test。它们证明架构边界和主要协议成立，但仍缺真人真实环境的完整回归。
+已有大量单测、conformance、smoke test。它们证明架构边界和主要协议成立；新增 product dogfood smoke 进一步用真实 server/Web/TUI client contract 覆盖多 workspace/session、approval、event replay、abort/resume route、sub-agent attribution 和 SkillPack/AgentSpec 资产路径。但仍缺真人真实环境的完整回归。
 
 ### 缺口
 
 - 缺 TUI local mode 完整 coding session。
 - 缺 TUI remote mode 连接 server 跑完整 session。
 - 缺 Web 连接 server 跑完整 session。
-- 缺多目录、多 session、多 agent 同时运行验证。
-- 缺 abort/resume/approval/sub-agent 的组合场景验证。
+- 多目录、多 session、多 agent、abort/resume/approval/sub-agent 的协议组合已有自动 smoke；仍缺真实 provider、真实浏览器和真实终端里的长流程验证。
 
 ### 后续验收
 
