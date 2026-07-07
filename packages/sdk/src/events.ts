@@ -52,13 +52,23 @@ export interface ContextUsageBreakdownEntry {
 export interface ContextUsageFacts {
   /** Tokens consumed by the current model request context. Usually provider-reported input tokens. */
   usedTokens?: number;
+  /** Provider-reported input tokens for the latest completed request. */
+  requestInputTokens?: number;
+  /** Provider-reported output tokens for the latest completed request. */
+  requestOutputTokens?: number;
+  /** Provider-reported non-cached input tokens for the latest completed request, when available. */
+  requestNoCacheInputTokens?: number;
+  /** Provider-reported cache-read input tokens for the latest completed request, when available. */
+  requestCacheReadTokens?: number;
+  /** Provider-reported cache-write input tokens for the latest completed request, when available. */
+  requestCacheCreationTokens?: number;
   /** Model context window. Comes from explicit runtime config first, then Synax model metadata when available. */
   windowTokens?: number;
   windowSource?: ContextUsageSource;
   model?: string;
   /** Percentage in the 0..100 range. */
   percentUsed?: number;
-  /** Cache hit rate for this request, in the 0..100 range. */
+  /** Cache hit rate for the latest completed request, in the 0..100 range. */
   cacheHitRate?: number;
   breakdown: ContextUsageBreakdownEntry[];
 }
@@ -75,6 +85,7 @@ export interface AgentDoneUsage {
 
 // AgentEvent lives in the SDK so runtime extensions, tools, and hosts share one event contract.
 export type AgentEvent =
+  | { type: 'user_message'; message: string; source?: 'prompt' | 'follow_up' }
   | { type: 'turn_start'; iteration: number }
   | { type: 'turn_end'; iteration: number; toolCallCount: number }
   | { type: 'text_delta'; delta: string }
@@ -83,7 +94,7 @@ export type AgentEvent =
   | { type: 'thinking'; content: string }
   | { type: 'tool_use'; toolCall: LanguageToolCallContent }
   | { type: 'tool_progress'; toolCallId: string; text: string }
-  | { type: 'tool_result'; toolCallId: string; result: unknown; isError?: boolean }
+  | { type: 'tool_result'; toolCallId: string; result: unknown; isError?: boolean; details?: unknown }
   | { type: 'steered'; message: string }
   | { type: 'follow_up'; message: string }
   | { type: 'context_overflow'; messages: LanguageMessage[] }

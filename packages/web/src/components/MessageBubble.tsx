@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { MarkdownContent } from './MarkdownContent';
 
 interface MessageBubbleProps {
@@ -6,7 +7,7 @@ interface MessageBubbleProps {
   duration?: number;
 }
 
-export function MessageBubble({ role, content, duration }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ role, content, duration }: MessageBubbleProps) {
   const isUser = role === 'user';
   const label = isUser ? 'You' : 'Cortx';
 
@@ -27,4 +28,4 @@ export function MessageBubble({ role, content, duration }: MessageBubbleProps) {
       </div>
     </article>
   );
-}
+});

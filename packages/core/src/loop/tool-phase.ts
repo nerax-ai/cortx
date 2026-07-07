@@ -16,6 +16,7 @@ export interface ToolExecOutput {
   progressMessages: string[];
   finalOutput: string;
   isError: boolean;
+  details?: unknown;
 }
 
 export interface PendingToolExecution {
@@ -96,6 +97,7 @@ export async function* emitToolPhaseOutput(
     result: output.finalOutput,
     isError: output.isError,
   };
+  if (output.details !== undefined) event.details = output.details;
   yield await emitPhaseEvent(runtime, 'tool.execute', iteration, event);
 }
 
@@ -163,7 +165,9 @@ export async function runToolCall(
     }
 
     const finalOutput = formatToolResultOutput(result);
-    return { progressMessages, finalOutput, isError: !result.success };
+    return result.details === undefined
+      ? { progressMessages, finalOutput, isError: !result.success }
+      : { progressMessages, finalOutput, isError: !result.success, details: result.details };
   } catch (error) {
     const finalOutput = error instanceof Error ? error.message : String(error);
     return { progressMessages, finalOutput, isError: true };
@@ -300,9 +304,11 @@ export function toolDecisionOutput(
           success: action === 'shortCircuit' && isError !== true,
           output: rawResult ?? (action === 'deny' ? (reason ?? 'Denied') : 'short-circuited'),
         };
-  return {
+  const output: ToolExecOutput = {
     progressMessages: [],
     finalOutput: formatToolResultOutput(result),
     isError: action === 'deny' || !result.success,
   };
+  if (result.details !== undefined) output.details = result.details;
+  return output;
 }

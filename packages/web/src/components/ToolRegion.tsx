@@ -5,6 +5,7 @@ import { ToolCard } from './ToolCard';
 interface ToolRegionProps {
   toolCalls: Map<string, ToolCallEntry>;
   agentSessions: Map<string, AgentSessionSummary>;
+  maxItems?: number;
 }
 
 export function SubAgentCard({ session }: { session: AgentSessionSummary }) {
@@ -36,19 +37,32 @@ export function SubAgentCard({ session }: { session: AgentSessionSummary }) {
   );
 }
 
-export function ToolRegion({ toolCalls, agentSessions }: ToolRegionProps) {
+export function ToolRegion({ toolCalls, agentSessions, maxItems }: ToolRegionProps) {
   if (toolCalls.size === 0 && agentSessions.size === 0) return null;
 
+  const toolEntries = Array.from(toolCalls.entries());
   const subAgents = Array.from(agentSessions.values());
+  const combined = [
+    ...toolEntries.map(([id, entry]) => ({ kind: 'tool' as const, id, entry })),
+    ...subAgents.map((session) => ({ kind: 'agent' as const, id: session.toolCallId, session })),
+  ];
+  const hiddenCount = maxItems ? Math.max(0, combined.length - maxItems) : 0;
+  const visible = hiddenCount > 0 && maxItems !== undefined ? combined.slice(-maxItems) : combined;
 
   return (
     <div className="space-y-2">
-      {Array.from(toolCalls.entries()).map(([id, entry]) => (
-        <ToolCard key={id} entry={entry} />
-      ))}
-      {subAgents.map((s) => (
-        <SubAgentCard key={s.toolCallId} session={s} />
-      ))}
+      {hiddenCount > 0 && (
+        <div className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-500">
+          Showing latest {visible.length} of {combined.length}
+        </div>
+      )}
+      {visible.map((item) =>
+        item.kind === 'tool' ? (
+          <ToolCard key={item.id} entry={item.entry} />
+        ) : (
+          <SubAgentCard key={item.id} session={item.session} />
+        ),
+      )}
     </div>
   );
 }

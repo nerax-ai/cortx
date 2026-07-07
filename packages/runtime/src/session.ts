@@ -1,4 +1,4 @@
-import type { AgentEvent, ContextUsageSource, LanguageMessage, Tool } from '@cortx/sdk';
+import type { AgentDoneUsage, AgentEvent, ContextUsageSource, LanguageMessage, Tool } from '@cortx/sdk';
 import type { Cortx, PluginConfig, CortxRegistry } from '@cortx/core';
 import type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 import type { SubAgentSessionStore } from './capabilities/sub-agent/session-store.js';
@@ -16,6 +16,7 @@ export interface RuntimeSessionInfo {
   lastActivityAt: number;
   workingDirectory: string;
   model: string;
+  reasoningEffort?: string;
   system?: string;
   maxIterations?: number;
   contextWindowTokens?: number;
@@ -25,6 +26,10 @@ export interface RuntimeSessionInfo {
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   skillPacks?: string[];
+  /** Original user-submitted prompts for input history; skill expansion does not rewrite these entries. */
+  promptHistory?: string[];
+  /** Cumulative provider usage across the session; context contains the latest request context facts. */
+  usage?: AgentDoneUsage;
   isRunning: boolean;
   eventCount: number;
   metadata?: RuntimeSessionMetadata;
@@ -34,6 +39,7 @@ export interface RuntimeSessionCreateRequest {
   id?: string;
   workingDirectory?: string;
   model?: string;
+  reasoningEffort?: string;
   system?: string;
   maxIterations?: number;
   contextWindowTokens?: number;
@@ -49,6 +55,8 @@ export interface RuntimeSessionCreateRequest {
 }
 
 export interface RuntimeSessionUpdateRequest {
+  model?: string;
+  reasoningEffort?: string | null;
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
   contextWindowTokens?: number;
@@ -75,6 +83,7 @@ export interface ManagedRuntimeSession {
   lastActivityAt: number;
   workingDirectory: string;
   model: string;
+  reasoningEffort?: string;
   system?: string;
   maxIterations?: number;
   contextWindowTokens?: number;
@@ -85,16 +94,19 @@ export interface ManagedRuntimeSession {
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   skillPacks?: string[];
+  promptHistory: string[];
   requestTools: Tool[];
   registry?: CortxRegistry;
   plugins?: PluginConfig[];
   events: AgentEvent[];
   eventEnvelopes: import('@cortx/sdk').RuntimeAgentEventEnvelope[];
+  usage?: AgentDoneUsage;
   subscribers: Set<(event: AgentEvent) => void>;
   envelopeSubscribers: Set<(event: import('@cortx/sdk').RuntimeAgentEventEnvelope) => void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   isRunning: boolean;
   runPromise?: Promise<void>;
+  needsHostRefresh?: boolean;
   runId: number;
   nextEventSequence: number;
   agentSessions: SubAgentSessionStore;

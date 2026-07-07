@@ -3,10 +3,11 @@ import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { readdir, stat } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope } from '@cortx/sdk';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope, type SkillInfo } from '@cortx/sdk';
 import {
+  buildFileEditDetails,
   CortxRuntime,
   discoverAgentSpecs,
   installSkillPack,
@@ -46,6 +47,43 @@ interface WorkspaceDirectoryListing {
   entries: WorkspaceDirectoryEntry[];
 }
 
+interface WebSkillInfo {
+  name: string;
+  description: string;
+  arguments?: string[];
+  dirPath: string;
+}
+
+interface WebReasoningEffortOption {
+  value: string;
+  label: string;
+}
+
+interface WebModelInfo {
+  id: string;
+  name: string;
+  contextWindowTokens?: number;
+  reasoningEfforts?: WebReasoningEffortOption[];
+}
+
+const REASONING_EFFORT_LABELS: Record<string, string> = {
+  none: 'Off',
+  minimal: 'Minimal',
+  low: 'Light',
+  light: 'Light',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  'extra-high': 'Extra High',
+};
+
+const DEFAULT_REASONING_EFFORTS: WebReasoningEffortOption[] = [
+  { value: 'low', label: 'Light' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
+];
+
 function serializeEvent(event: AgentEvent): string {
   if (event.type === 'error' && event.error instanceof Error) {
     return JSON.stringify({ ...event, error: { message: event.error.message, name: event.error.name } });
@@ -64,6 +102,318 @@ function serializeEnvelope(envelope: RuntimeAgentEventEnvelope): string {
     });
   }
   return JSON.stringify(envelope);
+}
+
+function serializeEventData(event: AgentEvent): AgentEvent {
+  return JSON.parse(serializeEvent(event)) as AgentEvent;
+}
+
+function serializeEnvelopeData(envelope: RuntimeAgentEventEnvelope): RuntimeAgentEventEnvelope {
+  return JSON.parse(serializeEnvelope(envelope)) as RuntimeAgentEventEnvelope;
+}
+
+function serializeSkillInfo(skill: SkillInfo): WebSkillInfo {
+  return {
+    name: skill.name,
+    description: skill.description,
+    arguments: skill.arguments,
+    dirPath: skill.dirPath,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+function parseToolInput(input: unknown): Record<string, unknown> | undefined {
+  if (isRecord(input)) return input;
+  if (typeof input !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedToolName(toolName: string): string {
+  return toolName.toLowerCase().split(/[.:/]/).pop() ?? toolName.toLowerCase();
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+async function hydrateHistoricalFileEditDetails(
+  envelopes: RuntimeAgentEventEnvelope[],
+  workingDirectory: string,
+): Promise<RuntimeAgentEventEnvelope[]> {
+  const toolInputs = new Map<string, { toolName: string; input: Record<string, unknown> }>();
+  const fileSnapshots = new Map<string, string>();
+  let result = envelopes;
+
+  function replaceEvent(index: number, event: AgentEvent): void {
+    if (result === envelopes) result = [...envelopes];
+    result[index] = { ...envelopes[index], event };
+  }
+
+  envelopes.forEach((envelope, index) => {
+    const event = envelope.event;
+    if (event.type === 'tool_use') {
+      const input = parseToolInput(event.toolCall.input);
+      if (input) {
+        toolInputs.set(event.toolCall.toolCallId, {
+          toolName: normalizedToolName(event.toolCall.toolName),
+          input,
+        });
+      }
+      return;
+    }
+
+    if (event.type !== 'tool_result' || event.isError) return;
+    const toolUse = toolInputs.get(event.toolCallId);
+    if (!toolUse) return;
+
+    if (toolUse.toolName === 'write') {
+      const path = stringField(toolUse.input, 'path');
+      const content = stringField(toolUse.input, 'content');
+      if (path && content !== undefined) fileSnapshots.set(path, content);
+      return;
+    }
+
+    if (toolUse.toolName !== 'edit') return;
+    const path = stringField(toolUse.input, 'path');
+    const oldText = stringField(toolUse.input, 'oldText');
+    const newText = stringField(toolUse.input, 'newText');
+    if (!path || oldText === undefined || newText === undefined) return;
+
+    const before = fileSnapshots.get(path);
+    if (before === undefined || !before.includes(oldText)) return;
+    const after = before.replace(oldText, newText);
+    fileSnapshots.set(path, after);
+
+    if (event.details !== undefined) return;
+    replaceEvent(index, {
+      ...event,
+      details: buildFileEditDetails(path, before, after),
+    });
+  });
+
+  const reverseFileStates = new Map<string, string | undefined>();
+  const attemptedFileLoads = new Set<string>();
+
+  async function loadCurrentFile(path: string): Promise<string | undefined> {
+    if (attemptedFileLoads.has(path)) return reverseFileStates.get(path);
+    attemptedFileLoads.add(path);
+    try {
+      const workspace = await resolveWorkspace({
+        requested: path,
+        defaultWorkingDirectory: workingDirectory,
+        allowedRoots: [workingDirectory],
+      });
+      const content = await readFile(workspace.workingDirectory, 'utf8');
+      reverseFileStates.set(path, content);
+      return content;
+    } catch {
+      reverseFileStates.set(path, undefined);
+      return undefined;
+    }
+  }
+
+  function replaceUnique(content: string, oldText: string, newText: string): string | undefined {
+    const first = content.indexOf(oldText);
+    if (first === -1 || first !== content.lastIndexOf(oldText)) return undefined;
+    return `${content.slice(0, first)}${newText}${content.slice(first + oldText.length)}`;
+  }
+
+  for (let index = result.length - 1; index >= 0; index--) {
+    const envelope = result[index]!;
+    const event = envelope.event;
+    if (event.type !== 'tool_result' || event.isError) continue;
+    const toolUse = toolInputs.get(event.toolCallId);
+    if (!toolUse) continue;
+
+    if (toolUse.toolName === 'write') {
+      const path = stringField(toolUse.input, 'path');
+      if (path) reverseFileStates.set(path, undefined);
+      continue;
+    }
+
+    if (toolUse.toolName !== 'edit') continue;
+    const path = stringField(toolUse.input, 'path');
+    const oldText = stringField(toolUse.input, 'oldText');
+    const newText = stringField(toolUse.input, 'newText');
+    if (!path || oldText === undefined || newText === undefined) continue;
+
+    const after = reverseFileStates.has(path) ? reverseFileStates.get(path) : await loadCurrentFile(path);
+    if (after === undefined) continue;
+    const before = replaceUnique(after, newText, oldText);
+    if (before === undefined) continue;
+    reverseFileStates.set(path, before);
+
+    if (event.details !== undefined) continue;
+    replaceEvent(index, {
+      ...event,
+      details: buildFileEditDetails(path, before, after),
+    });
+  }
+
+  return result;
+}
+
+function readModelContextWindow(value: unknown): number | undefined {
+  if (!isRecord(value)) return undefined;
+  const limits = value.limits;
+  if (isRecord(limits)) {
+    const context = readPositiveInteger(limits.context);
+    if (context !== undefined) return context;
+  }
+  const nestedModel = value.model;
+  if (isRecord(nestedModel)) {
+    const context = readModelContextWindow(nestedModel);
+    if (context !== undefined) return context;
+  }
+  const metadata = value.metadata;
+  if (isRecord(metadata)) {
+    const context = readModelContextWindow({ limits: metadata.limits });
+    if (context !== undefined) return context;
+  }
+  return undefined;
+}
+
+function normalizeReasoningEffortOption(value: unknown): WebReasoningEffortOption | undefined {
+  if (typeof value === 'string' && value.trim()) {
+    const effort = value.trim();
+    return { value: effort, label: REASONING_EFFORT_LABELS[effort] ?? effort };
+  }
+  if (!isRecord(value)) return undefined;
+  const rawValue = value.value ?? value.id ?? value.effort ?? value.name;
+  if (typeof rawValue !== 'string' || !rawValue.trim()) return undefined;
+  const effort = rawValue.trim();
+  const rawLabel = value.label ?? value.name ?? value.title;
+  return {
+    value: effort,
+    label: typeof rawLabel === 'string' && rawLabel.trim() ? rawLabel.trim() : REASONING_EFFORT_LABELS[effort] ?? effort,
+  };
+}
+
+function normalizeReasoningEffortOptions(value: unknown): WebReasoningEffortOption[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = value
+    .map(normalizeReasoningEffortOption)
+    .filter((option): option is WebReasoningEffortOption => option !== undefined);
+  const seen = new Set<string>();
+  const deduped = options.filter((option) => {
+    if (seen.has(option.value)) return false;
+    seen.add(option.value);
+    return true;
+  });
+  return deduped.length ? deduped : undefined;
+}
+
+function readReasoningEffortOptionsFromRecord(record: Record<string, unknown>): WebReasoningEffortOption[] | undefined {
+  const direct =
+    normalizeReasoningEffortOptions(record.reasoningEfforts) ??
+    normalizeReasoningEffortOptions(record.reasoningEffortOptions) ??
+    normalizeReasoningEffortOptions(record.thinkingEfforts) ??
+    normalizeReasoningEffortOptions(record.thinkingEffortOptions);
+  if (direct) return direct;
+
+  for (const key of ['reasoning', 'thinking']) {
+    const nested = record[key];
+    if (!isRecord(nested)) continue;
+    const nestedOptions =
+      normalizeReasoningEffortOptions(nested.efforts) ??
+      normalizeReasoningEffortOptions(nested.options) ??
+      normalizeReasoningEffortOptions(nested.levels);
+    if (nestedOptions) return nestedOptions;
+  }
+
+  for (const key of ['metadata', 'options', 'model']) {
+    const nested = record[key];
+    if (!isRecord(nested)) continue;
+    const nestedOptions = readReasoningEffortOptionsFromRecord(nested);
+    if (nestedOptions) return nestedOptions;
+  }
+
+  return undefined;
+}
+
+function modelSupportsReasoning(record: Record<string, unknown>): boolean {
+  const capabilities = isRecord(record.capabilities) ? record.capabilities : undefined;
+  if (capabilities?.reasoning === true) return true;
+  const model = isRecord(record.model) ? record.model : undefined;
+  const modelCapabilities = model && isRecord(model.capabilities) ? model.capabilities : undefined;
+  if (modelCapabilities?.reasoning === true) return true;
+  const metadata = isRecord(record.metadata) ? record.metadata : undefined;
+  if (metadata?.reasoning === true || metadata?.thinking === true) return true;
+  return Boolean(readReasoningEffortOptionsFromRecord(record));
+}
+
+function serializeModelInfo(value: unknown): WebModelInfo | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = typeof value.id === 'string' && value.id.trim() ? value.id.trim() : undefined;
+  if (!id) return undefined;
+  const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : id;
+  const explicitReasoningEfforts = readReasoningEffortOptionsFromRecord(value);
+  const reasoningEfforts = explicitReasoningEfforts ?? (modelSupportsReasoning(value) ? DEFAULT_REASONING_EFFORTS : undefined);
+  return {
+    id,
+    name,
+    contextWindowTokens: readModelContextWindow(value),
+    reasoningEfforts,
+  };
+}
+
+function mergeModelInfo(current: WebModelInfo | undefined, next: WebModelInfo): WebModelInfo {
+  if (!current) return next;
+  return {
+    id: current.id,
+    name: current.name || next.name,
+    contextWindowTokens: current.contextWindowTokens ?? next.contextWindowTokens,
+    reasoningEfforts: current.reasoningEfforts ?? next.reasoningEfforts,
+  };
+}
+
+function listServerModels(config: ServerConfig): WebModelInfo[] {
+  const byId = new Map<string, WebModelInfo>();
+  const candidates = [...(config.modelCatalog ?? []), ...(config.models ?? [])];
+  for (const candidate of candidates) {
+    const info = serializeModelInfo(candidate);
+    if (!info) continue;
+    byId.set(info.id, mergeModelInfo(byId.get(info.id), info));
+  }
+  if (!byId.has(config.model)) {
+    byId.set(config.model, {
+      id: config.model,
+      name: config.model,
+      contextWindowTokens: config.contextWindowTokens,
+    });
+  }
+  return [...byId.values()];
+}
+
+function parseOptionalSequence(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new RuntimeError('invalid_request', `${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function parseOptionalLimit(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new RuntimeError('invalid_request', 'limit must be a positive integer');
+  }
+  return Math.min(parsed, 2_000);
 }
 
 function errorResponse(error: unknown): {
@@ -129,6 +479,14 @@ function getAgentSpecDiscoveryRoots(config: ServerConfig, principal: AuthPrincip
   if (config.agentSpecRoots?.length) return config.agentSpecRoots.map((root) => resolve(root));
   if (principal?.allowedWorkspaceRoots?.length) return principal.allowedWorkspaceRoots.map((root) => resolve(root));
   return [resolve(getDefaultWorkingDirectory(config))];
+}
+
+function isPathLikeReference(reference: string): boolean {
+  return isAbsolute(reference) || reference.startsWith('.') || reference.includes('/') || reference.includes('\\');
+}
+
+function resolveSourceRootReference(sourceRoot: string, reference: string): string {
+  return isAbsolute(reference) ? resolve(reference) : resolve(sourceRoot, reference);
 }
 
 async function authorizeWorkspace(
@@ -267,12 +625,20 @@ async function getAuthorizedSession(
   config: ServerConfig,
   id: string,
 ): Promise<RuntimeSessionInfo> {
-  const session = runtime.getSession(id);
+  let session: RuntimeSessionInfo;
+  try {
+    session = runtime.getSession(id);
+  } catch (error) {
+    if (!isRuntimeError(error) || error.kind !== 'session_not_found') throw error;
+    await runtime.restoreDurableSessions({ autoResume: false });
+    session = runtime.getSession(id);
+  }
   await assertSessionAccess(c, config, session);
   return session;
 }
 
 async function listAuthorizedSessions(runtime: CortxRuntime, c: Context, config: ServerConfig): Promise<RuntimeSessionInfo[]> {
+  await runtime.restoreDurableSessions({ autoResume: false });
   const visible: RuntimeSessionInfo[] = [];
   for (const session of runtime.listSessions()) {
     try {
@@ -320,6 +686,37 @@ async function listAuthorizedSkillPacks(c: Context, config: ServerConfig): Promi
     }
   }
   return visible;
+}
+
+async function findAuthorizedAgentSpecSourceRoot(c: Context, config: ServerConfig, specPath: string): Promise<string> {
+  const resolvedSpecPath = resolve(specPath);
+  for (const spec of await listAuthorizedAgentSpecs(c, config)) {
+    if (resolve(spec.path) === resolvedSpecPath) return spec.sourceRoot;
+  }
+  return resolve(getDefaultWorkingDirectory(config));
+}
+
+async function resolveAgentSpecAssetReferences(
+  spec: AgentSpec,
+  config: ServerConfig,
+  principal: AuthPrincipal | undefined,
+  sourceRoot: string,
+): Promise<AgentSpec> {
+  const skillPaths = spec.skillPaths?.map((path) => resolveSourceRootReference(sourceRoot, path));
+  const skillPacks = spec.skillPacks?.map((reference) =>
+    isPathLikeReference(reference) ? resolveSourceRootReference(sourceRoot, reference) : reference,
+  );
+  for (const path of skillPaths ?? []) {
+    await authorizeWorkspace(config, principal, path);
+  }
+  for (const reference of skillPacks ?? []) {
+    if (isPathLikeReference(reference)) await authorizeWorkspace(config, principal, reference);
+  }
+  return {
+    ...spec,
+    skillPaths,
+    skillPacks,
+  };
 }
 
 async function tryAuthorizeDirectory(
@@ -391,7 +788,8 @@ async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, 
   const specPath = resolve(defaultWorkingDirectory, path);
   await authorizeWorkspace(config, principal, dirname(specPath));
   return launchAgentSpecSafely(async () => {
-    const spec = await loadAgentSpecFile(specPath);
+    const sourceRoot = await findAuthorizedAgentSpecSourceRoot(c, config, specPath);
+    const spec = await resolveAgentSpecAssetReferences(await loadAgentSpecFile(specPath), config, principal, sourceRoot);
     const requested = assertOptionalString(spec.workingDirectory, 'AgentSpec.workingDirectory');
     const workspace = await authorizeWorkspace(config, principal, requested);
     const authorizedSpec = applyPrincipalSessionBounds(
@@ -405,7 +803,12 @@ async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, 
 async function launchInlineAgentSpec(runtime: CortxRuntime, config: ServerConfig, c: Context, value: unknown) {
   const principal = getAuthPrincipal(c);
   return launchAgentSpecSafely(async () => {
-    const spec = parseAgentSpec(value);
+    const spec = await resolveAgentSpecAssetReferences(
+      parseAgentSpec(value),
+      config,
+      principal,
+      resolve(getDefaultWorkingDirectory(config)),
+    );
     const workspace = await authorizeWorkspace(config, principal, spec.workingDirectory);
     const authorizedSpec = applyPrincipalSessionBounds(
       { ...spec, workingDirectory: workspace.workingDirectory },
@@ -442,6 +845,8 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     idleTimeoutMs: config.idleTimeoutMs,
     language: config.language,
     model: config.model,
+    models: config.models,
+    modelCatalog: config.modelCatalog,
     system: config.system,
     maxIterations: config.maxIterations,
     contextWindowTokens: config.contextWindowTokens,
@@ -465,15 +870,27 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
 
   // Health check
   app.get('/health', (c) => {
+    const sessions = runtime.listSessions();
     return c.json({
       status: 'ok',
       uptime: process.uptime(),
-      sessions: runtime.listSessions().length,
+      sessions: sessions.length,
+      runningSessions: sessions.filter((session) => session.isRunning).length,
+      maxSessions: config.maxSessions,
     });
   });
 
   // Token exchange
   app.post('/auth/token', auth.tokenExchange);
+
+  app.get('/models', (c) => {
+    try {
+      return c.json({ models: listServerModels(config) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
 
   // Create session
   app.post('/sessions', async (c) => {
@@ -574,6 +991,18 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     }
   });
 
+  app.get('/sessions/:id/skills', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await getAuthorizedSession(runtime, c, config, id);
+      const skills = await runtime.listSessionSkills(id);
+      return c.json({ skills: skills.map(serializeSkillInfo) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
   // Send prompt
   app.post('/sessions/:id/prompt', async (c) => {
     const id = c.req.param('id');
@@ -656,20 +1085,64 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     }
   });
 
+  // Bounded event history as one JSON payload. Web clients use this for fast
+  // session switching, then open SSE for live updates only.
+  app.get('/sessions/:id/events/history', async (c) => {
+    const id = c.req.param('id');
+    try {
+      const session = await getAuthorizedSession(runtime, c, config, id);
+      const useEnvelope = c.req.query('format') === 'envelope';
+      const afterSequence = parseOptionalSequence(c.req.query('after'), 'after');
+      const beforeSequence = parseOptionalSequence(c.req.query('before'), 'before');
+      const limit = parseOptionalLimit(c.req.query('limit'));
+
+      if (useEnvelope) {
+        const page = await runtime.getEventEnvelopeHistoryPage(id, { afterSequence, beforeSequence, limit });
+        const events = (await hydrateHistoricalFileEditDetails(page.events, session.workingDirectory)).map(serializeEnvelopeData);
+        return c.json({
+          events,
+          page: {
+            hasMoreBefore: page.hasMoreBefore,
+            hasMoreAfter: page.hasMoreAfter,
+            firstSequence: page.events[0]?.sequence,
+            lastSequence: page.events.at(-1)?.sequence,
+          },
+        });
+      }
+
+      const events = runtime.getEventHistory(id).map(serializeEventData);
+      return c.json({ events });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
   // SSE event stream
   app.get('/sessions/:id/events', async (c) => {
     const id = c.req.param('id');
+    let useEnvelope = false;
+    let replay = true;
+    let afterSequence: number | undefined;
     try {
       await getAuthorizedSession(runtime, c, config, id);
+      useEnvelope = c.req.query('format') === 'envelope';
+      replay = c.req.query('replay') !== 'false';
+      afterSequence = parseOptionalSequence(c.req.query('after'), 'after');
     } catch (error) {
       const response = errorResponse(error);
       return c.json(response.body, response.status);
     }
 
     return streamSSE(c, async (stream) => {
-      const useEnvelope = c.req.query('format') === 'envelope';
       // Replay prior events (snapshot to avoid concurrent mutation)
-      const snapshot = useEnvelope ? runtime.getEventEnvelopeHistory(id) : runtime.getEventHistory(id);
+      const snapshot = useEnvelope
+        ? runtime
+            .getEventEnvelopeHistory(id)
+            .filter((event) => replay ? true : afterSequence !== undefined && event.sequence > afterSequence)
+        : replay
+          ? runtime.getEventHistory(id)
+          : [];
       let sequence = 0;
       for (const event of snapshot) {
         const envelope = event as RuntimeAgentEventEnvelope;

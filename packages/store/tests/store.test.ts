@@ -34,6 +34,42 @@ describe('AgentStore', () => {
     expect(store.getState().messages.currentText).toBe('Hello world');
   });
 
+  test('dispatchMany applies replay events with a single notification', () => {
+    const store = new AgentStore();
+    let changes = 0;
+    store.onChange(() => {
+      changes++;
+    });
+
+    store.dispatchMany([
+      { event: { type: 'turn_start', iteration: 1 }, timestamp: 1_000 },
+      { event: { type: 'text_delta', delta: 'Hello' }, timestamp: 1_200 },
+      { event: { type: 'text_delta', delta: ' world' }, timestamp: 1_400 },
+      { event: { type: 'done', usage: { inputTokens: 10, outputTokens: 5 } }, timestamp: 2_000 },
+    ]);
+
+    expect(changes).toBe(1);
+    expect(store.getState().messages.turns.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'Hello world',
+      duration: 1,
+    });
+    expect(store.getState().tokenUsage).toEqual({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  test('dispatch user_message restores persisted user turns', () => {
+    const store = new AgentStore();
+    store.dispatch({ type: 'user_message', message: 'Review this diff', source: 'prompt' }, 1_000);
+
+    expect(store.getState().messages.turns).toEqual([
+      {
+        role: 'user',
+        content: 'Review this diff',
+        timestamp: 1_000,
+      },
+    ]);
+  });
+
   test('dispatch thinking_delta appends to currentThinking', () => {
     const store = new AgentStore();
     store.dispatch({ type: 'thinking_delta', delta: 'Let me think' });
@@ -89,15 +125,16 @@ describe('AgentStore', () => {
   test('dispatch tool_result marks tool as complete', () => {
     const store = new AgentStore();
     store.dispatch({ type: 'tool_use', toolCall: { type: 'tool-call', toolCallId: 'tc_1', toolName: 'bash', input: '{}' } });
-    store.dispatch({ type: 'tool_result', toolCallId: 'tc_1', result: 'output', isError: false });
+    store.dispatch({ type: 'tool_result', toolCallId: 'tc_1', result: 'output', isError: false, details: { preview: 'diff' } });
     const tc = store.getState().toolCalls.get('tc_1');
     expect(tc!.status).toBe('complete');
     expect(tc!.result).toBe('output');
     expect(tc!.isError).toBe(false);
+    expect(tc!.details).toEqual({ preview: 'diff' });
     expect(store.getState().activity[0]).toMatchObject({
       kind: 'tool',
       id: 'tc_1',
-      entry: { status: 'complete', result: 'output', isError: false },
+      entry: { status: 'complete', result: 'output', isError: false, details: { preview: 'diff' } },
     });
   });
 
@@ -183,6 +220,40 @@ describe('AgentStore', () => {
       windowTokens: 1000,
       cacheHitRate: 30,
       model: 'test-model',
+    });
+  });
+
+  test('syncRuntimeSession uses runtime cumulative usage as the session total', () => {
+    const store = new AgentStore();
+    store.dispatch({ type: 'done', usage: { inputTokens: 100, outputTokens: 20 } });
+
+    store.syncRuntimeSession({
+      sessionId: store.getState().sessionId,
+      isRunning: false,
+      tokenUsage: {
+        inputTokens: 1200,
+        outputTokens: 300,
+        cacheReadTokens: 5000,
+        context: {
+          usedTokens: 6200,
+          requestInputTokens: 1200,
+          requestCacheReadTokens: 5000,
+          windowTokens: 128000,
+          percentUsed: 4.84375,
+          cacheHitRate: 80.64516129032258,
+          breakdown: [],
+        },
+      },
+    });
+
+    expect(store.getState().tokenUsage).toEqual({
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheReadTokens: 5000,
+    });
+    expect(store.getState().contextUsage).toMatchObject({
+      usedTokens: 6200,
+      cacheHitRate: 80.64516129032258,
     });
   });
 

@@ -148,6 +148,7 @@ describe('runtime durable resume', () => {
       model: 'test',
       toolMode: 'read-only',
       approvalMode: 'deny',
+      promptHistory: ['resume me'],
       metadata: { source: 'durable-test' },
     });
     expect(second.getLocalState('file-backed-session').agentSessions.get('agent-call')).toMatchObject({
@@ -156,10 +157,16 @@ describe('runtime durable resume', () => {
       output: 'partial child output',
       status: 'running',
     });
-    expect(replayedHistory.find((event) => event.event.type === 'turn_start')).toMatchObject({
+    expect(replayedHistory[0]).toMatchObject({
       sessionId: 'file-backed-session',
       runId: 1,
       sequence: 1,
+      event: { type: 'user_message', message: 'resume me', source: 'prompt' },
+    });
+    expect(replayedHistory.find((event) => event.event.type === 'turn_start')).toMatchObject({
+      sessionId: 'file-backed-session',
+      runId: 1,
+      sequence: 2,
     });
     expect(replayedHistory.find((event) => event.event.type === 'done')).toMatchObject({
       sessionId: 'file-backed-session',
@@ -233,6 +240,8 @@ describe('runtime durable resume', () => {
         outputTokens: 5,
         context: {
           usedTokens: 100,
+          requestInputTokens: 100,
+          requestOutputTokens: 5,
           windowTokens: 2000,
           windowSource: 'configured',
           percentUsed: 5,
@@ -247,6 +256,148 @@ describe('runtime durable resume', () => {
       'system_prompt',
       'other',
     ]);
+    runtime.dispose();
+  });
+
+  test('backfills legacy prompt history into replayable user message events', async () => {
+    const durableDir = join(tmpDir, 'durable-legacy-prompts');
+    const sessionId = 'legacy-prompt-session';
+    const store = new FileDurableRunStore(durableDir);
+    await store.saveRuntimeSession({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: sessionId,
+      createdAt: 10,
+      lastActivityAt: 20,
+      workingDirectory: tmpDir,
+      model: 'test-model',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      promptHistory: ['restore my original question'],
+      runId: 1,
+      nextEventSequence: 2,
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 1,
+      timestamp: 20,
+      sessionId,
+      runId: 1,
+      event: { type: 'turn_start', iteration: 1 },
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 2,
+      timestamp: 21,
+      sessionId,
+      runId: 1,
+      event: { type: 'done', usage: { inputTokens: 1, outputTokens: 1 } },
+    });
+
+    const runtime = new CortxRuntime({
+      language: textLanguage('unused'),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore: new FileDurableRunStore(durableDir),
+    });
+
+    await runtime.restoreDurableSessions({ autoResume: false });
+    const history = runtime.getEventEnvelopeHistory(sessionId);
+
+    expect(history[0]).toMatchObject({
+      sequence: 0,
+      sessionId,
+      runId: 1,
+      event: { type: 'user_message', message: 'restore my original question', source: 'prompt' },
+    });
+    expect(history[1]).toMatchObject({ sequence: 1, event: { type: 'turn_start' } });
+    runtime.dispose();
+  });
+
+  test('restores cumulative usage from full durable events even when replay history is bounded', async () => {
+    const durableDir = join(tmpDir, 'durable-usage-summary');
+    const sessionId = 'bounded-usage-session';
+    const store = new FileDurableRunStore(durableDir);
+    await store.saveRuntimeSession({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      id: sessionId,
+      createdAt: 1,
+      lastActivityAt: 2,
+      workingDirectory: tmpDir,
+      model: 'test-model',
+      system: 'System prompt',
+      toolMode: 'none',
+      approvalMode: 'deny',
+      capabilities: { skills: false, subAgents: false, approval: false },
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        context: {
+          usedTokens: 1,
+          requestInputTokens: 1,
+          windowTokens: 128000,
+          percentUsed: 0.00078125,
+          cacheHitRate: 0,
+          breakdown: [],
+        },
+      },
+      runId: 1,
+      nextEventSequence: 3,
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 1,
+      timestamp: 2,
+      sessionId,
+      runId: 1,
+      event: { type: 'done', usage: { inputTokens: 100, outputTokens: 10 } },
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 2,
+      timestamp: 3,
+      sessionId,
+      runId: 1,
+      event: { type: 'done', usage: { inputTokens: 200, outputTokens: 20, cacheReadTokens: 1000 } },
+    });
+    await store.saveEventEnvelope({
+      schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
+      sequence: 3,
+      timestamp: 4,
+      sessionId,
+      runId: 1,
+      event: { type: 'done', usage: { inputTokens: 300, outputTokens: 30, cacheReadTokens: 2000 } },
+    });
+
+    const runtime = new CortxRuntime({
+      language: textLanguage('unused'),
+      model: 'test-model',
+      system: 'System prompt',
+      contextWindowTokens: 128000,
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore: new FileDurableRunStore(durableDir),
+      maxEventsPerSession: 1,
+    });
+
+    await runtime.restoreDurableSessions({ autoResume: false });
+    const restored = runtime.getSession(sessionId);
+
+    expect(runtime.getEventEnvelopeHistory(sessionId)).toHaveLength(1);
+    expect(restored.usage).toMatchObject({
+      inputTokens: 600,
+      outputTokens: 60,
+      cacheReadTokens: 3000,
+    });
+    expect(restored.usage?.context).toMatchObject({
+      usedTokens: 2300,
+      requestInputTokens: 300,
+      requestCacheReadTokens: 2000,
+      cacheHitRate: 86.95652173913044,
+    });
     runtime.dispose();
   });
 

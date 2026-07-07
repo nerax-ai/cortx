@@ -1,94 +1,241 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import type { TokenUsage } from '@cortx/store';
 import type { ContextUsageSummary } from '../context-usage';
 import {
   contextRowPercent,
   formatContextPercent,
-  formatContextSource,
   formatContextTokenCount,
+  sessionCacheHitRate,
 } from '../context-usage';
 import { surface } from '../design';
 
-const ROW_COLORS: Record<ContextUsageSummary['breakdown'][number]['key'], string> = {
-  messages: 'bg-blue-400',
-  tools: 'bg-sky-400',
-  skills: 'bg-blue-500',
-  system_prompt: 'bg-sky-600',
-  other: 'bg-zinc-500',
-};
+function progressBarWidth(percent: number): string {
+  if (percent <= 0) return '0%';
+  return `max(16px, ${Math.max(0, Math.min(100, percent))}%)`;
+}
 
-export function ContextUsagePanel({ summary }: { summary: ContextUsageSummary }) {
+export function breakdownDotColor(percent: number): string {
+  const clamped = Math.max(0, Math.min(100, percent));
+  const opacity = clamped <= 0 ? 0.14 : 0.2 + Math.sqrt(clamped / 100) * 0.78;
+  return `rgba(24, 24, 27, ${opacity.toFixed(2)})`;
+}
+
+function MetricRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="w-[380px] rounded-xl border border-zinc-700 bg-zinc-900/95 p-4 text-zinc-100 shadow-2xl shadow-zinc-950/30 backdrop-blur">
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-zinc-500">{label}</span>
+      <span className="font-mono text-[11px] font-semibold text-zinc-900">{value}</span>
+    </div>
+  );
+}
+
+function MetricGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <div className="mb-2 text-xs font-semibold text-zinc-950">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+export function ContextUsagePanel({
+  summary,
+  sessionTokenUsage,
+}: {
+  summary: ContextUsageSummary;
+  sessionTokenUsage?: TokenUsage;
+}) {
+  const sessionHitRate = sessionCacheHitRate(sessionTokenUsage);
+  const usedTokens = summary.usedTokens ?? 0;
+  const windowTokens = summary.windowTokens ?? 0;
+  const requestInputTokens = summary.requestInputTokens ?? 0;
+  const requestOutputTokens = summary.requestOutputTokens ?? 0;
+  const requestCacheReadTokens = summary.requestCacheReadTokens ?? 0;
+  const requestCacheCreationTokens = summary.requestCacheCreationTokens ?? 0;
+  const sessionInputTokens = sessionTokenUsage?.inputTokens ?? 0;
+  const sessionOutputTokens = sessionTokenUsage?.outputTokens ?? 0;
+  const sessionCacheReadTokens = sessionTokenUsage?.cacheReadTokens ?? 0;
+  const sessionCacheCreationTokens = sessionTokenUsage?.cacheCreationTokens ?? 0;
+  const contextPercent = summary.percentUsed ?? 0;
+  const [showDetails, setShowDetails] = useState(false);
+
+  return (
+    <div className="w-[380px] rounded-xl border border-zinc-200 bg-white p-4 text-zinc-950 shadow-2xl shadow-zinc-200/80">
       <div className="flex items-center justify-between gap-4">
-        <div className="text-sm font-medium text-zinc-100">上下文容量</div>
-        <div className="font-mono text-xs text-zinc-400">
-          {formatContextTokenCount(summary.usedTokens)}/{formatContextTokenCount(summary.windowTokens)}
-          <span className="ml-1">({formatContextPercent(summary.percentUsed)})</span>
+        <div className="text-sm font-medium text-zinc-950">当前请求上下文</div>
+        <div className="font-mono text-xs text-zinc-500">
+          {formatContextTokenCount(usedTokens)}/{formatContextTokenCount(windowTokens)}
+          <span className="ml-1">({formatContextPercent(contextPercent)})</span>
         </div>
       </div>
-      <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
-        <span className="truncate">{summary.model ?? 'unknown model'}</span>
-        <span>{formatContextSource(summary.windowSource)}</span>
-      </div>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800">
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-200/90 shadow-inner shadow-zinc-300/60">
         <div
-          className="h-full rounded-full bg-blue-500"
-          style={{ width: `${Math.max(2, Math.min(100, summary.percentUsed ?? 0))}%` }}
+          className="h-full rounded-full bg-zinc-950"
+          style={{ width: progressBarWidth(contextPercent) }}
         />
       </div>
 
-      <div className="mt-4 space-y-2">
-        {summary.breakdown.map((row) => (
-          <div key={row.key} className="flex items-center gap-3 text-sm">
-            <span className={`h-2.5 w-2.5 rounded-full ${ROW_COLORS[row.key]}`} />
-            <span className="text-zinc-400">{row.label}</span>
-            {row.count !== undefined && <span className="text-[11px] text-zinc-600">{row.count}</span>}
-            <span className="ml-auto font-mono text-xs font-semibold text-zinc-100">
-              {formatContextPercent(contextRowPercent(row, summary))}
-            </span>
-            <span className="w-14 text-right font-mono text-[11px] text-zinc-500">
-              {formatContextTokenCount(row.tokens)}
-            </span>
-          </div>
-        ))}
-        {summary.breakdown.length === 0 && (
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-500">
-            等待 provider usage 后显示消息、工具、技能和系统提示词占用。
-          </div>
-        )}
-      </div>
+      {!showDetails && (
+        <div className="mt-3 flex items-center justify-end">
+          <button
+            type="button"
+            aria-expanded={showDetails}
+            onClick={() => setShowDetails(true)}
+            className={`rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
+          >
+            显示更多
+          </button>
+        </div>
+      )}
 
-      <div className="my-4 border-t border-zinc-700" />
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="text-zinc-400">缓存命中率</span>
-        <span className="font-mono text-xs font-semibold text-zinc-100">
-          {summary.cacheHitRate === undefined ? '暂无数据' : formatContextPercent(summary.cacheHitRate)}
-        </span>
+      {showDetails && (
+        <div className="mt-3 space-y-4">
+          <div className="space-y-2">
+            {summary.breakdown.map((row) => {
+              const rowPercent = contextRowPercent(row, summary) ?? 0;
+              return (
+                <div key={row.key} className="flex items-center gap-3 text-sm">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: breakdownDotColor(rowPercent) }}
+                  />
+                  <span className="text-zinc-600">{row.label}</span>
+                  {row.count !== undefined && <span className="text-[11px] text-zinc-400">{row.count}</span>}
+                  <span className="ml-auto font-mono text-xs font-semibold text-zinc-950">
+                    {formatContextPercent(rowPercent)}
+                  </span>
+                  <span className="w-14 text-right font-mono text-[11px] text-zinc-500">
+                    {formatContextTokenCount(row.tokens)}
+                  </span>
+                </div>
+              );
+            })}
+            {summary.breakdown.length === 0 && (
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                等待用量数据后显示消息、工具、技能和系统提示词占用。
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs">
+            <MetricGroup title="本轮">
+              <MetricRow label="输入" value={formatContextTokenCount(requestInputTokens)} />
+              <MetricRow label="输出" value={formatContextTokenCount(requestOutputTokens)} />
+              <MetricRow label="缓存读" value={formatContextTokenCount(requestCacheReadTokens)} />
+              <MetricRow label="缓存写" value={formatContextTokenCount(requestCacheCreationTokens)} />
+            </MetricGroup>
+            <MetricGroup title="会话">
+              <MetricRow label="输入" value={formatContextTokenCount(sessionInputTokens)} />
+              <MetricRow label="输出" value={formatContextTokenCount(sessionOutputTokens)} />
+              <MetricRow label="缓存读" value={formatContextTokenCount(sessionCacheReadTokens)} />
+              <MetricRow label="缓存写" value={formatContextTokenCount(sessionCacheCreationTokens)} />
+            </MetricGroup>
+          </div>
+
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails(false)}
+              className={`rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
+            >
+              收起
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 border-t border-zinc-200 pt-3 text-xs">
+        <MetricRow label="缓存命中率" value={formatContextPercent(sessionHitRate ?? 0)} />
       </div>
     </div>
   );
 }
 
-export function ContextUsageButton({ summary }: { summary: ContextUsageSummary }) {
+export function ContextUsageButton({
+  summary,
+  sessionTokenUsage,
+}: {
+  summary: ContextUsageSummary;
+  sessionTokenUsage?: TokenUsage;
+}) {
   const [open, setOpen] = useState(false);
-  const compactLabel =
-    summary.percentUsed === undefined ? formatContextTokenCount(summary.windowTokens) : formatContextPercent(summary.percentUsed);
+  const [position, setPosition] = useState<{ bottom: number; right: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const percent = summary.percentUsed === undefined ? 0 : Math.max(0, Math.min(100, summary.percentUsed));
+  const percentLabel = formatContextPercent(percent);
+  const ringColor = percent >= 85 ? '#e11d48' : percent >= 65 ? '#f59e0b' : '#18181b';
+  const ringRadius = 10;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringOffset = ringCircumference * (1 - percent / 100);
+
+  useLayoutEffect(() => {
+    if (!open || typeof window === 'undefined') return undefined;
+
+    function updatePosition() {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const panelWidth = 380;
+      const right = Math.max(12, Math.min(window.innerWidth - rect.right, window.innerWidth - panelWidth - 12));
+      const bottom = Math.max(12, window.innerHeight - rect.top + 8);
+      setPosition({ bottom, right });
+    }
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open]);
 
   return (
-    <div className="relative">
+    <>
       <button
+        ref={buttonRef}
         type="button"
+        aria-label={`Context usage ${percentLabel}`}
         aria-expanded={open}
+        title={`Context usage ${percentLabel}`}
         onClick={() => setOpen((value) => !value)}
-        className={`h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-600 hover:bg-zinc-50 ${surface.focus}`}
+        className={`grid h-8 w-8 place-items-center rounded-full bg-white shadow-sm shadow-zinc-200/50 hover:bg-zinc-50 ${surface.focus}`}
       >
-        Context <span className="font-mono text-[11px] text-zinc-400">{compactLabel}</span>
+        <span aria-hidden="true" className="relative grid h-6 w-6 place-items-center rounded-full">
+          <svg className="absolute inset-0 h-6 w-6 -rotate-90" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r={ringRadius} fill="none" stroke="#e4e4e7" strokeWidth="3" />
+            {percent > 0 && (
+              <circle
+                cx="12"
+                cy="12"
+                r={ringRadius}
+                fill="none"
+                stroke={ringColor}
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeDasharray={ringCircumference}
+                strokeDashoffset={ringOffset}
+              />
+            )}
+          </svg>
+          <span className="relative h-[10px] w-[10px] rounded-full bg-white" />
+        </span>
       </button>
-      {open && (
-        <div className="absolute bottom-9 right-0 z-30">
-          <ContextUsagePanel summary={summary} />
-        </div>
-      )}
-    </div>
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed z-[100]"
+            style={{
+              bottom: position?.bottom ?? 56,
+              right: position?.right ?? 12,
+            }}
+          >
+            <ContextUsagePanel summary={summary} sessionTokenUsage={sessionTokenUsage} />
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }

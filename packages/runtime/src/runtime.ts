@@ -11,6 +11,7 @@ import type {
   LanguageMessage,
   Logger,
   RuntimeAgentEventEnvelope,
+  SkillInfo,
   Tool,
 } from '@cortx/sdk';
 import {
@@ -57,6 +58,8 @@ export interface CortxRuntimeOptions {
   appName?: string;
   language: LanguageClient;
   model: string;
+  models?: unknown[];
+  modelCatalog?: unknown[];
   system?: string;
   maxIterations?: number;
   contextWindowTokens?: number;
@@ -69,6 +72,7 @@ export interface CortxRuntimeOptions {
   capabilities?: RuntimeDefaultCapabilities;
   defaultWorkingDirectory?: string;
   allowedWorkspaceRoots?: string[];
+  /** Maximum sessions allowed to run concurrently. Idle loaded sessions do not count toward this limit. */
   maxSessions?: number;
   maxEventsPerSession?: number;
   idleTimeoutMs?: number;
@@ -89,6 +93,18 @@ export interface RestoreDurableSessionsOptions {
   autoResume?: boolean;
 }
 
+export interface RuntimeEventEnvelopeHistoryPageOptions {
+  afterSequence?: number;
+  beforeSequence?: number;
+  limit?: number;
+}
+
+export interface RuntimeEventEnvelopeHistoryPage {
+  events: RuntimeAgentEventEnvelope[];
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+}
+
 interface RuntimeSkillMounts {
   skillPaths?: string[];
   skillPacks?: string[];
@@ -98,6 +114,7 @@ interface RuntimeCortxHostInput {
   id: string;
   workingDirectory: string;
   model: string;
+  reasoningEffort?: string;
   system?: string;
   maxIterations?: number;
   contextWindowTokens?: number;
@@ -147,6 +164,12 @@ function parseOptionalPositiveInteger(value: unknown, field: string): number | u
   if (value === undefined) return undefined;
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
   throw new RuntimeError('invalid_request', `${field} must be a positive number`, { [field]: value });
+}
+
+function normalizeHistoryLimit(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) return undefined;
+  return Math.max(1, Math.floor(value));
 }
 
 function eventError(error: unknown): AgentEvent {
@@ -230,6 +253,91 @@ function usageToken(value: number | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+function optionalUsageToken(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : usageToken(value);
+}
+
+function appendPromptHistory(history: string[], message: string): string[] {
+  const prompt = message.trim();
+  if (!prompt) return history;
+  return [...history, prompt].slice(-100);
+}
+
+function backfillUserMessageEnvelopes(
+  session: ManagedRuntimeSession,
+  envelopes: RuntimeAgentEventEnvelope[],
+): RuntimeAgentEventEnvelope[] {
+  const prompts = session.promptHistory.map((message) => message.trim()).filter(Boolean);
+  if (prompts.length === 0) return envelopes;
+
+  const remainingUserMessages = new Map<string, number>();
+  for (const envelope of envelopes) {
+    if (envelope.event.type !== 'user_message') continue;
+    remainingUserMessages.set(envelope.event.message, (remainingUserMessages.get(envelope.event.message) ?? 0) + 1);
+  }
+
+  const missing: string[] = [];
+  for (const prompt of prompts) {
+    const remaining = remainingUserMessages.get(prompt) ?? 0;
+    if (remaining > 0) {
+      remainingUserMessages.set(prompt, remaining - 1);
+    } else {
+      missing.push(prompt);
+    }
+  }
+  if (missing.length === 0) return envelopes;
+
+  const first = envelopes[0];
+  const firstSequence = first?.sequence ?? 1;
+  const firstTimestamp = first?.timestamp ?? session.createdAt;
+  const synthetic = missing.map((message, index) => ({
+    sequence: firstSequence - missing.length + index,
+    timestamp: Math.max(session.createdAt, firstTimestamp - missing.length + index),
+    sessionId: session.id,
+    runId: first?.runId ?? Math.max(1, session.runId),
+    event: {
+      type: 'user_message',
+      message,
+      source: index === 0 ? 'prompt' : 'follow_up',
+    },
+  }) satisfies RuntimeAgentEventEnvelope);
+
+  return [...synthetic, ...envelopes].sort((a, b) => a.sequence - b.sequence);
+}
+
+function normalizeModelId(value: unknown, fallback: string): string {
+  if (value === undefined) return fallback;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  throw new RuntimeError('invalid_request', 'model must be a non-empty string', { model: value });
+}
+
+function normalizeReasoningEffort(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function addOptionalUsageToken(current: number | undefined, next: number | undefined): number | undefined {
+  if (next === undefined) return current;
+  return (current ?? 0) + usageToken(next);
+}
+
+function addSessionUsage(current: AgentDoneUsage | undefined, next: AgentDoneUsage): AgentDoneUsage {
+  const usage: AgentDoneUsage = {
+    inputTokens: usageToken(current?.inputTokens) + usageToken(next.inputTokens),
+    outputTokens: usageToken(current?.outputTokens) + usageToken(next.outputTokens),
+  };
+  const noCacheInputTokens = addOptionalUsageToken(current?.noCacheInputTokens, next.noCacheInputTokens);
+  const cacheReadTokens = addOptionalUsageToken(current?.cacheReadTokens, next.cacheReadTokens);
+  const cacheCreationTokens = addOptionalUsageToken(current?.cacheCreationTokens, next.cacheCreationTokens);
+  const reasoningTokens = addOptionalUsageToken(current?.reasoningTokens, next.reasoningTokens);
+  if (noCacheInputTokens !== undefined) usage.noCacheInputTokens = noCacheInputTokens;
+  if (cacheReadTokens !== undefined) usage.cacheReadTokens = cacheReadTokens;
+  if (cacheCreationTokens !== undefined) usage.cacheCreationTokens = cacheCreationTokens;
+  if (reasoningTokens !== undefined) usage.reasoningTokens = reasoningTokens;
+  if (next.context) usage.context = next.context;
+  else if (current?.context) usage.context = current.context;
+  return usage;
+}
+
 function contextInputTokens(usage: AgentDoneUsage): number | undefined {
   const inputTokens = usageToken(usage.inputTokens);
   const cacheReadTokens = usageToken(usage.cacheReadTokens);
@@ -260,10 +368,19 @@ function readModelLimit(value: unknown): number | undefined {
     const limitsFromMetadata = readModelLimit({ limits: (metadata as Record<string, unknown>).limits });
     if (limitsFromMetadata !== undefined) return limitsFromMetadata;
   }
+  const nestedModel = record.model;
+  if (nestedModel && typeof nestedModel === 'object') {
+    const nestedLimit = readModelLimit(nestedModel);
+    if (nestedLimit !== undefined) return nestedLimit;
+  }
   return undefined;
 }
 
-function resolveLanguageModelContextWindow(language: LanguageClient, model: string): number | undefined {
+function resolveLanguageModelContextWindow(
+  language: LanguageClient,
+  model: string,
+  extraCandidates: unknown[] = [],
+): number | undefined {
   const source = language as unknown as {
     listModels?: () => unknown[];
     listModelCatalog?: () => unknown[];
@@ -288,6 +405,7 @@ function resolveLanguageModelContextWindow(language: LanguageClient, model: stri
     }
   };
   const candidates = [
+    ...extraCandidates,
     ...list(source.listModels?.bind(source)),
     ...list(source.listModelCatalog?.bind(source)),
     ...(Array.isArray(source.models) ? source.models : []),
@@ -305,9 +423,11 @@ function resolveLanguageModelContextWindow(language: LanguageClient, model: stri
 
 export class CortxRuntime {
   private readonly sessions = new Map<string, ManagedRuntimeSession>();
+  private readonly deletedSessionIds = new Set<string>();
   private readonly appName: string;
   private readonly language: LanguageClient;
   private readonly model: string;
+  private readonly modelCatalog: unknown[];
   private readonly system?: string;
   private readonly maxIterations?: number;
   private readonly contextWindowTokens?: number;
@@ -331,6 +451,7 @@ export class CortxRuntime {
     this.appName = options.appName ?? 'cortx';
     this.language = options.language;
     this.model = options.model;
+    this.modelCatalog = [...(options.models ?? []), ...(options.modelCatalog ?? [])];
     this.system = options.system;
     this.maxIterations = options.maxIterations;
     this.contextWindowTokens = parseOptionalPositiveInteger(options.contextWindowTokens, 'contextWindowTokens');
@@ -352,10 +473,6 @@ export class CortxRuntime {
   }
 
   async createSession(request: RuntimeSessionCreateRequest = {}): Promise<RuntimeSessionInfo> {
-    if (this.sessions.size >= this.maxSessions) {
-      throw new RuntimeError('capacity_exceeded', 'Maximum concurrent sessions reached');
-    }
-
     const workspace = await resolveWorkspace({
       requested: request.workingDirectory,
       defaultWorkingDirectory: this.defaultWorkingDirectory,
@@ -363,11 +480,13 @@ export class CortxRuntime {
     });
     const id = request.id ?? createSessionId();
     if (this.sessions.has(id)) throw new RuntimeError('invalid_request', `Session already exists: ${id}`);
+    this.deletedSessionIds.delete(id);
 
-    const model = request.model ?? this.model;
+    const model = normalizeModelId(request.model, this.model);
+    const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
     const maxIterations = request.maxIterations ?? this.maxIterations;
     const requestedContextWindowTokens = parseOptionalPositiveInteger(request.contextWindowTokens, 'contextWindowTokens');
-    const modelContextWindowTokens = resolveLanguageModelContextWindow(this.language, model);
+    const modelContextWindowTokens = resolveLanguageModelContextWindow(this.language, model, this.modelCatalog);
     const contextWindowTokens = requestedContextWindowTokens ?? this.contextWindowTokens ?? modelContextWindowTokens;
     const contextWindowSource: ContextUsageSource | undefined =
       requestedContextWindowTokens !== undefined
@@ -388,6 +507,7 @@ export class CortxRuntime {
       id,
       workingDirectory: workspace.workingDirectory,
       model,
+      reasoningEffort,
       system,
       maxIterations,
       contextWindowTokens,
@@ -411,6 +531,7 @@ export class CortxRuntime {
       lastActivityAt: now,
       workingDirectory: workspace.workingDirectory,
       model,
+      reasoningEffort,
       system,
       maxIterations,
       contextWindowTokens,
@@ -421,16 +542,19 @@ export class CortxRuntime {
       capabilities: host.capabilities,
       skillPaths,
       skillPacks,
+      promptHistory: [],
       requestTools: request.tools ?? [],
       registry: request.registry,
       plugins: request.plugins,
       events: [],
       eventEnvelopes: [],
+      usage: undefined,
       subscribers: new Set(),
       envelopeSubscribers: new Set(),
       idleTimer: undefined,
       isRunning: false,
       runPromise: undefined,
+      needsHostRefresh: false,
       runId: 0,
       nextEventSequence: 0,
       agentSessions,
@@ -460,6 +584,7 @@ export class CortxRuntime {
     const restored: RuntimeSessionInfo[] = [];
     for (const snapshot of await store.listRuntimeSessions()) {
       if (this.sessions.has(snapshot.id)) continue;
+      if (this.deletedSessionIds.has(snapshot.id)) continue;
       const checkpoint = await this.durableStore?.loadCheckpoint(snapshot.id);
       const resumableCheckpoint =
         checkpoint && checkpoint.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && !checkpoint.state.terminal
@@ -470,6 +595,7 @@ export class CortxRuntime {
         id: snapshot.id,
         workingDirectory: snapshot.workingDirectory,
         model: snapshot.model,
+        reasoningEffort: snapshot.reasoningEffort,
         system: snapshot.system,
         maxIterations: snapshot.maxIterations,
         toolMode: snapshot.toolMode,
@@ -487,10 +613,11 @@ export class CortxRuntime {
       session.lastActivityAt = snapshot.lastActivityAt;
       session.runId = snapshot.runId;
       session.nextEventSequence = snapshot.nextEventSequence;
+      session.promptHistory = snapshot.promptHistory?.slice(-100) ?? [];
       session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
-      if (store.listEventEnvelopes) {
-        this.restoreSessionEventHistory(session, await store.listEventEnvelopes(snapshot.id), resumableCheckpoint);
-      }
+      const eventSnapshots = store.listEventEnvelopes ? await store.listEventEnvelopes(snapshot.id) : [];
+      session.usage = this.aggregateUsageFromEventSnapshots(session, eventSnapshots) ?? snapshot.usage;
+      this.restoreSessionEventHistory(session, eventSnapshots, resumableCheckpoint);
       await this.persistRuntimeSession(session);
       restored.push(this.info(session));
 
@@ -529,16 +656,27 @@ export class CortxRuntime {
 
   async updateSession(sessionId: string, request: RuntimeSessionUpdateRequest = {}): Promise<RuntimeSessionInfo> {
     const session = this.requireSession(sessionId);
-    if (session.isRunning) {
-      throw new RuntimeError('session_busy', 'Cannot update session controls while the agent is running');
-    }
-
+    const model = normalizeModelId(request.model, session.model);
+    const modelChanged = model !== session.model;
+    const reasoningEffort =
+      'reasoningEffort' in request ? normalizeReasoningEffort(request.reasoningEffort) : session.reasoningEffort;
     const toolMode = parseWorkspaceToolMode(request.toolMode, session.toolMode);
     const approvalMode = parseApprovalMode(request.approvalMode, session.approvalMode);
     const requestedContextWindowTokens = parseOptionalPositiveInteger(request.contextWindowTokens, 'contextWindowTokens');
-    const contextWindowTokens = requestedContextWindowTokens ?? session.contextWindowTokens;
+    const modelContextWindowTokens = resolveLanguageModelContextWindow(this.language, model, this.modelCatalog);
+    const shouldRefreshModelWindow =
+      modelChanged && (session.contextWindowSource === 'model_metadata' || session.contextWindowSource === undefined);
+    const contextWindowTokens =
+      requestedContextWindowTokens ??
+      (shouldRefreshModelWindow ? modelContextWindowTokens : session.contextWindowTokens);
     const contextWindowSource: ContextUsageSource | undefined =
-      requestedContextWindowTokens !== undefined ? 'configured' : session.contextWindowSource;
+      requestedContextWindowTokens !== undefined
+        ? 'configured'
+        : shouldRefreshModelWindow
+          ? modelContextWindowTokens !== undefined
+            ? 'model_metadata'
+            : undefined
+          : session.contextWindowSource;
     const requestedCapabilities = request.capabilities ?? session.requestedCapabilities;
     let skillPaths = session.skillPaths;
     let skillPacks = session.skillPacks;
@@ -548,39 +686,24 @@ export class CortxRuntime {
       skillPacks = resolved.skillPacks;
     }
 
-    const messages = session.cortx.messages;
-    const host = await this.createCortxHost({
-      id: session.id,
-      workingDirectory: session.workingDirectory,
-      model: session.model,
-      system: session.system,
-      maxIterations: session.maxIterations,
-      contextWindowTokens,
-      contextWindowSource,
-      toolMode,
-      approvalMode,
-      requestedCapabilities,
-      skillPaths,
-      requestTools: session.requestTools,
-      registry: session.registry,
-      plugins: session.plugins,
-      agentSessions: session.agentSessions,
-      onAgentEvent: (event) => this.broadcast(session, event),
-    });
-    host.cortx.replaceMessages(messages);
-
-    session.cortx = host.cortx;
     session.lastActivityAt = Date.now();
+    session.model = model;
+    session.reasoningEffort = reasoningEffort;
     session.contextWindowTokens = contextWindowTokens;
     session.contextWindowSource = contextWindowSource;
     session.toolMode = toolMode;
     session.approvalMode = approvalMode;
     session.requestedCapabilities = requestedCapabilities;
-    session.capabilities = host.capabilities;
-    session.contextMetadata = host.contextMetadata;
     session.skillPaths = skillPaths;
     session.skillPacks = skillPacks;
     if (request.metadata !== undefined) session.metadata = request.metadata;
+    if (session.isRunning) {
+      session.capabilities =
+        approvalMode === 'full-access' ? { ...requestedCapabilities, approval: false } : requestedCapabilities;
+      session.needsHostRefresh = true;
+    } else {
+      await this.rebuildSessionHost(session);
+    }
     this.resetIdleTimer(session);
     await this.persistRuntimeSession(session);
     return this.info(session);
@@ -592,6 +715,33 @@ export class CortxRuntime {
 
   getEventEnvelopeHistory(sessionId: string): RuntimeAgentEventEnvelope[] {
     return [...this.requireSession(sessionId).eventEnvelopes];
+  }
+
+  async getEventEnvelopeHistoryPage(
+    sessionId: string,
+    options: RuntimeEventEnvelopeHistoryPageOptions = {},
+  ): Promise<RuntimeEventEnvelopeHistoryPage> {
+    const all = await this.loadEventEnvelopeHistory(sessionId);
+    const filtered = all.filter((event) => {
+      if (options.afterSequence !== undefined && event.sequence <= options.afterSequence) return false;
+      if (options.beforeSequence !== undefined && event.sequence >= options.beforeSequence) return false;
+      return true;
+    });
+    const limit = normalizeHistoryLimit(options.limit);
+    const events = limit === undefined ? filtered : filtered.slice(-limit);
+    const firstSequence = events[0]?.sequence;
+    const lastSequence = events.at(-1)?.sequence;
+    return {
+      events,
+      hasMoreBefore: firstSequence !== undefined && all.some((event) => event.sequence < firstSequence),
+      hasMoreAfter: lastSequence !== undefined && all.some((event) => event.sequence > lastSequence),
+    };
+  }
+
+  async listSessionSkills(sessionId: string): Promise<SkillInfo[]> {
+    const session = this.requireSession(sessionId);
+    if (session.capabilities.skills === false) return [];
+    return discoverSkills(session.workingDirectory, { skillPaths: session.skillPaths }, this.logger);
   }
 
   getLocalState(sessionId: string): RuntimeSessionLocalState {
@@ -606,7 +756,10 @@ export class CortxRuntime {
   async prompt(sessionId: string, message: string): Promise<void> {
     const session = this.requireSession(sessionId);
     if (!message?.trim()) throw new RuntimeError('invalid_request', 'Message is required');
-    await this.startRun(session, () => session.cortx.run(message));
+    await this.startRun(session, () => session.cortx.run(message), () => {
+      session.promptHistory = appendPromptHistory(session.promptHistory, message);
+      this.broadcast(session, { type: 'user_message', message, source: 'prompt' });
+    });
   }
 
   async resume(sessionId: string): Promise<void> {
@@ -626,8 +779,11 @@ export class CortxRuntime {
     const session = this.requireSession(sessionId);
     if (!message?.trim()) throw new RuntimeError('invalid_request', 'Message is required');
     session.lastActivityAt = Date.now();
+    session.promptHistory = appendPromptHistory(session.promptHistory, message);
+    this.broadcast(session, { type: 'user_message', message, source: 'follow_up' });
     session.cortx.controller.followUp(message);
     this.resetIdleTimer(session);
+    void this.persistRuntimeSession(session);
   }
 
   answer(sessionId: string, toolCallId: string, response: string): void {
@@ -677,19 +833,66 @@ export class CortxRuntime {
   private async startRun(
     session: ManagedRuntimeSession,
     createGenerator: () => AsyncGenerator<AgentEvent>,
+    onStarted?: () => void,
   ): Promise<void> {
     if (session.isRunning) throw new RuntimeError('session_busy', 'Agent is already running');
+    if (session.needsHostRefresh) await this.rebuildSessionHost(session);
+    const runningSessions = this.runningSessionCount();
+    if (runningSessions >= this.maxSessions) {
+      throw new RuntimeError('capacity_exceeded', 'Maximum concurrent running sessions reached', {
+        maxSessions: this.maxSessions,
+        runningSessions,
+        loadedSessions: this.sessions.size,
+      });
+    }
 
     session.lastActivityAt = Date.now();
     this.resetIdleTimer(session);
     session.isRunning = true;
     const runId = ++session.runId;
     session.cortx.setRunId(runId);
+    onStarted?.();
     void this.persistRuntimeSession(session);
 
     const runPromise = this.consumeRun(session, runId, createGenerator);
     session.runPromise = runPromise;
     void runPromise;
+  }
+
+  private runningSessionCount(): number {
+    let count = 0;
+    for (const session of this.sessions.values()) {
+      if (session.isRunning) count++;
+    }
+    return count;
+  }
+
+  private async rebuildSessionHost(session: ManagedRuntimeSession): Promise<void> {
+    const messages = session.cortx.messages;
+    const host = await this.createCortxHost({
+      id: session.id,
+      workingDirectory: session.workingDirectory,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      system: session.system,
+      maxIterations: session.maxIterations,
+      contextWindowTokens: session.contextWindowTokens,
+      contextWindowSource: session.contextWindowSource,
+      toolMode: session.toolMode,
+      approvalMode: session.approvalMode,
+      requestedCapabilities: session.requestedCapabilities,
+      skillPaths: session.skillPaths,
+      requestTools: session.requestTools,
+      registry: session.registry,
+      plugins: session.plugins,
+      agentSessions: session.agentSessions,
+      onAgentEvent: (event) => this.broadcast(session, event),
+    });
+    host.cortx.replaceMessages(messages);
+    session.cortx = host.cortx;
+    session.capabilities = host.capabilities;
+    session.contextMetadata = host.contextMetadata;
+    session.needsHostRefresh = false;
   }
 
   private async consumeRun(
@@ -724,6 +927,9 @@ export class CortxRuntime {
       event: enrichedEvent,
       parent: parentAttributionFor(session, enrichedEvent),
     };
+    if (enrichedEvent.type === 'done' && enrichedEvent.usage) {
+      session.usage = addSessionUsage(session.usage, enrichedEvent.usage);
+    }
     session.events.push(enrichedEvent);
     session.eventEnvelopes.push(envelope);
     if (session.events.length > this.maxEventsPerSession) {
@@ -793,7 +999,8 @@ export class CortxRuntime {
     const knownTokens = baseBreakdown
       .filter((row) => row.key !== 'other')
       .reduce((total, row) => total + row.tokens, 0);
-    const usedTokens = contextInputTokens(usage) ?? (knownTokens || undefined);
+    const providerUsedTokens = contextInputTokens(usage);
+    const usedTokens = Math.max(providerUsedTokens ?? 0, knownTokens) || undefined;
     const otherTokens = Math.max(0, (usedTokens ?? 0) - knownTokens);
     const existingOther = baseBreakdown.find((row) => row.key === 'other');
     const breakdown: ContextUsageBreakdownEntry[] = [
@@ -810,11 +1017,16 @@ export class CortxRuntime {
     ];
     return {
       usedTokens,
+      requestInputTokens: optionalUsageToken(usage.inputTokens),
+      requestOutputTokens: optionalUsageToken(usage.outputTokens),
+      requestNoCacheInputTokens: optionalUsageToken(usage.noCacheInputTokens),
+      requestCacheReadTokens: optionalUsageToken(usage.cacheReadTokens),
+      requestCacheCreationTokens: optionalUsageToken(usage.cacheCreationTokens),
       windowTokens: metadata.contextWindowTokens,
       windowSource: metadata.contextWindowSource,
       model: session.model,
       percentUsed: percent(usedTokens, metadata.contextWindowTokens),
-      cacheHitRate: percent(usage.cacheReadTokens, usedTokens),
+      cacheHitRate: percent(usage.cacheReadTokens, providerUsedTokens ?? usedTokens),
       breakdown,
     };
   }
@@ -867,6 +1079,7 @@ export class CortxRuntime {
 
   private async destroy(session: ManagedRuntimeSession, options: { deleteDurable?: boolean } = {}): Promise<void> {
     if (session.idleTimer) clearTimeout(session.idleTimer);
+    if (options.deleteDurable) this.deletedSessionIds.add(session.id);
     await this.abortSession(session, 'Session cleaned up', 'Session destroyed');
     session.subscribers.clear();
     session.envelopeSubscribers.clear();
@@ -892,6 +1105,7 @@ export class CortxRuntime {
       lastActivityAt: session.lastActivityAt,
       workingDirectory: session.workingDirectory,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
       system: session.system,
       maxIterations: session.maxIterations,
       contextWindowTokens: session.contextWindowTokens,
@@ -901,6 +1115,8 @@ export class CortxRuntime {
       capabilities: session.capabilities,
       skillPaths: session.skillPaths,
       skillPacks: session.skillPacks,
+      promptHistory: session.promptHistory,
+      usage: session.usage,
       isRunning: session.isRunning,
       eventCount: session.events.length,
       metadata: session.metadata,
@@ -911,6 +1127,31 @@ export class CortxRuntime {
     return isRuntimeDurableRunStore(this.durableStore) ? this.durableStore : undefined;
   }
 
+  private async loadEventEnvelopeHistory(sessionId: string): Promise<RuntimeAgentEventEnvelope[]> {
+    const session = this.requireSession(sessionId);
+    const bySequence = new Map<number, RuntimeAgentEventEnvelope>();
+    const store = this.runtimeDurableStore();
+    const snapshots = store?.listEventEnvelopes ? await store.listEventEnvelopes(sessionId) : [];
+
+    for (const snapshot of snapshots) {
+      if (snapshot.sessionId !== sessionId) continue;
+      bySequence.set(snapshot.sequence, {
+        sequence: snapshot.sequence,
+        timestamp: snapshot.timestamp,
+        sessionId: snapshot.sessionId,
+        runId: snapshot.runId,
+        event: this.enrichEvent(session, snapshot.event),
+        parent: parentAttributionFor(session, snapshot.event) ?? snapshot.parent,
+      });
+    }
+
+    for (const envelope of session.eventEnvelopes) {
+      bySequence.set(envelope.sequence, envelope);
+    }
+
+    return backfillUserMessageEnvelopes(session, [...bySequence.values()].sort((a, b) => a.sequence - b.sequence));
+  }
+
   private sessionSnapshot(session: ManagedRuntimeSession): RuntimeSessionSnapshot {
     return {
       schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
@@ -919,6 +1160,7 @@ export class CortxRuntime {
       lastActivityAt: session.lastActivityAt,
       workingDirectory: session.workingDirectory,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
       system: session.system,
       maxIterations: session.maxIterations,
       contextWindowTokens: session.contextWindowTokens,
@@ -928,10 +1170,24 @@ export class CortxRuntime {
       capabilities: session.requestedCapabilities,
       skillPaths: session.skillPaths,
       skillPacks: session.skillPacks,
+      promptHistory: session.promptHistory,
+      usage: session.usage,
       runId: session.runId,
       nextEventSequence: session.nextEventSequence,
       metadata: session.metadata,
     };
+  }
+
+  private aggregateUsageFromEventSnapshots(
+    session: ManagedRuntimeSession,
+    snapshots: RuntimeEventEnvelopeSnapshot[],
+  ): AgentDoneUsage | undefined {
+    let usage: AgentDoneUsage | undefined;
+    for (const snapshot of snapshots) {
+      const event = this.enrichEvent(session, snapshot.event);
+      if (event.type === 'done' && event.usage) usage = addSessionUsage(usage, event.usage);
+    }
+    return usage;
   }
 
   private restoreSessionEventHistory(
@@ -940,14 +1196,14 @@ export class CortxRuntime {
     resumableCheckpoint?: AgentRunCheckpoint,
   ): void {
     const bounded = snapshots.slice(-this.maxEventsPerSession);
-    session.eventEnvelopes = bounded.map((snapshot) => ({
+    session.eventEnvelopes = backfillUserMessageEnvelopes(session, bounded.map((snapshot) => ({
       sequence: snapshot.sequence,
       timestamp: snapshot.timestamp,
       sessionId: snapshot.sessionId,
       runId: snapshot.runId,
       event: this.enrichEvent(session, snapshot.event),
       parent: parentAttributionFor(session, snapshot.event) ?? snapshot.parent,
-    }));
+    })));
     if (resumableCheckpoint && !isTerminalEvent(session.eventEnvelopes.at(-1)?.event)) {
       const sequence = Math.max(session.nextEventSequence, session.eventEnvelopes.at(-1)?.sequence ?? 0) + 1;
       session.eventEnvelopes.push({
@@ -980,8 +1236,12 @@ export class CortxRuntime {
   private async persistRuntimeSession(session: ManagedRuntimeSession): Promise<void> {
     const store = this.runtimeDurableStore();
     if (!store) return;
+    if (this.deletedSessionIds.has(session.id)) return;
     try {
       await store.saveRuntimeSession(this.sessionSnapshot(session));
+      if (this.deletedSessionIds.has(session.id)) {
+        await store.deleteRuntimeSession(session.id);
+      }
     } catch (error) {
       this.logger.warn(`Failed to persist runtime session "${session.id}": ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -990,8 +1250,12 @@ export class CortxRuntime {
   private async persistEventEnvelope(envelope: RuntimeAgentEventEnvelope): Promise<void> {
     const store = this.runtimeDurableStore();
     if (!store?.saveEventEnvelope) return;
+    if (this.deletedSessionIds.has(envelope.sessionId)) return;
     try {
       await store.saveEventEnvelope(this.eventEnvelopeSnapshot(envelope));
+      if (this.deletedSessionIds.has(envelope.sessionId)) {
+        await store.deleteEventEnvelopes?.(envelope.sessionId);
+      }
     } catch (error) {
       this.logger.warn(
         `Failed to persist runtime event "${envelope.sessionId}:${envelope.sequence}": ${error instanceof Error ? error.message : String(error)}`,
@@ -1003,10 +1267,14 @@ export class CortxRuntime {
     if (event.type !== 'agent_started' && event.type !== 'agent_progress' && event.type !== 'agent_completed') return;
     const store = this.runtimeDurableStore();
     if (!store) return;
+    if (this.deletedSessionIds.has(session.id)) return;
     const snapshot = session.agentSessions.snapshot(event.toolCallId);
     if (!snapshot) return;
     try {
       await store.saveSubAgentSession(snapshot);
+      if (this.deletedSessionIds.has(session.id)) {
+        await store.deleteSubAgentSessions(session.id);
+      }
     } catch (error) {
       this.logger.warn(
         `Failed to persist sub-agent session "${event.toolCallId}": ${error instanceof Error ? error.message : String(error)}`,
@@ -1064,6 +1332,7 @@ export class CortxRuntime {
       const subAgentTool = createSubAgentTool({
         language: this.language,
         model: input.model,
+        reasoning: input.reasoningEffort ? { enabled: true, effort: input.reasoningEffort } : undefined,
         registry: input.registry ?? this.registry,
         plugins: input.plugins ?? this.plugins,
         agentSessions: input.agentSessions,
@@ -1088,6 +1357,7 @@ export class CortxRuntime {
     const cortx = new Cortx(this.language, {
       appName: this.appName,
       model: input.model,
+      reasoning: input.reasoningEffort ? { enabled: true, effort: input.reasoningEffort } : undefined,
       system: input.system,
       maxIterations: input.maxIterations,
       registry: input.registry ?? this.registry,

@@ -4,7 +4,17 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { DEFAULT_RUNTIME_CAPABILITIES, CortxRuntime, RuntimeError } from '../src/index';
-import type { AgentEvent, LanguageMessage, RuntimeAgentEventEnvelope } from '@cortx/sdk';
+import type {
+  AgentEvent,
+  AgentRunCheckpoint,
+  LanguageMessage,
+  RuntimeAgentEventEnvelope,
+} from '@cortx/sdk';
+import type {
+  RuntimeDurableRunStore,
+  RuntimeSessionSnapshot,
+  RuntimeSubAgentSessionSnapshot,
+} from '../src/index';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 
@@ -70,6 +80,102 @@ async function waitForEnvelope(
   throw new Error(`Timed out waiting for ${type}`);
 }
 
+class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
+  private readonly checkpoints = new Map<string, AgentRunCheckpoint>();
+  private readonly sessions = new Map<string, RuntimeSessionSnapshot>();
+  private readonly subAgents = new Map<string, RuntimeSubAgentSessionSnapshot[]>();
+  private saveGate: Promise<void> | undefined;
+  private releaseSaveGate: (() => void) | undefined;
+  activeRuntimeSaves = 0;
+  blockedRuntimeSaves = 0;
+
+  delayRuntimeSessionSaves(): void {
+    if (this.saveGate) return;
+    this.saveGate = new Promise((resolve) => {
+      this.releaseSaveGate = resolve;
+    });
+  }
+
+  releaseRuntimeSessionSaves(): void {
+    this.releaseSaveGate?.();
+    this.releaseSaveGate = undefined;
+    this.saveGate = undefined;
+  }
+
+  async waitForBlockedRuntimeSave(timeoutMs = 1_000): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (this.blockedRuntimeSaves > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error('Timed out waiting for a blocked runtime session save');
+  }
+
+  async waitForRuntimeSavesToDrain(timeoutMs = 1_000): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (this.activeRuntimeSaves === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error('Timed out waiting for runtime session saves to drain');
+  }
+
+  saveCheckpoint(checkpoint: AgentRunCheckpoint): void {
+    this.checkpoints.set(checkpoint.sessionId, checkpoint);
+  }
+
+  loadCheckpoint(sessionId: string): AgentRunCheckpoint | undefined {
+    return this.checkpoints.get(sessionId);
+  }
+
+  deleteCheckpoint(sessionId: string): void {
+    this.checkpoints.delete(sessionId);
+  }
+
+  async saveRuntimeSession(snapshot: RuntimeSessionSnapshot): Promise<void> {
+    this.activeRuntimeSaves++;
+    try {
+      if (this.saveGate) {
+        this.blockedRuntimeSaves++;
+        await this.saveGate;
+      }
+      this.sessions.set(snapshot.id, snapshot);
+    } finally {
+      this.activeRuntimeSaves--;
+    }
+  }
+
+  loadRuntimeSession(sessionId: string): RuntimeSessionSnapshot | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  listRuntimeSessions(): RuntimeSessionSnapshot[] {
+    return [...this.sessions.values()];
+  }
+
+  deleteRuntimeSession(sessionId: string): void {
+    this.sessions.delete(sessionId);
+    this.checkpoints.delete(sessionId);
+    this.subAgents.delete(sessionId);
+  }
+
+  saveSubAgentSession(snapshot: RuntimeSubAgentSessionSnapshot): void {
+    const existing = this.subAgents.get(snapshot.parentSessionId) ?? [];
+    this.subAgents.set(snapshot.parentSessionId, [
+      ...existing.filter((item) => item.toolCallId !== snapshot.toolCallId),
+      snapshot,
+    ]);
+  }
+
+  listSubAgentSessions(parentSessionId: string): RuntimeSubAgentSessionSnapshot[] {
+    return this.subAgents.get(parentSessionId) ?? [];
+  }
+
+  deleteSubAgentSessions(parentSessionId: string): void {
+    this.subAgents.delete(parentSessionId);
+  }
+}
+
 describe('CortxRuntime sessions', () => {
   test('defines runtime-owned default capabilities', () => {
     expect(DEFAULT_RUNTIME_CAPABILITIES).toEqual({ skills: true, subAgents: true, approval: true });
@@ -111,6 +217,35 @@ describe('CortxRuntime sessions', () => {
     expect(typeof content === 'string' ? content : content?.find((part) => part.type === 'text')?.text).toBe(
       '/commit fix',
     );
+    runtime.dispose();
+  });
+
+  test('lists skills available to a hosted session', async () => {
+    const skillDir = join(tmpDir, '.cortx', 'skills', 'review');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: review\ndescription: Review code changes\narguments:\n  - target\n---\nReview the requested target.',
+    );
+    const runtime = new CortxRuntime({
+      language: mockLanguage([textParts('ok')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: true, subAgents: false, approval: false },
+    });
+    const enabled = await runtime.createSession();
+    const disabled = await runtime.createSession({ capabilities: { skills: false, subAgents: false, approval: false } });
+
+    await expect(runtime.listSessionSkills(enabled.id)).resolves.toEqual([
+      expect.objectContaining({
+        name: 'review',
+        description: 'Review code changes',
+        arguments: ['target'],
+      }),
+    ]);
+    await expect(runtime.listSessionSkills(disabled.id)).resolves.toEqual([]);
     runtime.dispose();
   });
 
@@ -181,6 +316,11 @@ describe('CortxRuntime sessions', () => {
     });
     expect(done.usage?.context).toMatchObject({
       usedTokens: 1000,
+      requestInputTokens: 1000,
+      requestOutputTokens: 50,
+      requestNoCacheInputTokens: 700,
+      requestCacheReadTokens: 200,
+      requestCacheCreationTokens: 100,
       windowTokens: 2000,
       windowSource: 'configured',
       percentUsed: 50,
@@ -232,10 +372,99 @@ describe('CortxRuntime sessions', () => {
 
     expect(done.usage?.context).toMatchObject({
       usedTokens: 1870,
+      requestInputTokens: 398,
+      requestOutputTokens: 133,
+      requestCacheReadTokens: 1472,
       windowTokens: 128_000,
       cacheHitRate: 78.71657754010695,
     });
     expect(done.usage?.context?.percentUsed).toBeCloseTo(1.4609375);
+    runtime.dispose();
+  });
+
+  test('updates the current session model and reasoning effort before the next run', async () => {
+    const requests: Array<{ model?: string; reasoning?: unknown }> = [];
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* (request: { model?: string; reasoning?: unknown }) {
+          requests.push(request);
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+          } as LanguageStreamPart;
+        },
+      } as unknown as LanguageClient,
+      model: 'small',
+      models: [
+        { id: 'small', name: 'Small', limits: { context: 1000, output: 100 } },
+        { id: 'large', name: 'Large', limits: { context: 2000, output: 200 }, capabilities: { reasoning: true } },
+      ],
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession();
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    expect(session.contextWindowTokens).toBe(1000);
+    const updated = await runtime.updateSession(session.id, { model: 'large', reasoningEffort: 'high' });
+    expect(updated).toMatchObject({
+      id: session.id,
+      model: 'large',
+      reasoningEffort: 'high',
+      contextWindowTokens: 2000,
+      contextWindowSource: 'model_metadata',
+    });
+
+    await runtime.prompt(session.id, 'hello');
+    await waitForEvent(events, 'done');
+    expect(requests.at(-1)).toMatchObject({
+      model: 'large',
+      reasoning: { enabled: true, effort: 'high' },
+    });
+    runtime.dispose();
+  });
+
+  test('does not report context usage below runtime-known context breakdown', async () => {
+    const runtime = new CortxRuntime({
+      language: mockLanguage([
+        [
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'ok' },
+          { type: 'text-end', id: 't1' },
+          {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: {
+              inputTokens: { total: 1, cacheRead: 9 },
+              outputTokens: { total: 2 },
+            },
+          },
+        ] as LanguageStreamPart[],
+      ]),
+      model: 'test-model',
+      system: 'You are Cortx. '.repeat(200),
+      contextWindowTokens: 128_000,
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession();
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
+
+    await runtime.prompt(session.id, 'hello');
+    const done = (await waitForEvent(events, 'done')) as Extract<AgentEvent, { type: 'done' }>;
+    const context = done.usage?.context;
+    const breakdownTotal = context?.breakdown.reduce((total, row) => total + row.tokens, 0) ?? 0;
+
+    expect(context?.usedTokens).toBeGreaterThanOrEqual(breakdownTotal);
+    expect(context?.usedTokens).toBeGreaterThan(10);
+    expect(context?.cacheHitRate).toBe(90);
     runtime.dispose();
   });
 
@@ -351,20 +580,32 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
-  test('enforces max sessions', async () => {
+  test('enforces max sessions only for currently running sessions', async () => {
     const runtime = new CortxRuntime({
-      language: mockLanguage([textParts('ok')]),
+      language: delayedLanguage(120),
       model: 'test-model',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
       maxSessions: 1,
       toolMode: 'none',
     });
-    await runtime.createSession({ id: 'one' });
-    await expect(runtime.createSession({ id: 'two' })).rejects.toMatchObject({
+    const one = await runtime.createSession({ id: 'one' });
+    const two = await runtime.createSession({ id: 'two' });
+    const oneEvents: AgentEvent[] = [];
+    const twoEvents: AgentEvent[] = [];
+    runtime.subscribe(one.id, (event) => oneEvents.push(event));
+    runtime.subscribe(two.id, (event) => twoEvents.push(event));
+
+    await runtime.prompt(one.id, 'first');
+    await expect(runtime.prompt(two.id, 'second')).rejects.toMatchObject({
       kind: 'capacity_exceeded',
       status: 429,
     });
+    expect(runtime.getSession(two.id).isRunning).toBe(false);
+
+    await waitForEvent(oneEvents, 'done');
+    await runtime.prompt(two.id, 'second');
+    await waitForEvent(twoEvents, 'done');
     runtime.dispose();
   });
 
@@ -412,6 +653,32 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
+  test('deleteSession prevents delayed durable writes from resurrecting deleted sessions', async () => {
+    const durableStore = new DelayedRuntimeSessionStore();
+    const runtime = new CortxRuntime({
+      language: delayedLanguage(100),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore,
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'delete-race' });
+    durableStore.delayRuntimeSessionSaves();
+
+    await runtime.prompt(session.id, 'delete me');
+    await durableStore.waitForBlockedRuntimeSave();
+    await runtime.deleteSession(session.id);
+    expect(durableStore.listRuntimeSessions()).toEqual([]);
+
+    durableStore.releaseRuntimeSessionSaves();
+    await durableStore.waitForRuntimeSavesToDrain();
+    expect(durableStore.listRuntimeSessions()).toEqual([]);
+    await expect(runtime.restoreDurableSessions()).resolves.toEqual([]);
+    runtime.dispose();
+  });
+
   test('routes steer, follow-up, answer and resume through the hosted controller', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(100),
@@ -425,8 +692,17 @@ describe('CortxRuntime sessions', () => {
     runtime.subscribe(session.id, (event) => events.push(event));
 
     await runtime.prompt(session.id, 'start');
+    expect(events[0]).toMatchObject({ type: 'user_message', message: 'start', source: 'prompt' });
+    expect(runtime.getEventEnvelopeHistory(session.id)[0]).toMatchObject({
+      runId: 1,
+      event: { type: 'user_message', message: 'start', source: 'prompt' },
+    });
     runtime.steer(session.id, 'use this instead');
     runtime.followUp(session.id, 'then continue');
+    expect(events.find((event) => event.type === 'user_message' && event.message === 'then continue')).toMatchObject({
+      source: 'follow_up',
+    });
+    expect(runtime.getSession(session.id).promptHistory).toEqual(['start', 'then continue']);
     expect(runtime.getSession(session.id).isRunning).toBe(true);
     await expect(runtime.prompt(session.id, 'parallel')).rejects.toMatchObject({ kind: 'session_busy' });
     runtime.answer(session.id, 'question-1', 'yes');
@@ -495,22 +771,51 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
-  test('rejects session control updates while a run is active', async () => {
+  test('allows session control updates during an active run and applies them on the next turn', async () => {
+    const seenToolNames: string[][] = [];
     const runtime = new CortxRuntime({
-      language: delayedLanguage(100),
+      language: {
+        stream: async function* (request: { tools?: Array<{ name: string }> }) {
+          seenToolNames.push((request.tools ?? []).map((tool) => tool.name));
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+          };
+        },
+      } as unknown as LanguageClient,
       model: 'test-model',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
       toolMode: 'none',
+      approvalMode: 'interactive',
+      capabilities: { skills: false, subAgents: false, approval: true },
     });
     const session = await runtime.createSession();
+    const events: AgentEvent[] = [];
+    runtime.subscribe(session.id, (event) => events.push(event));
 
     await runtime.prompt(session.id, 'running');
-    await expect(runtime.updateSession(session.id, { toolMode: 'all' })).rejects.toMatchObject({
-      kind: 'session_busy',
+    const started = Date.now();
+    while (seenToolNames.length === 0 && Date.now() - started < 1_000) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(seenToolNames.length).toBe(1);
+    const updated = await runtime.updateSession(session.id, { toolMode: 'read-only', approvalMode: 'full-access' });
+    expect(updated).toMatchObject({
+      toolMode: 'read-only',
+      approvalMode: 'full-access',
+      isRunning: true,
     });
+    expect(seenToolNames[0]).not.toContain('read');
 
-    await runtime.abort(session.id);
+    await waitForEvent(events, 'done');
+    events.length = 0;
+    await runtime.prompt(session.id, 'next');
+    await waitForEvent(events, 'done');
+
+    expect(seenToolNames[1]).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']));
     runtime.dispose();
   });
 

@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer, createServerRuntime, type ServerRuntimeHandle } from '../src/server';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
+import { FileDurableRunStore } from '@cortx/runtime';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -26,6 +27,10 @@ const config: ServerConfig = {
   host: 'localhost',
   language: mockLanguageClient(),
   model: 'test-model',
+  models: [
+    { id: 'test-model', name: 'Test Model', limits: { context: 1000, output: 100 } },
+    { id: 'reasoning-model', name: 'Reasoning Model', limits: { context: 2000, output: 200 }, capabilities: { reasoning: true } },
+  ],
   maxSessions: 100,
   skillPackRegistryPath: join(serverStateDir, 'skill-packs.json'),
 };
@@ -45,6 +50,15 @@ async function waitForRuntimeEnvelope(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for ${type}`);
+}
+
+async function waitForCondition(predicate: () => boolean | Promise<boolean>, timeoutMs = 1_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition');
 }
 
 async function readFirstSseJson(
@@ -135,6 +149,9 @@ describe('server routes', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('ok');
+    expect(typeof body.sessions).toBe('number');
+    expect(typeof body.runningSessions).toBe('number');
+    expect(body.maxSessions).toBe(config.maxSessions);
   });
 
   test('unauthorized request returns 401', async () => {
@@ -182,6 +199,48 @@ describe('server routes', () => {
         id: sessionId,
         toolMode: 'read-only',
         approvalMode: 'interactive',
+      },
+    });
+  });
+
+  test('lists configured models with context and reasoning options', async () => {
+    const res = await fetch(`${BASE}/models`, { headers });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.models).toContainEqual(expect.objectContaining({
+      id: 'test-model',
+      name: 'Test Model',
+      contextWindowTokens: 1000,
+    }));
+    expect(body.models).toContainEqual(expect.objectContaining({
+      id: 'reasoning-model',
+      name: 'Reasoning Model',
+      contextWindowTokens: 2000,
+      reasoningEfforts: expect.arrayContaining([
+        { value: 'low', label: 'Light' },
+        { value: 'xhigh', label: 'Extra High' },
+      ]),
+    }));
+  });
+
+  test('updates session model and reasoning without creating a new session', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    expect(createRes.status).toBe(201);
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+
+    const updateRes = await fetch(`${BASE}/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'reasoning-model', reasoningEffort: 'xhigh' }),
+    });
+    expect(updateRes.status).toBe(200);
+    await expect(updateRes.json()).resolves.toMatchObject({
+      session: {
+        id: sessionId,
+        model: 'reasoning-model',
+        reasoningEffort: 'xhigh',
+        contextWindowTokens: 2000,
+        contextWindowSource: 'model_metadata',
       },
     });
   });
@@ -262,6 +321,64 @@ describe('server routes', () => {
     }
   });
 
+  test('launches discovered AgentSpec files with source-root-relative SkillPack paths', async () => {
+    const specRoot = mkdtempSync(join(tmpdir(), 'cortx-server-spec-pack-'));
+    try {
+      const packRoot = join(specRoot, 'packs', 'basic');
+      mkdirSync(join(packRoot, 'agents'), { recursive: true });
+      mkdirSync(join(packRoot, 'skills', 'review'), { recursive: true });
+      writeFileSync(
+        join(packRoot, 'skill-pack.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          name: 'basic',
+          skillPaths: ['skills'],
+          agentSpecPaths: ['agents'],
+        }),
+        'utf8',
+      );
+      writeFileSync(
+        join(packRoot, 'skills', 'review', 'SKILL.md'),
+        '---\nname: review\ndescription: Review code changes.\n---\nReview the current changes.',
+        'utf8',
+      );
+      writeFileSync(
+        join(packRoot, 'agents', 'reviewer.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          name: 'source-root-reviewer',
+          prompt: '/review current changes',
+          toolMode: 'read-only',
+          capabilities: { skills: true, subAgents: false, approval: false },
+          skillPacks: ['packs/basic'],
+        }),
+        'utf8',
+      );
+
+      const packHandle = createServerRuntime({
+        ...config,
+        defaultWorkingDirectory: specRoot,
+        allowedWorkspaceRoots: [specRoot],
+        agentSpecRoots: [specRoot],
+      });
+      try {
+        const launch = await packHandle.app.request('/agent-specs/launch', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ path: 'packs/basic/agents/reviewer.json' }),
+        });
+        expect(launch.status).toBe(201);
+        const body = (await launch.json()) as { sessionId: string; session: { skillPacks?: string[] } };
+        expect(body.session.skillPacks).toEqual([packRoot]);
+        await waitForRuntimeEnvelope(packHandle, body.sessionId, 'done');
+      } finally {
+        packHandle.dispose();
+      }
+    } finally {
+      rmSync(specRoot, { recursive: true, force: true });
+    }
+  });
+
   test('AgentSpec file launch rejects paths outside allowed roots', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'cortx-server-spec-outside-'));
     try {
@@ -334,6 +451,14 @@ describe('server routes', () => {
     expect(sessionRes.status).toBe(201);
     const sessionBody = await sessionRes.json();
     expect(sessionBody.session.skillPacks).toEqual(['server-pack']);
+
+    const skillsRes = await fetch(`${BASE}/sessions/${sessionBody.sessionId}/skills`, { headers });
+    expect(skillsRes.status).toBe(200);
+    const skillsBody = await skillsRes.json();
+    expect(skillsBody.skills).toContainEqual(expect.objectContaining({
+      name: 'review',
+      description: 'Review changes',
+    }));
   });
 
   test('SkillPack install rejects paths outside allowed roots', async () => {
@@ -402,6 +527,35 @@ describe('server routes', () => {
     expect(body.sessions.length).toBeGreaterThanOrEqual(1);
   });
 
+  test('list sessions restores durable sessions after idle eviction', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cortx-server-durable-list-'));
+    const handle = createServerRuntime({
+      ...config,
+      defaultWorkingDirectory: root,
+      allowedWorkspaceRoots: [root],
+      durableStore: new FileDurableRunStore(join(root, '.cortx', 'runtime')),
+      idleTimeoutMs: 20,
+    });
+
+    try {
+      const sessionRes = await handle.app.request('/sessions', { method: 'POST', headers });
+      expect(sessionRes.status).toBe(201);
+      const { sessionId } = (await sessionRes.json()) as { sessionId: string };
+      expect(handle.runtime.listSessions().map((session) => session.id)).toContain(sessionId);
+
+      await waitForCondition(() => handle.runtime.listSessions().length === 0);
+
+      const listRes = await handle.app.request('/sessions', { headers });
+      expect(listRes.status).toBe(200);
+      const body = (await listRes.json()) as { sessions: Array<{ id: string }> };
+      expect(body.sessions.map((session) => session.id)).toContain(sessionId);
+      expect(handle.runtime.listSessions().map((session) => session.id)).toContain(sessionId);
+    } finally {
+      handle.dispose();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('send prompt to session', async () => {
     // Create session
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
@@ -416,6 +570,15 @@ describe('server routes', () => {
     expect(promptRes.status).toBe(200);
     const body = await promptRes.json();
     expect(body.ok).toBe(true);
+    expect(handle!.runtime.getEventEnvelopeHistory(sessionId)[0]).toMatchObject({
+      runId: 1,
+      event: { type: 'user_message', message: 'Hello agent', source: 'prompt' },
+    });
+
+    const sessionRes = await fetch(`${BASE}/sessions/${sessionId}`, { headers });
+    await expect(sessionRes.json()).resolves.toMatchObject({
+      session: { promptHistory: ['Hello agent'] },
+    });
   });
 
   test('prompt to non-existent session returns 404', async () => {
@@ -506,6 +669,196 @@ describe('server routes', () => {
       runId: 1,
       event: { type: firstEnvelope.event.type },
     });
+  });
+
+  test('event history endpoint returns runtime envelopes in one payload', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
+
+    const firstEnvelope = handle!.runtime.getEventEnvelopeHistory(sessionId)[0]!;
+    const res = await fetch(`${BASE}/sessions/${sessionId}/events/history?format=envelope`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { events: RuntimeAgentEventEnvelope[] };
+
+    expect(body.events.length).toBe(handle!.runtime.getEventEnvelopeHistory(sessionId).length);
+    expect(body.events[0]).toMatchObject({
+      sequence: firstEnvelope.sequence,
+      sessionId,
+      runId: 1,
+      event: { type: firstEnvelope.event.type },
+    });
+  });
+
+  test('event history endpoint hydrates legacy edit results with contextual details', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    const runtime = handle!.runtime as any;
+    const session = runtime.sessions.get(sessionId);
+    const initialContent = ['one', 'two', 'three', 'four', 'five', 'six'].join('\n');
+
+    runtime.broadcast(session, {
+      type: 'tool_use',
+      toolCall: {
+        type: 'tool-call',
+        toolCallId: 'write_1',
+        toolName: 'write',
+        input: JSON.stringify({ path: 'hello.txt', content: initialContent }),
+      },
+    } satisfies AgentEvent);
+    runtime.broadcast(session, { type: 'tool_result', toolCallId: 'write_1', result: 'Wrote hello.txt', isError: false } satisfies AgentEvent);
+    runtime.broadcast(session, {
+      type: 'tool_use',
+      toolCall: {
+        type: 'tool-call',
+        toolCallId: 'edit_1',
+        toolName: 'edit',
+        input: JSON.stringify({ path: 'hello.txt', oldText: 'six', newText: 'six\nseven' }),
+      },
+    } satisfies AgentEvent);
+    runtime.broadcast(session, { type: 'tool_result', toolCallId: 'edit_1', result: 'Edited hello.txt', isError: false } satisfies AgentEvent);
+
+    const res = await fetch(`${BASE}/sessions/${sessionId}/events/history?format=envelope`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { events: RuntimeAgentEventEnvelope[] };
+    const editResult = body.events.find(
+      (envelope) => envelope.event.type === 'tool_result' && envelope.event.toolCallId === 'edit_1',
+    )?.event;
+
+    expect(editResult).toMatchObject({
+      type: 'tool_result',
+      details: {
+        kind: 'file_edit',
+        path: 'hello.txt',
+        contextLines: 3,
+        removedLines: 0,
+        addedLines: 1,
+      },
+    });
+    expect((editResult as any).details.lines.map((line: any) => `${line.kind}:${line.text}`)).toEqual([
+      'context:four',
+      'context:five',
+      'context:six',
+      'add:seven',
+    ]);
+  });
+
+  test('event history endpoint reconstructs edit context from current files when no prior write snapshot exists', async () => {
+    const workspace = mkdtempSync(join(process.cwd(), '.cortx-server-edit-context-'));
+    serverFixtureDirs.push(workspace);
+    writeFileSync(join(workspace, 'existing.txt'), ['one', 'two', 'status: ready', 'four', 'five'].join('\n'));
+    const createRes = await fetch(`${BASE}/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workingDirectory: workspace }),
+    });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    const runtime = handle!.runtime as any;
+    const session = runtime.sessions.get(sessionId);
+
+    runtime.broadcast(session, {
+      type: 'tool_use',
+      toolCall: {
+        type: 'tool-call',
+        toolCallId: 'edit_existing',
+        toolName: 'edit',
+        input: JSON.stringify({ path: 'existing.txt', oldText: 'status: draft', newText: 'status: ready' }),
+      },
+    } satisfies AgentEvent);
+    runtime.broadcast(session, {
+      type: 'tool_result',
+      toolCallId: 'edit_existing',
+      result: 'Edited existing.txt',
+      isError: false,
+    } satisfies AgentEvent);
+
+    const res = await fetch(`${BASE}/sessions/${sessionId}/events/history?format=envelope`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { events: RuntimeAgentEventEnvelope[] };
+    const editResult = body.events.find(
+      (envelope) => envelope.event.type === 'tool_result' && envelope.event.toolCallId === 'edit_existing',
+    )?.event;
+
+    expect(editResult).toMatchObject({
+      type: 'tool_result',
+      details: {
+        kind: 'file_edit',
+        path: 'existing.txt',
+        oldStartLine: 3,
+        newStartLine: 3,
+        removedLines: 1,
+        addedLines: 1,
+      },
+    });
+    expect((editResult as any).details.lines.map((line: any) => [line.kind, line.oldLine, line.newLine, line.text])).toEqual([
+      ['context', 1, 1, 'one'],
+      ['context', 2, 2, 'two'],
+      ['remove', 3, undefined, 'status: draft'],
+      ['add', undefined, 3, 'status: ready'],
+      ['context', 4, 4, 'four'],
+      ['context', 5, 5, 'five'],
+    ]);
+  });
+
+  test('event history endpoint pages older envelope history', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
+
+    const latestRes = await fetch(`${BASE}/sessions/${sessionId}/events/history?format=envelope&limit=1`, { headers });
+    expect(latestRes.status).toBe(200);
+    const latest = (await latestRes.json()) as {
+      events: RuntimeAgentEventEnvelope[];
+      page: { hasMoreBefore: boolean; firstSequence: number; lastSequence: number };
+    };
+
+    expect(latest.events).toHaveLength(1);
+    expect(latest.page.hasMoreBefore).toBe(true);
+    expect(latest.page.firstSequence).toBe(latest.events[0].sequence);
+
+    const olderRes = await fetch(
+      `${BASE}/sessions/${sessionId}/events/history?format=envelope&before=${latest.page.firstSequence}&limit=1`,
+      { headers },
+    );
+    expect(olderRes.status).toBe(200);
+    const older = (await olderRes.json()) as {
+      events: RuntimeAgentEventEnvelope[];
+      page: { hasMoreBefore: boolean; lastSequence: number };
+    };
+
+    expect(older.events).toHaveLength(1);
+    expect(older.events[0].sequence).toBeLessThan(latest.events[0].sequence);
+    expect(older.page.lastSequence).toBe(older.events[0].sequence);
+  });
+
+  test('SSE envelope stream can skip full replay for live-only clients', async () => {
+    const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
+    const { sessionId } = (await createRes.json()) as { sessionId: string };
+    await fetch(`${BASE}/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello agent' }),
+    });
+    await waitForRuntimeEnvelope(handle!, sessionId, 'done');
+
+    const text = await readSseUntil(
+      `${BASE}/sessions/${sessionId}/events?format=envelope&replay=false`,
+      headers,
+      'data: {}',
+    );
+
+    expect(text).toContain('data: {}');
+    expect(text).not.toContain('"text_delta"');
   });
 
   test('SSE stream sends a replay-complete heartbeat immediately', async () => {

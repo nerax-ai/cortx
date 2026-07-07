@@ -153,6 +153,11 @@ export type CortxRegistry = PluginRegistry<CortxExtensionType, CortxFactoryMap>;
 
 export interface CortxConfig {
   model: string;
+  reasoning?: {
+    enabled?: boolean;
+    effort?: string;
+    maxTokens?: number;
+  };
   system?: string;
   tools?: Tool[];
   appName?: string;

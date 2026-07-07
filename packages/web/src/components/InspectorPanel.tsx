@@ -14,6 +14,8 @@ import {
 } from '../design';
 import { ToolRegion } from './ToolRegion';
 
+const INSPECTOR_ACTIVITY_WINDOW = 80;
+
 interface InspectorPanelProps {
   session: WebRuntimeSessionInfo | null;
   status: AgentStatus;
@@ -79,7 +81,7 @@ export function InspectorPanel({
         <div className="grid grid-cols-2 gap-2">
           <StatTile label="Turn Tools" value={summary.totalTools} />
           <StatTile label="Turn Agents" value={summary.totalAgents} />
-          <StatTile label="Tokens" value={formatTokenUsage(tokenUsage)} />
+          <StatTile label="Session Tokens" value={formatTokenUsage(tokenUsage)} />
           <StatTile label="Elapsed" value={formatElapsed(elapsed)} />
         </div>
       </div>
@@ -111,10 +113,10 @@ export function InspectorPanel({
           </InspectorTab>
         </Tabs.List>
         <Tabs.Panel value="tools" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          <ToolRegion toolCalls={toolCalls} agentSessions={new Map()} />
+          <ToolRegion toolCalls={toolCalls} agentSessions={new Map()} maxItems={INSPECTOR_ACTIVITY_WINDOW} />
         </Tabs.Panel>
         <Tabs.Panel value="agents" className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          <ToolRegion toolCalls={new Map()} agentSessions={agentSessions} />
+          <ToolRegion toolCalls={new Map()} agentSessions={agentSessions} maxItems={INSPECTOR_ACTIVITY_WINDOW} />
         </Tabs.Panel>
       </Tabs.Root>
 

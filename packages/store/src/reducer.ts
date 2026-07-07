@@ -85,6 +85,23 @@ export function reduceAgentEvent(
   let nextState = state;
 
   switch (event.type) {
+    case 'user_message': {
+      const prev = state.messages;
+      const turns =
+        prev.currentText.length > 0
+          ? [...prev.turns, { role: 'assistant', content: prev.currentText, timestamp: now } satisfies TurnEntry]
+          : [...prev.turns];
+      nextState = {
+        ...state,
+        messages: {
+          turns: [...turns, { role: 'user', content: event.message, timestamp: now } satisfies TurnEntry],
+          currentText: '',
+          currentThinking: '',
+        },
+      };
+      break;
+    }
+
     case 'turn_start': {
       const prev = state.messages;
       let turns = [...prev.turns];
@@ -207,6 +224,7 @@ export function reduceAgentEvent(
           ...entry,
           result: event.result,
           isError: event.isError,
+          details: event.details,
           status: 'complete',
         } satisfies ToolCallEntry;
         toolCalls.set(event.toolCallId, nextEntry);

@@ -1,10 +1,14 @@
 import type { AgentState } from '@cortx/store';
+import type { QueuedPrompt } from './PromptInput';
 import type { ContextUsageSummary } from '../context-usage';
 import type {
   WebAgentSpecInfo,
   WebApprovalMode,
   WebEventConnectionState,
+  WebEventHistoryState,
+  WebModelInfo,
   WebRuntimeSessionInfo,
+  WebSkillInfo,
   WebSkillPackInfo,
   WebSkillPackInstallRequest,
   WebWorkspaceDirectoryListing,
@@ -21,32 +25,44 @@ interface DesktopWorkspaceProps {
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
   agentSpecs: WebAgentSpecInfo[];
+  models: WebModelInfo[];
+  sessionSkills: WebSkillInfo[];
+  queuedPrompts: QueuedPrompt[];
   skillPacks: WebSkillPackInfo[];
   selectedSkillPackIds: string[];
   selectedWorkingDirectory: string | null;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
   eventConnection: WebEventConnectionState;
+  eventHistory: WebEventHistoryState;
   onSend: (message: string) => void;
   onAbort: () => void;
   onResume: () => void;
+  onSteerQueuedPrompt: (id: string) => void;
+  onDeleteQueuedPrompt: (id: string) => void;
   onRecoverEventStream: () => void | Promise<void>;
+  onLoadOlderHistory: () => void | Promise<void>;
   onCreateSession: (request: {
     workingDirectory: string;
     skillPacks?: string[];
   }) => void | Promise<void>;
-  onCreateSessionForCurrentProject: () => void | Promise<unknown>;
   onBrowseWorkspaceDirectories: (path?: string) => Promise<WebWorkspaceDirectoryListing>;
   onLaunchAgentSpec: (path: string) => void | Promise<void>;
   onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
   onSkillPackSelectionChange: (ids: string[]) => void;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
+  onDeleteSession: (sessionId: string) => void | Promise<void>;
+  onModelChange: (model: string) => void;
+  onReasoningEffortChange: (effort: string | null) => void;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
   onApprovalModeChange: (mode: WebApprovalMode) => void;
 }
 
-function contextUsageForSession(state: AgentState, session: WebRuntimeSessionInfo | null): ContextUsageSummary | undefined {
+export function contextUsageForSession(
+  state: AgentState,
+  session: WebRuntimeSessionInfo | null,
+): ContextUsageSummary | undefined {
   if (state.contextUsage) {
     const windowTokens = state.contextUsage.windowTokens ?? session?.contextWindowTokens;
     return {
@@ -62,6 +78,20 @@ function contextUsageForSession(state: AgentState, session: WebRuntimeSessionInf
     };
   }
   if (!session) return undefined;
+  if (session.usage?.context) {
+    const windowTokens = session.usage.context.windowTokens ?? session.contextWindowTokens;
+    return {
+      ...session.usage.context,
+      windowTokens,
+      windowSource: session.usage.context.windowSource ?? session.contextWindowSource,
+      model: session.usage.context.model ?? session.model,
+      percentUsed:
+        session.usage.context.percentUsed ??
+        (session.usage.context.usedTokens !== undefined && windowTokens !== undefined && windowTokens > 0
+          ? (session.usage.context.usedTokens / windowTokens) * 100
+          : undefined),
+    };
+  }
   return {
     windowTokens: session.contextWindowTokens,
     windowSource: session.contextWindowSource,
@@ -75,24 +105,33 @@ export function DesktopWorkspace({
   session,
   sessions,
   agentSpecs,
+  models,
+  sessionSkills,
+  queuedPrompts,
   skillPacks,
   selectedSkillPackIds,
   selectedWorkingDirectory,
   toolMode,
   approvalMode,
   eventConnection,
+  eventHistory,
   onSend,
   onAbort,
   onResume,
+  onSteerQueuedPrompt,
+  onDeleteQueuedPrompt,
   onRecoverEventStream,
+  onLoadOlderHistory,
   onCreateSession,
-  onCreateSessionForCurrentProject,
   onBrowseWorkspaceDirectories,
   onLaunchAgentSpec,
   onInstallSkillPack,
   onSkillPackSelectionChange,
   onSelectProject,
   onSwitchSession,
+  onDeleteSession,
+  onModelChange,
+  onReasoningEffortChange,
   onToolModeChange,
   onApprovalModeChange,
 }: DesktopWorkspaceProps) {
@@ -118,6 +157,7 @@ export function DesktopWorkspace({
           onSkillPackSelectionChange={onSkillPackSelectionChange}
           onSelectProject={onSelectProject}
           onSwitchSession={onSwitchSession}
+          onDeleteSession={onDeleteSession}
         />
       </div>
 
@@ -133,21 +173,33 @@ export function DesktopWorkspace({
         />
         <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_344px]">
           <ChatView
+            sessionId={session?.id ?? state.sessionId}
             messages={state.messages}
             activity={state.activity}
             toolCalls={state.toolCalls}
             agentSessions={state.agentSessions}
             contextUsage={contextUsage}
+            tokenUsage={state.tokenUsage}
             status={state.status}
-            iteration={state.iteration}
             error={state.error}
+            skills={sessionSkills}
+            models={models}
+            model={session?.model}
+            reasoningEffort={session?.reasoningEffort}
+            promptHistory={session?.promptHistory}
+            queuedPrompts={queuedPrompts}
+            hasOlderHistory={eventHistory.sessionId === session?.id && eventHistory.hasMoreBefore}
+            isLoadingOlderHistory={eventHistory.sessionId === session?.id && eventHistory.loadingOlder}
             toolMode={toolMode}
             approvalMode={approvalMode}
-            selectedWorkingDirectory={selectedWorkingDirectory}
             onSend={onSend}
             onAbort={onAbort}
             onResume={onResume}
-            onCreateSessionForCurrentProject={onCreateSessionForCurrentProject}
+            onSteerQueuedPrompt={onSteerQueuedPrompt}
+            onDeleteQueuedPrompt={onDeleteQueuedPrompt}
+            onLoadOlderHistory={onLoadOlderHistory}
+            onModelChange={onModelChange}
+            onReasoningEffortChange={onReasoningEffortChange}
             onToolModeChange={onToolModeChange}
             onApprovalModeChange={onApprovalModeChange}
           />

@@ -4,6 +4,8 @@ export interface ToolResult {
   success: boolean;
   output?: unknown;
   error?: string;
+  /** UI/host-only structured facts. Not included in the language tool result output. */
+  details?: unknown;
 }
 
 export interface ToolContext {

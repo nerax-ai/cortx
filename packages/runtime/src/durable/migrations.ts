@@ -26,7 +26,13 @@ export function parseAgentRunCheckpoint(value: unknown): AgentRunCheckpoint | un
 export function parseRuntimeSessionSnapshot(value: unknown): RuntimeSessionSnapshot | undefined {
   if (!isObject(value)) return undefined;
   if (value.schemaVersion === RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION) {
-    return isCurrentRuntimeSessionSnapshot(value) ? (value as unknown as RuntimeSessionSnapshot) : undefined;
+    return isCurrentRuntimeSessionSnapshot(value)
+      ? ({
+          ...value,
+          reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : undefined,
+          promptHistory: stringArray(value.promptHistory),
+        } as unknown as RuntimeSessionSnapshot)
+      : undefined;
   }
   if (value.schemaVersion === 0) return migrateRuntimeSessionSnapshotV0(value);
   return undefined;
@@ -82,6 +88,7 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     lastActivityAt: value.lastActivityAt,
     workingDirectory: value.workingDirectory,
     model: value.model,
+    reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : undefined,
     system: typeof value.system === 'string' ? value.system : undefined,
     maxIterations: typeof value.maxIterations === 'number' ? value.maxIterations : undefined,
     contextWindowTokens: typeof value.contextWindowTokens === 'number' ? value.contextWindowTokens : undefined,
@@ -91,6 +98,7 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     capabilities: isObject(value.capabilities) ? { ...DEFAULT_RUNTIME_CAPABILITIES, ...value.capabilities } : { skills: false, subAgents: false, approval: false },
     skillPaths: stringArray(value.skillPaths),
     skillPacks: stringArray(value.skillPacks),
+    promptHistory: stringArray(value.promptHistory),
     runId: typeof value.runId === 'number' ? value.runId : 0,
     nextEventSequence: typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
     metadata: isObject(value.metadata) ? value.metadata : undefined,

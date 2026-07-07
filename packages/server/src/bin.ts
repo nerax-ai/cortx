@@ -20,6 +20,9 @@ interface CortxConfig {
   model: string;
   system?: string;
   maxIterations?: number;
+  maxSessions?: number;
+  maxEventsPerSession?: number;
+  idleTimeoutMs?: number;
   contextWindowTokens?: number;
   workingDirectory?: string;
   allowedWorkspaceRoots?: string[];
@@ -87,6 +90,15 @@ function resolveContextWindow(config: CortxConfig, synax: Synax): { tokens?: num
   return {};
 }
 
+function resolveMaxSessions(config: CortxConfig): number {
+  return (
+    readPositiveEnvNumber('CORTX_MAX_RUNNING_SESSIONS') ??
+    readPositiveEnvNumber('CORTX_MAX_SESSIONS') ??
+    config.maxSessions ??
+    10
+  );
+}
+
 async function main() {
   const config = await loadServerConfig();
   if (!config) {
@@ -121,13 +133,20 @@ async function main() {
   const browseRoots = configuredRoots.length ? configuredRoots : [parse(defaultWorkingDirectory).root];
   const allowedWorkspaceRoots = [...new Set([...browseRoots, defaultWorkingDirectory].map((path) => resolve(path)))];
   const configuredAgentSpecRoots = [...readEnvPathList('CORTX_AGENT_SPEC_ROOTS'), ...(config.agentSpecRoots ?? [])];
-  const agentSpecRoots = [...new Set((configuredAgentSpecRoots.length ? configuredAgentSpecRoots : [defaultWorkingDirectory]).map((path) => resolve(path)))];
+  const agentSpecRoots = [
+    ...new Set((configuredAgentSpecRoots.length ? configuredAgentSpecRoots : [defaultWorkingDirectory]).map((path) => resolve(path))),
+  ];
   const contextWindow = resolveContextWindow(config, synax);
+  const maxSessions = resolveMaxSessions(config);
+  const maxEventsPerSession = readPositiveEnvNumber('CORTX_MAX_EVENTS_PER_SESSION') ?? config.maxEventsPerSession;
+  const idleTimeoutMs = readPositiveEnvNumber('CORTX_IDLE_TIMEOUT_MS') ?? config.idleTimeoutMs ?? 30 * 60 * 1000;
 
   const handle = createServerRuntime({
     apiKey,
     language: synax.language,
     model: config.model,
+    models: synax.listModels(),
+    modelCatalog: synax.listModelCatalog(),
     system: config.system,
     maxIterations: config.maxIterations,
     contextWindowTokens: contextWindow.tokens,
@@ -140,10 +159,13 @@ async function main() {
     agentSpecRoots,
     toolMode: config.toolMode ?? 'all',
     approvalMode: config.approvalMode ?? 'interactive',
-    durableStore: new FileDurableRunStore(process.env.CORTX_DURABLE_DIR || resolve(defaultWorkingDirectory, '.cortx', 'runtime')),
+    durableStore: new FileDurableRunStore(
+      process.env.CORTX_DURABLE_DIR || resolve(defaultWorkingDirectory, '.cortx', 'runtime'),
+    ),
     logger: log.scope('server'),
-    maxSessions: 10,
-    idleTimeoutMs: 30 * 60 * 1000,
+    maxSessions,
+    maxEventsPerSession,
+    idleTimeoutMs,
   });
   await handle.runtime.restoreDurableSessions({ autoResume: false });
 
@@ -157,6 +179,8 @@ async function main() {
   console.log(`  Key:   ${apiKey}`);
   console.log(`  Model: ${config.model}\n`);
   console.log(`  Context: ${contextWindow.tokens ? `${contextWindow.tokens} tokens (${contextWindow.source})` : 'unknown'}\n`);
+  console.log(`  Concurrency: ${maxSessions} running sessions`);
+  console.log(`  Idle TTL: ${idleTimeoutMs} ms\n`);
   console.log(`  Workspace: ${defaultWorkingDirectory}`);
   console.log(`  Roots: ${allowedWorkspaceRoots.join(', ')}\n`);
   console.log(`  AgentSpecs: ${agentSpecRoots.join(', ')}\n`);

@@ -40,6 +40,7 @@ function sessionBody(isRunning = false) {
       model: 'default',
       toolMode: 'all',
       approvalMode: 'interactive',
+      promptHistory: ['previous prompt'],
       isRunning,
       eventCount: 0,
     },
@@ -123,12 +124,15 @@ describe('EventBridge', () => {
 
     expect(updated).toMatchObject({ toolMode: 'read-only', approvalMode: 'deny', skillPacks: ['review-pack'] });
     expect(refreshed.isRunning).toBe(true);
+    expect(refreshed.promptHistory).toEqual(['previous prompt']);
     expect(store.getState().sessionId).toBe('sess_web');
     expect(store.getState().messages.currentText).toBe('hi');
-    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_web/events?format=envelope&token=short-token');
+    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_web/events?format=envelope&replay=false&token=short-token');
     expect(calls.map((call) => call.path)).toEqual([
       '/auth/token',
       '/sessions',
+      '/sessions/sess_web/events/history',
+      '/sessions/sess_web',
       '/sessions/sess_web/prompt',
       '/sessions/sess_web/follow-up',
       '/sessions/sess_web/steer',
@@ -139,7 +143,7 @@ describe('EventBridge', () => {
       '/sessions/sess_web',
     ]);
     expect(calls[1].body).toEqual({ workingDirectory: '/repo/cortx', metadata: { source: 'web' } });
-    expect(calls[8]).toMatchObject({
+    expect(calls.find((call) => call.method === 'PATCH')).toMatchObject({
       method: 'PATCH',
       body: { toolMode: 'read-only', approvalMode: 'deny', skillPacks: ['review-pack'] },
     });
@@ -172,6 +176,7 @@ describe('EventBridge', () => {
         event: { type: 'text_delta', delta: 'restored' },
       }),
     });
+    FakeEventSource.instances[0].onmessage?.({ data: '{}' });
     FakeEventSource.instances[0].onerror?.({});
     bridge.disconnect();
 
@@ -192,6 +197,30 @@ describe('EventBridge', () => {
     expect(FakeEventSource.instances[0].closed).toBe(true);
   });
 
+  test('deletes sessions and closes the active event stream', async () => {
+    const calls: Array<{ path: string; method: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push({ path: url.pathname, method: init?.method ?? 'GET' });
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_delete/events/history') return jsonResponse({ events: [], page: {} });
+      if (url.pathname === '/sessions/sess_delete' && init?.method === 'DELETE') return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key');
+    await bridge.connect('sess_delete');
+    await bridge.deleteSession('sess_delete');
+
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'POST /auth/token',
+      'GET /sessions/sess_delete/events/history',
+      'DELETE /sessions/sess_delete',
+    ]);
+    expect(FakeEventSource.instances[0].closed).toBe(true);
+  });
+
   test('marks empty replay streams as live on heartbeat', async () => {
     const phases: string[] = [];
     globalThis.fetch = (async (input) => {
@@ -208,6 +237,310 @@ describe('EventBridge', () => {
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
 
     expect(phases).toEqual(['connecting', 'replaying', 'live']);
+  });
+
+  test('loads event history once and applies it with a single store notification', async () => {
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_replay/events/history') {
+        return jsonResponse({
+          events: [
+            {
+              sequence: 1,
+              timestamp: 1000,
+              sessionId: 'sess_replay',
+              runId: 1,
+              event: { type: 'user_message', message: 'Restore my prompt', source: 'prompt' },
+            },
+            {
+              sequence: 2,
+              timestamp: 1050,
+              sessionId: 'sess_replay',
+              runId: 1,
+              event: { type: 'text_delta', delta: 'old ' },
+            },
+            {
+              sequence: 3,
+              timestamp: 1100,
+              sessionId: 'sess_replay',
+              runId: 1,
+              event: { type: 'text_delta', delta: 'session' },
+            },
+          ],
+        });
+      }
+      if (url.pathname === '/sessions/sess_replay') {
+        return jsonResponse({
+          session: {
+            ...sessionBody(false).session,
+            id: 'sess_replay',
+            eventCount: 3,
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    let changes = 0;
+    store.onChange(() => {
+      changes++;
+    });
+    const bridge = new EventBridge(store, 'api-key');
+    await bridge.connect('sess_replay');
+
+    expect(store.getState().messages.currentText).toBe('old session');
+    expect(store.getState().messages.turns).toEqual([
+      {
+        role: 'user',
+        content: 'Restore my prompt',
+        timestamp: 1000,
+      },
+    ]);
+    expect(changes).toBe(2);
+    expect(FakeEventSource.instances[0].url).toBe(
+      '/sessions/sess_replay/events?format=envelope&replay=false&token=short-token&after=3',
+    );
+  });
+
+  test('loads older history pages and replays them before the current window', async () => {
+    const historyQueries: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_replay/events/history') {
+        historyQueries.push(url.search);
+        if (url.searchParams.get('before') === '10') {
+          return jsonResponse({
+            events: [
+              {
+                sequence: 8,
+                timestamp: 800,
+                sessionId: 'sess_replay',
+                runId: 1,
+                event: { type: 'text_delta', delta: 'older ' },
+              },
+              {
+                sequence: 9,
+                timestamp: 900,
+                sessionId: 'sess_replay',
+                runId: 1,
+                event: { type: 'text_delta', delta: 'context ' },
+              },
+            ],
+            page: { hasMoreBefore: false, firstSequence: 8, lastSequence: 9 },
+          });
+        }
+        return jsonResponse({
+          events: [
+            {
+              sequence: 10,
+              timestamp: 1000,
+              sessionId: 'sess_replay',
+              runId: 1,
+              event: { type: 'text_delta', delta: 'latest' },
+            },
+          ],
+          page: { hasMoreBefore: true, firstSequence: 10, lastSequence: 10 },
+        });
+      }
+      if (url.pathname === '/sessions/sess_replay') {
+        return jsonResponse({ session: { ...sessionBody(false).session, id: 'sess_replay' } });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    const historyStates: Array<{ hasMoreBefore: boolean; loadedEvents: number; firstSequence?: number }> = [];
+    const bridge = new EventBridge(store, 'api-key', '', {
+      onHistoryState: (state) => historyStates.push({
+        hasMoreBefore: state.hasMoreBefore,
+        loadedEvents: state.loadedEvents,
+        firstSequence: state.firstSequence,
+      }),
+    });
+    await bridge.connect('sess_replay');
+
+    expect(store.getState().messages.currentText).toBe('latest');
+    expect(historyStates.at(-1)).toMatchObject({ hasMoreBefore: true, loadedEvents: 1, firstSequence: 10 });
+
+    await bridge.loadOlderHistory('sess_replay');
+
+    expect(store.getState().messages.currentText).toBe('older context latest');
+    expect(historyStates.at(-1)).toMatchObject({ hasMoreBefore: false, loadedEvents: 3, firstSequence: 8 });
+    expect(historyQueries).toEqual(['?format=envelope&limit=800', '?format=envelope&before=10&limit=800']);
+  });
+
+  test('ignores stale history responses after switching sessions', async () => {
+    let slowHistoryRequested = false;
+    let resolveSlowHistory: ((response: Response) => void) | undefined;
+    const slowHistory = new Promise<Response>((resolve) => {
+      resolveSlowHistory = resolve;
+    });
+
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_slow/events/history') {
+        slowHistoryRequested = true;
+        return slowHistory;
+      }
+      if (url.pathname === '/sessions/sess_fast/events/history') {
+        return jsonResponse({
+          events: [
+            {
+              sequence: 3,
+              timestamp: 1300,
+              sessionId: 'sess_fast',
+              runId: 1,
+              event: { type: 'text_delta', delta: 'fast session' },
+            },
+          ],
+        });
+      }
+      if (url.pathname === '/sessions/sess_fast') return jsonResponse({ session: { ...sessionBody(false).session, id: 'sess_fast' } });
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    const bridge = new EventBridge(store, 'api-key');
+    const slowConnect = bridge.connect('sess_slow');
+    await waitForCondition(() => slowHistoryRequested);
+    const fastConnect = bridge.connect('sess_fast');
+    await fastConnect;
+    resolveSlowHistory?.(
+      jsonResponse({
+        events: [
+          {
+            sequence: 1,
+            timestamp: 1000,
+            sessionId: 'sess_slow',
+            runId: 1,
+            event: { type: 'text_delta', delta: 'slow session' },
+          },
+        ],
+      }),
+    );
+    await slowConnect;
+
+    expect(store.getState().sessionId).toBe('sess_fast');
+    expect(store.getState().messages.currentText).toBe('fast session');
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0].url).toBe(
+      '/sessions/sess_fast/events?format=envelope&replay=false&token=short-token&after=3',
+    );
+  });
+
+  test('buffers SSE catch-up events and applies them once on replay-complete heartbeat', async () => {
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_replay/events/history') {
+        return jsonResponse({ events: [] });
+      }
+      if (url.pathname === '/sessions/sess_replay') {
+        return jsonResponse({
+          session: {
+            ...sessionBody(false).session,
+            id: 'sess_replay',
+            eventCount: 2,
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    let changes = 0;
+    store.onChange(() => {
+      changes++;
+    });
+    const bridge = new EventBridge(store, 'api-key');
+    await bridge.connect('sess_replay');
+    expect(changes).toBe(1);
+
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        sequence: 1,
+        timestamp: 1000,
+        sessionId: 'sess_replay',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'old ' },
+      }),
+    });
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        sequence: 2,
+        timestamp: 1100,
+        sessionId: 'sess_replay',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'session' },
+      }),
+    });
+
+    expect(store.getState().messages.currentText).toBe('');
+    expect(changes).toBe(1);
+
+    FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+    await waitForCondition(() => store.getState().messages.currentText === 'old session');
+
+    expect(changes).toBe(2);
+  });
+
+  test('syncs runtime cumulative usage on heartbeat even when the replay is already idle', async () => {
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_usage') {
+        return jsonResponse({
+          session: {
+            ...sessionBody(false).session,
+            id: 'sess_usage',
+            usage: {
+              inputTokens: 6012,
+              outputTokens: 5676,
+              cacheReadTokens: 44288,
+              context: {
+                usedTokens: 47440,
+                requestInputTokens: 419,
+                requestOutputTokens: 400,
+                requestCacheReadTokens: 44288,
+                windowTokens: 128000,
+                percentUsed: 37.0625,
+                cacheHitRate: 99.06278658823004,
+                breakdown: [],
+              },
+            },
+            eventCount: 2000,
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
+
+    const store = new AgentStore();
+    const bridge = new EventBridge(store, 'api-key');
+    await bridge.connect('sess_usage');
+    FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+    await waitForCondition(() => store.getState().tokenUsage.inputTokens === 6012);
+
+    expect(store.getState().tokenUsage).toMatchObject({
+      inputTokens: 6012,
+      outputTokens: 5676,
+      cacheReadTokens: 44288,
+    });
+    expect(store.getState().contextUsage).toMatchObject({
+      usedTokens: 47440,
+      requestInputTokens: 419,
+      requestCacheReadTokens: 44288,
+      cacheHitRate: 99.06278658823004,
+    });
   });
 
   test('reconciles stale running replay state with stopped runtime session on heartbeat', async () => {
@@ -250,7 +583,8 @@ describe('EventBridge', () => {
         event: { type: 'text_delta', delta: 'partial replay' },
       }),
     });
-    expect(store.getState().status).toBe('running');
+    expect(store.getState().status).toBe('idle');
+    expect(store.getState().messages.currentText).toBe('');
 
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
     await waitForCondition(() => store.getState().status === 'idle');
@@ -343,6 +677,43 @@ describe('EventBridge', () => {
       }),
     ]);
     expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/agent-specs']);
+    expect(calls[1].auth).toBe('Bearer short-token');
+  });
+
+  test('lists current session skills through the server bridge', async () => {
+    const calls: Array<{ path: string; auth: string | null }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      calls.push({
+        path: url.pathname,
+        auth: new Headers(init?.headers).get('Authorization'),
+      });
+      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname === '/sessions/sess_web/skills') {
+        return jsonResponse({
+          skills: [
+            {
+              name: 'review',
+              description: 'Review code changes',
+              arguments: ['target'],
+              dirPath: '/repo/.cortx/skills/review',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ ok: true });
+    }) as typeof fetch;
+
+    const bridge = new EventBridge(new AgentStore(), 'api-key');
+    const skills = await bridge.listSessionSkills('sess_web');
+
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: 'review',
+        description: 'Review code changes',
+      }),
+    ]);
+    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/sessions/sess_web/skills']);
     expect(calls[1].auth).toBe('Bearer short-token');
   });
 

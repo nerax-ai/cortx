@@ -1,4 +1,5 @@
 export { AgentStore } from './store.js';
+export type { AgentStoreEventInput } from './store.js';
 export { serializeAgentState, deserializeAgentState } from './serialization.js';
 export type {
   AgentState,

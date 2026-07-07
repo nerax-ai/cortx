@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Dialog } from '@base-ui-components/react/dialog';
 import type { AgentStatus, TokenUsage } from '@cortx/store';
 import { compactPath, compactSessionId, formatElapsed, formatTokenUsage, statusTone, surface } from '../design';
 import type {
@@ -29,6 +30,7 @@ interface SessionSidebarProps {
   onSkillPackSelectionChange: (ids: string[]) => void;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
+  onDeleteSession: (sessionId: string) => void | Promise<void>;
 }
 
 interface ProjectGroup {
@@ -38,6 +40,20 @@ interface ProjectGroup {
   runningCount: number;
 }
 
+interface DeleteSessionDialogProps {
+  sessionTitle: string | null;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}
+
+interface DeleteSessionDialogContentProps {
+  sessionTitle: string;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}
+
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3 text-xs">
@@ -45,6 +61,17 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <span className="min-w-0 truncate text-right text-zinc-800">{value}</span>
     </div>
   );
+}
+
+function truncatePromptTitle(value: string, max = 34): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max - 1)}…`;
+}
+
+function sessionTitle(session: WebRuntimeSessionInfo): string {
+  const firstPrompt = session.promptHistory?.find((item) => item.trim());
+  return firstPrompt ? truncatePromptTitle(firstPrompt) : compactSessionId(session.id, 15);
 }
 
 function groupSessions(sessions: WebRuntimeSessionInfo[]): ProjectGroup[] {
@@ -68,6 +95,71 @@ function groupSessions(sessions: WebRuntimeSessionInfo[]): ProjectGroup[] {
     .sort((a, b) => b.latestActivityAt - a.latestActivityAt);
 }
 
+export function DeleteSessionDialog({ sessionTitle, isDeleting, onCancel, onConfirm }: DeleteSessionDialogProps) {
+  const open = Boolean(sessionTitle);
+
+  return (
+    <Dialog.Root
+      open={open}
+      modal
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && !isDeleting) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-zinc-950/20 backdrop-blur-sm" />
+        <Dialog.Popup
+          initialFocus
+          className={`fixed left-1/2 top-1/2 z-50 w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl shadow-zinc-300/60 ${surface.panel}`}
+        >
+          <DeleteSessionDialogContent
+            sessionTitle={sessionTitle ?? 'this session'}
+            isDeleting={isDeleting}
+            onCancel={onCancel}
+            onConfirm={onConfirm}
+          />
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+export function DeleteSessionDialogContent({
+  sessionTitle,
+  isDeleting,
+  onCancel,
+  onConfirm,
+}: DeleteSessionDialogContentProps) {
+  return (
+    <>
+      <h2 className="text-lg font-semibold text-zinc-950">Delete session</h2>
+      <p className="mt-2 text-sm leading-6 text-zinc-600">
+        Delete <span className="font-medium text-zinc-950">{sessionTitle}</span> and remove its saved history. Any
+        active run in this session will be stopped.
+      </p>
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          disabled={isDeleting}
+          onClick={onCancel}
+          className={`h-9 rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-50 ${surface.focus}`}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={isDeleting}
+          onClick={() => void onConfirm()}
+          className={`h-9 rounded-md bg-rose-600 px-3 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-wait disabled:bg-rose-200 ${surface.focus}`}
+        >
+          {isDeleting ? 'Deleting...' : 'Delete'}
+        </button>
+      </div>
+    </>
+  );
+}
+
 export function SessionSidebar({
   status,
   session,
@@ -85,6 +177,7 @@ export function SessionSidebar({
   onSkillPackSelectionChange,
   onSelectProject,
   onSwitchSession,
+  onDeleteSession,
 }: SessionSidebarProps) {
   const tone = statusTone(status);
   const [projectPath, setProjectPath] = useState('');
@@ -97,6 +190,8 @@ export function SessionSidebar({
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [launchingSpecPath, setLaunchingSpecPath] = useState<string | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<WebRuntimeSessionInfo | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [skillPackError, setSkillPackError] = useState<string | null>(null);
@@ -181,8 +276,28 @@ export function SessionSidebar({
     }
   }
 
+  function requestDeleteSession(item: WebRuntimeSessionInfo) {
+    if (deletingSessionId) return;
+    setDeleteCandidate(item);
+  }
+
+  async function confirmDeleteSession() {
+    if (!deleteCandidate || deletingSessionId) return;
+    setDeletingSessionId(deleteCandidate.id);
+    setActionError(null);
+    try {
+      await onDeleteSession(deleteCandidate.id);
+      setDeleteCandidate(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingSessionId(null);
+    }
+  }
+
   return (
-    <aside className="flex h-full min-h-0 flex-col border-r border-zinc-200 bg-[#f3f3f1]">
+    <>
+      <aside className="flex h-full min-h-0 flex-col border-r border-zinc-200 bg-[#f3f3f1]">
       <div className="border-b border-zinc-200 p-3">
         <div className="mb-3 flex items-center gap-2">
           <div className="grid h-8 w-8 place-items-center rounded-md border border-zinc-300 bg-white text-sm font-semibold text-zinc-950">
@@ -207,7 +322,7 @@ export function SessionSidebar({
           <DetailRow label="Tools" value={session?.toolMode ?? '-'} />
           <DetailRow label="Control" value={session?.approvalMode ?? '-'} />
           <DetailRow label="Packs" value={session?.skillPacks?.length ? session.skillPacks.join(', ') : 'none'} />
-          <DetailRow label="Tokens" value={formatTokenUsage(tokenUsage)} />
+          <DetailRow label="Session Tokens" value={formatTokenUsage(tokenUsage)} />
           <DetailRow label="Elapsed" value={formatElapsed(elapsed)} />
         </div>
       </div>
@@ -221,50 +336,85 @@ export function SessionSidebar({
                 const activeProject = project.workingDirectory === selectedWorkingDirectory;
                 return (
                   <div key={project.workingDirectory} className="space-y-1">
-                    <button
-                      type="button"
-                      title={project.workingDirectory}
-                      onClick={() => void onSelectProject(project.workingDirectory)}
-                      className={`w-full rounded-md px-2 py-2 text-left text-xs transition-colors ${
+                    <div
+                      className={`flex items-start gap-1 rounded-md transition-colors ${
                         activeProject ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-600 hover:bg-white/70 hover:text-zinc-950'
-                      } ${surface.focus}`}
+                      }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate font-medium">{compactPath(project.workingDirectory)}</span>
-                        <span className="shrink-0 text-[10px] text-zinc-400">
-                          {project.sessions.length} session{project.sessions.length === 1 ? '' : 's'}
-                        </span>
-                      </div>
-                      <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
-                        {project.runningCount > 0 ? `${project.runningCount} running · ` : ''}
-                        {project.workingDirectory}
-                      </div>
-                    </button>
+                      <button
+                        type="button"
+                        title={project.workingDirectory}
+                        onClick={() => void onSelectProject(project.workingDirectory)}
+                        className={`min-w-0 flex-1 px-2 py-2 text-left text-xs ${surface.focus}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">{compactPath(project.workingDirectory)}</span>
+                          <span className="shrink-0 text-[10px] text-zinc-400">
+                            {project.sessions.length} session{project.sessions.length === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
+                          {project.runningCount > 0 ? `${project.runningCount} running · ` : ''}
+                          {project.workingDirectory}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        title={`New session for ${project.workingDirectory}`}
+                        aria-label={`New session for ${compactPath(project.workingDirectory)}`}
+                        disabled={isAdding}
+                        onClick={() => void createProjectFromPath(project.workingDirectory)}
+                        className={`mr-1 mt-1 grid h-6 w-6 shrink-0 place-items-center rounded-md text-sm leading-none text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-wait disabled:text-zinc-300 ${surface.focus}`}
+                      >
+                        +
+                      </button>
+                    </div>
 
                     {activeProject && (
                       <div className="ml-2 space-y-1 border-l border-zinc-200 pl-2">
-                        {project.sessions.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => void onSwitchSession(item.id)}
-                            className={`w-full rounded-md px-2 py-1.5 text-left text-[11px] transition-colors ${
-                              item.id === session?.id
-                                ? 'bg-zinc-950 text-white shadow-sm'
-                                : 'text-zinc-500 hover:bg-white/80 hover:text-zinc-900'
-                            } ${surface.focus}`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="truncate font-mono">{compactSessionId(item.id, 15)}</span>
-                              <span className={item.id === session?.id ? 'text-zinc-300' : 'text-zinc-400'}>
-                                {item.isRunning ? 'running' : 'ready'}
-                              </span>
+                        {project.sessions.map((item) => {
+                          const activeSession = item.id === session?.id;
+                          const title = sessionTitle(item);
+                          return (
+                            <div
+                              key={item.id}
+                              className={`group flex items-stretch gap-1 rounded-md transition-colors ${
+                                activeSession
+                                  ? 'bg-zinc-950 text-white shadow-sm'
+                                  : 'text-zinc-500 hover:bg-white/80 hover:text-zinc-900'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                title={item.promptHistory?.[0] || item.id}
+                                onClick={() => void onSwitchSession(item.id)}
+                                className={`min-w-0 flex-1 px-2 py-1.5 text-left text-[11px] ${surface.focus}`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate font-medium">{title}</span>
+                                  <span className={activeSession ? 'text-zinc-300' : 'text-zinc-400'}>
+                                    {item.isRunning ? 'running' : 'ready'}
+                                  </span>
+                                </div>
+                                <div className={`mt-1 truncate font-mono ${activeSession ? 'text-zinc-300' : 'text-zinc-400'}`}>
+                                  {item.toolMode} · {item.approvalMode}
+                                </div>
+                              </button>
+                              <button
+                                type="button"
+                                title={`Delete ${title}`}
+                                aria-label={`Delete ${title}`}
+                                disabled={deletingSessionId === item.id}
+                                onClick={() => requestDeleteSession(item)}
+                                className={`mr-1 my-1 grid w-6 shrink-0 place-items-center rounded-md text-sm leading-none opacity-70 transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-wait disabled:opacity-40 ${
+                                  activeSession ? 'text-zinc-300 hover:bg-white/10 hover:text-white' : 'text-zinc-400'
+                                } ${surface.focus}`}
+                              >
+                                {deletingSessionId === item.id ? '…' : '×'}
+                              </button>
                             </div>
-                            <div className={`mt-1 truncate ${item.id === session?.id ? 'text-zinc-300' : 'text-zinc-400'}`}>
-                              {item.toolMode} · {item.approvalMode}
-                            </div>
-                          </button>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -536,6 +686,13 @@ export function SessionSidebar({
           </div>
         </div>
       )}
-    </aside>
+      </aside>
+      <DeleteSessionDialog
+        sessionTitle={deleteCandidate ? sessionTitle(deleteCandidate) : null}
+        isDeleting={Boolean(deletingSessionId)}
+        onCancel={() => setDeleteCandidate(null)}
+        onConfirm={confirmDeleteSession}
+      />
+    </>
   );
 }

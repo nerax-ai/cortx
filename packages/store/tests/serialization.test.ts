@@ -45,6 +45,10 @@ describe('serialization', () => {
       result: 'hello\n',
       status: 'complete',
       isError: false,
+      details: {
+        kind: 'file_edit',
+        lines: [{ kind: 'add', newLine: 1, text: 'hello' }],
+      },
     });
     toolCalls.set('tc_2', {
       toolName: 'read',
@@ -63,6 +67,10 @@ describe('serialization', () => {
       result: 'hello\n',
       status: 'complete',
       isError: false,
+      details: {
+        kind: 'file_edit',
+        lines: [{ kind: 'add', newLine: 1, text: 'hello' }],
+      },
     });
     expect(restored.toolCalls.get('tc_2')).toEqual({
       toolName: 'read',

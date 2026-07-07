@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 type HeadingTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
@@ -186,7 +186,7 @@ function headingClass(level: HeadingLevel): string {
 }
 
 export function MarkdownContent({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const blocks = parseMarkdown(text);
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
 
   return (
     <div className="space-y-3 break-words">

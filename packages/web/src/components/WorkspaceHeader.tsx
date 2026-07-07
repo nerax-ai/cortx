@@ -104,7 +104,7 @@ export function WorkspaceHeader({
 
       <div className="hidden min-w-0 grid-cols-3 gap-5 md:grid">
         <HeaderMetric label="Session" value={compactSessionId(session?.id, 14)} />
-        <HeaderMetric label="Tokens" value={formatTokenUsage(tokenUsage)} />
+        <HeaderMetric label="Session Tokens" value={formatTokenUsage(tokenUsage)} />
         <HeaderMetric label="Elapsed" value={formatElapsed(elapsed)} />
       </div>
     </header>

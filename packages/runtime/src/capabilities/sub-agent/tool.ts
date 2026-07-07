@@ -13,6 +13,11 @@ import type { SubAgentSession, SubAgentSessionStore } from './session-store.js';
 export interface SubAgentToolOptions {
   language: LanguageClient;
   model: string;
+  reasoning?: {
+    enabled?: boolean;
+    effort?: string;
+    maxTokens?: number;
+  };
   maxOutputTokens?: number;
   limits?: import('@cortx/sdk').AgentRunLimits;
   registry?: CortxRegistry;
@@ -198,6 +203,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
       const loopOpts: Parameters<typeof agentLoop>[0] = {
         language: options.language,
         model: options.model,
+        reasoning: options.reasoning,
         system: 'You are a sub-agent. Complete the task using available tools.',
         tools: options.getTools().filter((tool) => tool.name !== 'agent'),
         extensions: childExtensions,

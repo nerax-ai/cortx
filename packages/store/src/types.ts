@@ -16,6 +16,7 @@ export interface ToolCallEntry {
   isError?: boolean;
   status: 'pending' | 'complete';
   progress?: string;
+  details?: unknown;
 }
 
 /** A single completed turn in the message history. */
@@ -132,6 +133,7 @@ export interface SerializedToolCallEntry {
   isError?: boolean;
   status: 'pending' | 'complete';
   progress?: string;
+  details?: string;
 }
 
 /** Serializable form of AgentSessionSummary. */

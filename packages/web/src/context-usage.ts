@@ -1,4 +1,5 @@
 import type { ContextUsageBreakdownEntry, ContextUsageFacts, ContextUsageSource } from '@cortx/sdk';
+import type { TokenUsage } from '@cortx/store';
 
 export type ContextUsageSummary = ContextUsageFacts;
 export type ContextUsageRow = ContextUsageBreakdownEntry;
@@ -28,8 +29,41 @@ export function formatContextTokenCount(value: number | undefined): string {
 
 export function formatContextPercent(value: number | undefined): string {
   if (value === undefined) return '未知';
-  if (value > 0 && value < 1) return '<1%';
-  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
+  if (value <= 0) return '0%';
+  const displayValue = Math.max(0.1, value);
+  return `${Number.isInteger(displayValue) ? displayValue.toFixed(0) : displayValue.toFixed(1)}%`;
+}
+
+function positiveToken(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function contextInputTokensForUsage(usage: TokenUsage): number | undefined {
+  const inputTokens = positiveToken(usage.inputTokens);
+  const cacheReadTokens = positiveToken(usage.cacheReadTokens);
+  const cacheCreationTokens = positiveToken(usage.cacheCreationTokens);
+  const noCacheInputTokens =
+    usage.noCacheInputTokens === undefined ? undefined : positiveToken(usage.noCacheInputTokens);
+  const total =
+    noCacheInputTokens === undefined
+      ? inputTokens + cacheReadTokens + cacheCreationTokens
+      : Math.max(inputTokens, noCacheInputTokens + cacheReadTokens + cacheCreationTokens);
+  return total > 0 ? total : undefined;
+}
+
+export function sessionCacheHitRate(usage: TokenUsage | undefined): number | undefined {
+  if (!usage) return undefined;
+  if (
+    usage.noCacheInputTokens === undefined &&
+    usage.cacheReadTokens === undefined &&
+    usage.cacheCreationTokens === undefined
+  ) {
+    return undefined;
+  }
+  const denominator = contextInputTokensForUsage(usage);
+  const cacheReadTokens = positiveToken(usage.cacheReadTokens);
+  if (denominator === undefined || denominator <= 0) return undefined;
+  return Math.max(0, Math.min(100, (cacheReadTokens / denominator) * 100));
 }
 
 export function formatContextSource(source: ContextUsageSource | undefined): string {

@@ -6,7 +6,7 @@
  * NOT a React component.
  *
  * Event routing:
- *   text_delta / thinking_delta / text / thinking → output region
+ *   user_message / text_delta / thinking_delta / text / thinking → output region
  *   tool_use / tool_progress / tool_result        → tool region
  *   turn_start / turn_end / done / error           → status bar
  *   steered / follow_up / context_overflow         → status bar (notifications)
@@ -24,6 +24,7 @@ export type RegionTarget = 'output' | 'tool' | 'status';
  */
 export function eventToRegion(eventType: AgentEvent['type']): RegionTarget {
   switch (eventType) {
+    case 'user_message':
     case 'text_delta':
     case 'thinking_delta':
     case 'text':

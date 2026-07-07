@@ -1,8 +1,11 @@
+import type { AgentDoneUsage } from '@cortx/sdk';
 import type { AgentEvent } from '@cortx/sdk';
 import type {
   AgentState,
+  ContextUsageState,
   AgentSelector,
   SelectorSubscription,
+  TokenUsage,
   TurnEntry,
 } from './types.js';
 import { reduceAgentEvent } from './reducer.js';
@@ -10,6 +13,23 @@ import { reduceAgentEvent } from './reducer.js';
 interface SelectorEntry {
   listeners: Set<() => void>;
   lastValue: unknown;
+}
+
+export interface AgentStoreEventInput {
+  event: AgentEvent;
+  timestamp?: number;
+}
+
+function tokenUsageFromAgentUsage(usage: AgentDoneUsage): TokenUsage {
+  const result: TokenUsage = {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  };
+  if (usage.noCacheInputTokens !== undefined) result.noCacheInputTokens = usage.noCacheInputTokens;
+  if (usage.cacheReadTokens !== undefined) result.cacheReadTokens = usage.cacheReadTokens;
+  if (usage.cacheCreationTokens !== undefined) result.cacheCreationTokens = usage.cacheCreationTokens;
+  if (usage.reasoningTokens !== undefined) result.reasoningTokens = usage.reasoningTokens;
+  return result;
 }
 
 /**
@@ -101,14 +121,19 @@ export class AgentStore {
    * Synchronous and lightweight.
    */
   dispatch(event: AgentEvent, timestamp?: number): void {
-    const result = reduceAgentEvent(this.state, event, {
-      turnStartTime: this.turnStartTime,
-      totalStartTime: this.totalStartTime,
-      now: timestamp === undefined ? undefined : () => timestamp,
-    });
-    this.state = result.state;
-    this.turnStartTime = result.turnStartTime;
-    this.totalStartTime = result.totalStartTime;
+    this.reduceEvent(event, timestamp);
+    this.notifySelectors();
+  }
+
+  /**
+   * Ingest multiple AgentEvents and notify subscribers once.
+   * Used by replay surfaces to avoid forcing a UI render per historical event.
+   */
+  dispatchMany(events: AgentStoreEventInput[]): void {
+    if (events.length === 0) return;
+    for (const item of events) {
+      this.reduceEvent(item.event, item.timestamp);
+    }
     this.notifySelectors();
   }
 
@@ -142,24 +167,52 @@ export class AgentStore {
    * still busy.
    */
   syncRuntimeStatus(input: { sessionId?: string; isRunning: boolean }): void {
+    this.syncRuntimeSession(input);
+  }
+
+  syncRuntimeSession(input: {
+    sessionId?: string;
+    isRunning: boolean;
+    tokenUsage?: AgentDoneUsage;
+    contextUsage?: ContextUsageState;
+  }): void {
     if (input.sessionId && input.sessionId !== this.state.sessionId) return;
+
+    const contextUsage = input.contextUsage ?? input.tokenUsage?.context;
+    const usagePatch =
+      input.tokenUsage || contextUsage
+        ? {
+            ...(input.tokenUsage ? { tokenUsage: tokenUsageFromAgentUsage(input.tokenUsage) } : {}),
+            ...(contextUsage ? { contextUsage } : {}),
+          }
+        : undefined;
 
     if (input.isRunning) {
       if (this.state.status === 'idle' || this.state.status === 'error') {
-        this.state = { ...this.state, status: 'running', error: undefined };
+        this.state = { ...this.state, ...usagePatch, status: 'running', error: undefined };
+        this.notifySelectors();
+      } else if (usagePatch) {
+        this.state = { ...this.state, ...usagePatch };
         this.notifySelectors();
       }
       return;
     }
 
     if (this.state.status === 'running') {
+      if (usagePatch) this.state = { ...this.state, ...usagePatch };
       this.dispatch({ type: 'done' });
       return;
     }
 
     if (this.state.status === 'awaiting_user') {
-      this.state = { ...this.state, status: 'idle', pendingQuestion: null };
+      this.state = { ...this.state, ...usagePatch, status: 'idle', pendingQuestion: null };
       this.turnStartTime = 0;
+      this.notifySelectors();
+      return;
+    }
+
+    if (usagePatch) {
+      this.state = { ...this.state, ...usagePatch };
       this.notifySelectors();
     }
   }
@@ -224,6 +277,17 @@ export class AgentStore {
     for (const cb of changeListeners) {
       cb();
     }
+  }
+
+  private reduceEvent(event: AgentEvent, timestamp?: number): void {
+    const result = reduceAgentEvent(this.state, event, {
+      turnStartTime: this.turnStartTime,
+      totalStartTime: this.totalStartTime,
+      now: timestamp === undefined ? undefined : () => timestamp,
+    });
+    this.state = result.state;
+    this.turnStartTime = result.turnStartTime;
+    this.totalStartTime = result.totalStartTime;
   }
 }
 

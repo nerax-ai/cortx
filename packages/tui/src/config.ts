@@ -5,6 +5,10 @@ export interface CortxConfig {
   model: string;
   system?: string;
   maxIterations?: number;
+  /** Maximum sessions allowed to run concurrently in the server/runtime host. */
+  maxSessions?: number;
+  maxEventsPerSession?: number;
+  idleTimeoutMs?: number;
   workingDirectory?: string;
   runtime?: {
     mode?: 'local' | 'remote';

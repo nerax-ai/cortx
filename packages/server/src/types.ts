@@ -11,11 +11,14 @@ export interface ServerConfig {
   port?: number;
   host?: string;
   corsOrigin?: string;
+  /** Maximum sessions allowed to run concurrently. Idle loaded sessions do not count toward this limit. */
   maxSessions?: number;
   maxEventsPerSession?: number;
   idleTimeoutMs?: number;
   language: LanguageClient;
   model: string;
+  models?: unknown[];
+  modelCatalog?: unknown[];
   system?: string;
   maxIterations?: number;
   contextWindowTokens?: number;

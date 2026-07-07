@@ -151,6 +151,103 @@ describe('createEditTool', () => {
     expect(readFileSync(join(tmpDir, 'edit.txt'), 'utf-8')).toBe('hello universe');
   });
 
+  test('returns contextual edit details for UI diff rendering', async () => {
+    const tool = createEditTool(tmpDir);
+    writeFileSync(join(tmpDir, 'context.txt'), ['before-1', 'before-2', 'Hello, World!', 'same line', 'after-1', 'after-2'].join('\n'));
+    const result = await tool.execute(
+      { path: 'context.txt', oldText: 'Hello, World!\nsame line', newText: 'Hello, World!\nsame line\nadded line' },
+      { sessionId: '1', workingDirectory: tmpDir, logger: {} as any },
+    );
+    const details = result.details as any;
+
+    expect(result.success).toBe(true);
+    expect(details).toMatchObject({
+      kind: 'file_edit',
+      path: 'context.txt',
+      contextLines: 3,
+      removedLines: 0,
+      addedLines: 1,
+    });
+    expect(details.lines.map((line: any) => `${line.kind}:${line.text}`)).toEqual([
+      'context:before-2',
+      'context:Hello, World!',
+      'context:same line',
+      'add:added line',
+      'context:after-1',
+      'context:after-2',
+    ]);
+  });
+
+  test('reports real file line numbers when editing a middle line', async () => {
+    const tool = createEditTool(tmpDir);
+    writeFileSync(join(tmpDir, 'middle.txt'), ['one', 'two', 'status: draft', 'four', 'five'].join('\n'));
+    const result = await tool.execute(
+      { path: 'middle.txt', oldText: 'status: draft', newText: 'status: ready' },
+      { sessionId: '1', workingDirectory: tmpDir, logger: {} as any },
+    );
+    const details = result.details as any;
+
+    expect(result.success).toBe(true);
+    expect(details).toMatchObject({
+      oldStartLine: 3,
+      newStartLine: 3,
+      removedLines: 1,
+      addedLines: 1,
+    });
+    expect(details.lines.map((line: any) => [line.kind, line.oldLine, line.newLine, line.text])).toEqual([
+      ['context', 1, 1, 'one'],
+      ['context', 2, 2, 'two'],
+      ['remove', 3, undefined, 'status: draft'],
+      ['add', undefined, 3, 'status: ready'],
+      ['context', 4, 4, 'four'],
+      ['context', 5, 5, 'five'],
+    ]);
+  });
+
+  test('returns nearby file context when appending after a one-line oldText match', async () => {
+    const tool = createEditTool(tmpDir);
+    writeFileSync(join(tmpDir, 'append.txt'), ['one', 'two', 'three', 'four', 'five', 'six'].join('\n'));
+    const result = await tool.execute(
+      { path: 'append.txt', oldText: 'six', newText: 'six\nseven' },
+      { sessionId: '1', workingDirectory: tmpDir, logger: {} as any },
+    );
+    const details = result.details as any;
+
+    expect(result.success).toBe(true);
+    expect(details).toMatchObject({
+      kind: 'file_edit',
+      path: 'append.txt',
+      contextLines: 3,
+      removedLines: 0,
+      addedLines: 1,
+    });
+    expect(details.lines.map((line: any) => `${line.kind}:${line.text}`)).toEqual([
+      'context:four',
+      'context:five',
+      'context:six',
+      'add:seven',
+    ]);
+  });
+
+  test('keeps edit details bounded when oldText contains the whole file', async () => {
+    const tool = createEditTool(tmpDir);
+    const content = ['one', 'two', 'three', 'four', 'five', 'six'].join('\n');
+    writeFileSync(join(tmpDir, 'whole-file.txt'), content);
+    const result = await tool.execute(
+      { path: 'whole-file.txt', oldText: content, newText: `${content}\nseven` },
+      { sessionId: '1', workingDirectory: tmpDir, logger: {} as any },
+    );
+    const details = result.details as any;
+
+    expect(result.success).toBe(true);
+    expect(details.lines.map((line: any) => `${line.kind}:${line.text}`)).toEqual([
+      'context:four',
+      'context:five',
+      'context:six',
+      'add:seven',
+    ]);
+  });
+
   test('returns error if text not found', async () => {
     const tool = createEditTool(tmpDir);
     writeFileSync(join(tmpDir, 'edit2.txt'), 'hello world');

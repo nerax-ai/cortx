@@ -162,6 +162,33 @@ describe('agentLoop (streaming)', () => {
     });
   });
 
+  test('forwards configured reasoning effort to the language request', async () => {
+    let seenReasoning: unknown;
+    const language = {
+      stream: async function* (request: { reasoning?: unknown }) {
+        seenReasoning = request.reasoning;
+        yield {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+        } as LanguageStreamPart;
+      },
+    } as unknown as LanguageClient;
+
+    const events = [];
+    for await (const event of agentLoop({
+      language,
+      model: 'test',
+      reasoning: { enabled: true, effort: 'high' },
+      messages: [],
+    })) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe('done');
+    expect(seenReasoning).toEqual({ enabled: true, effort: 'high' });
+  });
+
   test('abort before start yields error', async () => {
     const language = mockLanguage([]);
     const controller = new AgentLoopController();
@@ -198,6 +225,20 @@ describe('agentLoop (streaming)', () => {
     const r = events.find(e => e.type === 'tool_result') as any;
     expect(r?.isError).toBeFalsy();
     expect(r?.result).toBe('hi');
+  });
+
+  test('tool execution details are yielded without changing model output', async () => {
+    const language = mockLanguage([toolResponse('c1', 'echo', '{"msg":"hi"}'), textResponse('done')]);
+    const tool = {
+      name: 'echo',
+      inputSchema: {},
+      execute: async (input: any) => ({ success: true, output: input.msg, details: { preview: 'ui-only' } }),
+    };
+    const events = [];
+    for await (const e of agentLoop({ language, model: 'test', messages: [{ role: 'user', content: 'go' }], tools: [tool] })) events.push(e);
+    const r = events.find(e => e.type === 'tool_result') as any;
+    expect(r?.result).toBe('hi');
+    expect(r?.details).toEqual({ preview: 'ui-only' });
   });
 
   test('followUp continues loop', async () => {

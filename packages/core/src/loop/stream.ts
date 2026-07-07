@@ -55,6 +55,7 @@ export async function* streamModel(input: StreamModelInput): AsyncGenerator<Agen
     messages,
     maxOutputTokens,
     temperature,
+    reasoning: runtime.reasoning,
     tools: tools.length
       ? tools.map((tool) => ({
           type: 'function' as const,

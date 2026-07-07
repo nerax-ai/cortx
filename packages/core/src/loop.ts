@@ -42,6 +42,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
   const {
     language,
     model,
+    reasoning,
     system,
     tools = [],
     extensions = createEmptyAgentRuntimeExtensions(),
@@ -73,6 +74,7 @@ export async function* agentLoop(opts: AgentLoopOptions): AsyncGenerator<AgentEv
   const runtime: AgentLoopRuntime = {
     language,
     model,
+    reasoning,
     maxOutputTokens,
     temperature,
     workingDirectory,

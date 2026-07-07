@@ -18,6 +18,7 @@ import { userAbortError } from './errors.js';
 export interface AgentLoopRuntime extends Pick<
   CortxConfig,
   | 'model'
+  | 'reasoning'
   | 'maxOutputTokens'
   | 'temperature'
   | 'workingDirectory'

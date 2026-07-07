@@ -30,6 +30,7 @@ function serializeToolCall(entry: ToolCallEntry): SerializedToolCallEntry {
   if (entry.result !== undefined) result.result = safeStringify(entry.result);
   if (entry.isError !== undefined) result.isError = entry.isError;
   if (entry.progress !== undefined) result.progress = entry.progress;
+  if (entry.details !== undefined) result.details = safeStringify(entry.details);
   return result;
 }
 
@@ -46,6 +47,9 @@ function deserializeToolCall(entry: SerializedToolCallEntry): ToolCallEntry {
   }
   if (entry.isError !== undefined) result.isError = entry.isError;
   if (entry.progress !== undefined) result.progress = entry.progress;
+  if (entry.details !== undefined) {
+    try { result.details = JSON.parse(entry.details); } catch { result.details = entry.details; }
+  }
   return result;
 }
 
