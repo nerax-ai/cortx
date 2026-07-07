@@ -71,18 +71,21 @@ export class Cortx {
         : userMessage,
     );
 
-    for await (const event of agentLoop({
-      ...this.config,
-      extensions,
-      language: this.language,
-      tools: [...this.tools.values()],
-      messages,
-      controller: this._controller,
-      sessionId: this._sessionId,
-      runId: this._runId,
-    })) {
-      yield event;
-      if (event.type === 'done' || event.type === 'error') this._messages = messages;
+    try {
+      for await (const event of agentLoop({
+        ...this.config,
+        extensions,
+        language: this.language,
+        tools: [...this.tools.values()],
+        messages,
+        controller: this._controller,
+        sessionId: this._sessionId,
+        runId: this._runId,
+      })) {
+        yield event;
+      }
+    } finally {
+      this._messages = messages;
     }
   }
 
@@ -102,20 +105,23 @@ export class Cortx {
     }
     const checkpoint = resumeCheckpoint.kind === 'checkpoint' ? resumeCheckpoint.checkpoint : undefined;
     const messages = checkpoint?.state.messages?.map((message) => ({ ...message })) ?? [...this._messages];
-    for await (const event of agentLoop({
-      ...this.config,
-      extensions,
-      language: this.language,
-      tools: [...this.tools.values()],
-      messages,
-      controller: this._controller,
-      sessionId: this._sessionId,
-      runId: this._runId,
-      resumeCheckpoint: checkpoint,
-      skipInitialLlm: !checkpoint,
-    })) {
-      yield event;
-      if (event.type === 'done' || event.type === 'error') this._messages = messages;
+    try {
+      for await (const event of agentLoop({
+        ...this.config,
+        extensions,
+        language: this.language,
+        tools: [...this.tools.values()],
+        messages,
+        controller: this._controller,
+        sessionId: this._sessionId,
+        runId: this._runId,
+        resumeCheckpoint: checkpoint,
+        skipInitialLlm: !checkpoint,
+      })) {
+        yield event;
+      }
+    } finally {
+      this._messages = messages;
     }
   }
 

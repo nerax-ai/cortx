@@ -9,6 +9,7 @@ import type {
   AgentRunCheckpoint,
   LanguageMessage,
   RuntimeAgentEventEnvelope,
+  Tool,
 } from '@cortx/sdk';
 import type {
   RuntimeDurableRunStore,
@@ -679,7 +680,7 @@ describe('CortxRuntime sessions', () => {
     runtime.dispose();
   });
 
-  test('routes steer, follow-up, answer and resume through the hosted controller', async () => {
+  test('routes steer, follow-up and resume through the hosted controller', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(100),
       model: 'test-model',
@@ -705,9 +706,8 @@ describe('CortxRuntime sessions', () => {
     expect(runtime.getSession(session.id).promptHistory).toEqual(['start', 'then continue']);
     expect(runtime.getSession(session.id).isRunning).toBe(true);
     await expect(runtime.prompt(session.id, 'parallel')).rejects.toMatchObject({ kind: 'session_busy' });
-    runtime.answer(session.id, 'question-1', 'yes');
-    expect(events.filter((event) => event.type === 'user_answer')).toHaveLength(1);
-    expect(events.find((event) => event.type === 'user_answer')).toMatchObject({ response: 'yes' });
+    expect(runtime.answer(session.id, 'question-1', 'yes')).toBe(false);
+    expect(events.filter((event) => event.type === 'user_answer')).toHaveLength(0);
     expect(events.map((event) => event.type)).not.toContain('user_response');
     await runtime.abort(session.id);
     await runtime.resume(session.id);
@@ -769,6 +769,50 @@ describe('CortxRuntime sessions', () => {
     expect(seenToolNames[1]).not.toContain('write');
     expect(JSON.stringify(seenMessages[1])).toContain('first');
     runtime.dispose();
+  });
+
+  test('restores session request tools from durable snapshots when the store preserves tool functions', async () => {
+    const durableStore = new DelayedRuntimeSessionStore();
+    const seenToolNames: string[][] = [];
+    const customTool: Tool = {
+      name: 'custom_tool',
+      description: 'Custom tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ success: true, output: 'ok' }),
+    };
+    const firstRuntime = new CortxRuntime({
+      language: mockLanguage([textParts('first')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore,
+    });
+    const session = await firstRuntime.createSession({ tools: [customTool] });
+
+    const restoredRuntime = new CortxRuntime({
+      language: {
+        stream: async function* (request: { tools?: Array<{ name: string }> }) {
+          seenToolNames.push((request.tools ?? []).map((tool) => tool.name));
+          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore,
+    });
+
+    await restoredRuntime.restoreDurableSessions({ autoResume: false });
+    const events: AgentEvent[] = [];
+    restoredRuntime.subscribe(session.id, (event) => events.push(event));
+    await restoredRuntime.prompt(session.id, 'use restored tool definitions');
+    await waitForEvent(events, 'done');
+
+    expect(seenToolNames[0]).toContain('custom_tool');
+    firstRuntime.dispose();
+    restoredRuntime.dispose();
   });
 
   test('allows session control updates during an active run and applies them on the next turn', async () => {

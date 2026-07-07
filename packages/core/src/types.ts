@@ -22,7 +22,7 @@ export interface AgentController {
   steer(message: string | LanguageMessage): void;
   followUp(message: string | LanguageMessage): void;
   abort(reason?: string): void;
-  answerUser(toolCallId: string, response: string): void;
+  answerUser(toolCallId: string, response: string): boolean;
   rejectPendingQuestions(reason: string): void;
   readonly isSteered: boolean;
   readonly isAborted: boolean;
@@ -102,13 +102,15 @@ export class AgentLoopController implements AgentController {
   /**
    * Resolve a pending askUser question with the user's response.
    */
-  answerUser(toolCallId: string, response: string): void {
+  answerUser(toolCallId: string, response: string): boolean {
     const pending = this._pendingQuestions.get(toolCallId);
     if (pending) {
       clearTimeout(pending.timeout);
       this._pendingQuestions.delete(toolCallId);
       pending.resolve(response);
+      return true;
     }
+    return false;
   }
 
   /**

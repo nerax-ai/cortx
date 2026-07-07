@@ -1,4 +1,4 @@
-import type { AgentDoneUsage, AgentDurableRunStore, ContextUsageSource, RuntimeAgentEventEnvelope } from '@cortx/sdk';
+import type { AgentDoneUsage, AgentDurableRunStore, ContextUsageSource, RuntimeAgentEventEnvelope, Tool } from '@cortx/sdk';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode, RuntimeSessionMetadata } from '../session.js';
 import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
@@ -25,6 +25,7 @@ export interface RuntimeSessionSnapshot {
   skillPaths?: string[];
   skillPacks?: string[];
   promptHistory?: string[];
+  requestTools?: Tool[];
   usage?: AgentDoneUsage;
   runId: number;
   nextEventSequence: number;

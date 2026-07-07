@@ -645,7 +645,7 @@ async function listAuthorizedSessions(runtime: CortxRuntime, c: Context, config:
       await assertSessionAccess(c, config, session);
       visible.push(session);
     } catch (error) {
-      if (isRuntimeError(error) && error.kind === 'permission_denied') continue;
+      if (isRuntimeError(error) && (error.kind === 'permission_denied' || error.kind === 'invalid_workspace')) continue;
       throw error;
     }
   }
@@ -1077,7 +1077,12 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       if (typeof body.toolCallId !== 'string' || typeof body.response !== 'string') {
         throw new RuntimeError('invalid_request', 'toolCallId and response are required');
       }
-      runtime.answer(id, body.toolCallId, body.response);
+      const answered = runtime.answer(id, body.toolCallId, body.response);
+      if (!answered) {
+        throw new RuntimeError('invalid_request', 'No pending user question matches toolCallId', {
+          toolCallId: body.toolCallId,
+        });
+      }
       return c.json({ ok: true });
     } catch (error) {
       const response = errorResponse(error);
@@ -1135,64 +1140,86 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     }
 
     return streamSSE(c, async (stream) => {
-      // Replay prior events (snapshot to avoid concurrent mutation)
-      const snapshot = useEnvelope
-        ? runtime
-            .getEventEnvelopeHistory(id)
-            .filter((event) => replay ? true : afterSequence !== undefined && event.sequence > afterSequence)
-        : replay
-          ? runtime.getEventHistory(id)
-          : [];
-      let sequence = 0;
-      for (const event of snapshot) {
-        const envelope = event as RuntimeAgentEventEnvelope;
-        await stream.writeSSE({
-          data: useEnvelope
-            ? serializeEnvelope(envelope)
-            : serializeEvent(event as AgentEvent),
-          id: useEnvelope ? String(envelope.sequence) : String(++sequence),
-        });
-      }
-      await stream.writeSSE({ data: '{}' });
+      let unsub: (() => void) | undefined;
+      stream.onAbort(() => {
+        unsub?.();
+      });
 
-      // Subscribe to new events
-      const unsub = useEnvelope
-        ? runtime.subscribeEnvelopes(
+      try {
+        if (useEnvelope) {
+          const buffered: RuntimeAgentEventEnvelope[] = [];
+          let live = false;
+          let writeQueue = Promise.resolve();
+          const writeEnvelope = (event: RuntimeAgentEventEnvelope) =>
+            stream.writeSSE({ data: serializeEnvelope(event), id: String(event.sequence) });
+          const enqueueEnvelope = (event: RuntimeAgentEventEnvelope) => {
+            writeQueue = writeQueue.then(() => writeEnvelope(event)).catch(() => undefined);
+          };
+
+          unsub = runtime.subscribeEnvelopes(
             id,
-            async (event: RuntimeAgentEventEnvelope) => {
-              try {
-                await stream.writeSSE({
-                  data: serializeEnvelope(event),
-                  id: String(event.sequence),
-                });
-              } catch {
-                // Stream closed
-              }
-            },
-            { replay: false },
-          )
-        : runtime.subscribe(
-            id,
-            async (event: AgentEvent) => {
-              try {
-                await stream.writeSSE({
-                  data: serializeEvent(event),
-                  id: String(++sequence),
-                });
-              } catch {
-                // Stream closed
+            (event: RuntimeAgentEventEnvelope) => {
+              if (live) {
+                enqueueEnvelope(event);
+              } else {
+                buffered.push(event);
               }
             },
             { replay: false },
           );
 
-      // Wait for close
-      stream.onAbort(() => {
-        unsub?.();
-      });
+          const snapshot = runtime.getEventEnvelopeHistory(id).filter((event) => {
+            if (afterSequence !== undefined && event.sequence <= afterSequence) return false;
+            return replay || afterSequence !== undefined;
+          });
+          let lastSequence = afterSequence ?? 0;
+          for (const event of snapshot) {
+            await writeEnvelope(event);
+            lastSequence = Math.max(lastSequence, event.sequence);
+          }
 
-      // Keep connection alive with periodic heartbeats
-      try {
+          live = true;
+          for (const event of buffered) {
+            if (event.sequence <= lastSequence) continue;
+            await writeEnvelope(event);
+            lastSequence = Math.max(lastSequence, event.sequence);
+          }
+          await writeQueue;
+          await stream.writeSSE({ data: '{}' });
+        } else {
+          const buffered: AgentEvent[] = [];
+          let live = false;
+          let sequence = 0;
+          let writeQueue = Promise.resolve();
+          const writeEvent = (event: AgentEvent) => stream.writeSSE({ data: serializeEvent(event), id: String(++sequence) });
+          const enqueueEvent = (event: AgentEvent) => {
+            writeQueue = writeQueue.then(() => writeEvent(event)).catch(() => undefined);
+          };
+
+          unsub = runtime.subscribe(
+            id,
+            (event: AgentEvent) => {
+              if (live) {
+                enqueueEvent(event);
+              } else {
+                buffered.push(event);
+              }
+            },
+            { replay: false },
+          );
+
+          const snapshot = replay ? runtime.getEventHistory(id) : [];
+          for (const event of snapshot) await writeEvent(event);
+          live = true;
+          for (const event of buffered) {
+            if (snapshot.includes(event)) continue;
+            await writeEvent(event);
+          }
+          await writeQueue;
+          await stream.writeSSE({ data: '{}' });
+        }
+
+        // Keep connection alive with periodic heartbeats
         while (true) {
           await stream.sleep(15000);
           await stream.writeSSE({ data: '{}' });

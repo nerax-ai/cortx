@@ -197,12 +197,15 @@ function normalizeEvent(event: AgentEvent): AgentEvent {
 }
 
 function isEnvelope(value: unknown): value is RuntimeAgentEventEnvelope {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    'event' in value &&
-    'timestamp' in value &&
-    typeof (value as { timestamp: unknown }).timestamp === 'number'
+    typeof record.sequence === 'number' &&
+    typeof record.timestamp === 'number' &&
+    typeof record.sessionId === 'string' &&
+    typeof record.runId === 'number' &&
+    typeof record.event === 'object' &&
+    record.event !== null
   );
 }
 

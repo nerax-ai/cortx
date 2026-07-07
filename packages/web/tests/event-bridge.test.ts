@@ -107,6 +107,14 @@ describe('EventBridge', () => {
         event: { type: 'text_delta', delta: 'hi' },
       }),
     });
+    FakeEventSource.instances[0].onmessage?.({
+      data: JSON.stringify({
+        timestamp: 1001,
+        sessionId: 'sess_web',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'bad-envelope' },
+      }),
+    });
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
 
     await bridge.prompt(session.id, 'hello');

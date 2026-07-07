@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { agentLoop, AgentLoopController } from '../src/index';
+import { agentLoop, AgentLoopController, Cortx } from '../src/index';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 import { createEmptyAgentRuntimeExtensions, type AgentRuntimeExtensions, type Logger } from '@cortx/sdk';
@@ -52,6 +52,21 @@ function extensions(overrides: Partial<AgentRuntimeExtensions>): AgentRuntimeExt
 }
 
 describe('agentLoop (streaming)', () => {
+  test('Cortx.run commits messages when the consumer stops before a terminal event', async () => {
+    const cortx = new Cortx(mockLanguage([textResponse('hello')]), { model: 'test' });
+
+    for await (const _event of cortx.run('persist this prompt')) {
+      break;
+    }
+
+    expect(cortx.messages).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'persist this prompt' }],
+      },
+    ]);
+  });
+
   test('default logger fallback is silent without configured output', async () => {
     const original = {
       log: console.log,

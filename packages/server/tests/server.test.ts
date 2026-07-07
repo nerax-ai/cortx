@@ -556,6 +556,40 @@ describe('server routes', () => {
     }
   });
 
+  test('list sessions skips durable sessions outside current workspace roots', async () => {
+    const firstRoot = mkdtempSync(join(tmpdir(), 'cortx-server-durable-first-'));
+    const secondRoot = mkdtempSync(join(tmpdir(), 'cortx-server-durable-second-'));
+    const durableDir = join(firstRoot, '.cortx', 'runtime');
+    serverFixtureDirs.push(firstRoot, secondRoot);
+    const first = createServerRuntime({
+      ...config,
+      defaultWorkingDirectory: firstRoot,
+      allowedWorkspaceRoots: [firstRoot],
+      durableStore: new FileDurableRunStore(durableDir),
+    });
+    const second = createServerRuntime({
+      ...config,
+      defaultWorkingDirectory: secondRoot,
+      allowedWorkspaceRoots: [secondRoot],
+      durableStore: new FileDurableRunStore(durableDir),
+    });
+    let firstDisposed = false;
+
+    try {
+      await first.runtime.createSession({ workingDirectory: firstRoot });
+      first.dispose();
+      firstDisposed = true;
+
+      const listRes = await second.app.request('/sessions', { headers });
+      expect(listRes.status).toBe(200);
+      const body = (await listRes.json()) as { sessions: Array<{ workingDirectory: string }> };
+      expect(body.sessions.some((session) => session.workingDirectory === firstRoot)).toBe(false);
+    } finally {
+      if (!firstDisposed) first.dispose();
+      second.dispose();
+    }
+  });
+
   test('send prompt to session', async () => {
     // Create session
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
@@ -914,7 +948,7 @@ describe('server routes', () => {
     expect(res.status).toBe(401);
   });
 
-  test('answer endpoint works', async () => {
+  test('answer endpoint rejects unknown pending questions', async () => {
     const createRes = await fetch(`${BASE}/sessions`, { method: 'POST', headers });
     const { sessionId } = (await createRes.json()) as { sessionId: string };
 
@@ -923,7 +957,11 @@ describe('server routes', () => {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolCallId: 'tc_1', response: 'yes' }),
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      kind: 'invalid_request',
+      error: 'No pending user question matches toolCallId',
+    });
   });
 
   test('steer, follow-up, resume and abort endpoints route to runtime', async () => {

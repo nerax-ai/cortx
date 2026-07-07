@@ -1,4 +1,4 @@
-import type { AgentRunCheckpoint } from '@cortx/sdk';
+import type { AgentRunCheckpoint, Tool } from '@cortx/sdk';
 import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION } from '@cortx/sdk';
 import { DEFAULT_RUNTIME_CAPABILITIES } from '../default-capabilities.js';
 import {
@@ -31,6 +31,7 @@ export function parseRuntimeSessionSnapshot(value: unknown): RuntimeSessionSnaps
           ...value,
           reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : undefined,
           promptHistory: stringArray(value.promptHistory),
+          requestTools: toolArray(value.requestTools),
         } as unknown as RuntimeSessionSnapshot)
       : undefined;
   }
@@ -99,6 +100,7 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     skillPaths: stringArray(value.skillPaths),
     skillPacks: stringArray(value.skillPacks),
     promptHistory: stringArray(value.promptHistory),
+    requestTools: toolArray(value.requestTools),
     runId: typeof value.runId === 'number' ? value.runId : 0,
     nextEventSequence: typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
     metadata: isObject(value.metadata) ? value.metadata : undefined,
@@ -107,6 +109,13 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
 
 function stringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : undefined;
+}
+
+function toolArray(value: unknown): Tool[] | undefined {
+  return Array.isArray(value) &&
+    value.every((item) => isObject(item) && typeof item.name === 'string' && typeof item.execute === 'function')
+    ? (value as Tool[])
+    : undefined;
 }
 
 function migrateRuntimeSubAgentSessionSnapshotV0(value: Record<string, unknown>): RuntimeSubAgentSessionSnapshot | undefined {

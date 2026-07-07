@@ -93,7 +93,7 @@ describe('TUI runtime session adapters', () => {
     await waitForEvent(events, 'done');
     session.steer('prefer tests');
     session.followUp('add coverage');
-    session.answerUser('question-1', 'yes');
+    await session.answerUser('question-1', 'yes');
 
     expect(session.mode).toBe('local');
     expect(session.supportsMessageRestore).toBe(true);
@@ -106,7 +106,7 @@ describe('TUI runtime session adapters', () => {
       isRunning: false,
     });
     expect(events.map((event) => event.type)).toContain('text_delta');
-    expect(events.find((event) => event.type === 'user_answer')).toMatchObject({ response: 'yes' });
+    expect(events.find((event) => event.type === 'user_answer')).toBeUndefined();
 
     unsubscribe();
     session.dispose();
@@ -202,7 +202,7 @@ describe('TUI runtime session adapters', () => {
         return jsonResponse({ ok: true });
       },
       eventSourceFactory: (url) => {
-        expect(url).toBe('http://server/sessions/sess_remote/events?token=short-token');
+        expect(url).toBe('http://server/sessions/sess_remote/events?format=envelope&token=short-token');
         eventSource = { onmessage: null, onerror: null, close() {} };
         return eventSource;
       },
@@ -215,7 +215,15 @@ describe('TUI runtime session adapters', () => {
     const events: AgentEvent[] = [];
     const unsubscribe = session.subscribe((event) => events.push(event));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    eventSource?.onmessage?.({ data: JSON.stringify({ type: 'turn_start', iteration: 1 }) });
+    eventSource?.onmessage?.({
+      data: JSON.stringify({
+        sequence: 1,
+        timestamp: 100,
+        sessionId: 'sess_remote',
+        runId: 1,
+        event: { type: 'turn_start', iteration: 1 },
+      }),
+    });
 
     await session.prompt('hello');
     await session.steer('steer');

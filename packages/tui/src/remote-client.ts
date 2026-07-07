@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@cortx/sdk';
+import type { AgentEvent, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { DiscoveredAgentSpec, InstalledSkillPack, RuntimeSessionCreateRequest, RuntimeSessionInfo } from '@cortx/runtime';
 
 export interface EventSourceLike {
@@ -76,6 +76,7 @@ export class RemoteRuntimeClient {
   private readonly eventSourceFactory: EventSourceFactory;
   private token: string | undefined;
   private tokenExpiresAt: number | undefined;
+  private readonly eventSequences = new Map<string, number>();
 
   constructor(options: RemoteRuntimeClientOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
@@ -157,12 +158,22 @@ export class RemoteRuntimeClient {
 
   async connectEvents(sessionId: string, onEvent: (event: AgentEvent) => void): Promise<() => void> {
     const token = await this.exchangeToken();
-    const url = `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?token=${encodeURIComponent(token)}`;
+    const params = new URLSearchParams({ format: 'envelope', token });
+    const lastSequence = this.eventSequences.get(sessionId);
+    if (lastSequence !== undefined) params.set('after', String(lastSequence));
+    const url = `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`;
     const source = this.eventSourceFactory(url);
     source.onmessage = (message) => {
       if (!message.data || message.data === '{}') return;
       try {
-        const event = serializeEvent(JSON.parse(message.data) as AgentEvent);
+        const parsed = JSON.parse(message.data) as unknown;
+        const envelope = isEnvelope(parsed) ? parsed : undefined;
+        if (envelope) {
+          const current = this.eventSequences.get(sessionId);
+          if (current !== undefined && envelope.sequence <= current) return;
+          this.eventSequences.set(sessionId, envelope.sequence);
+        }
+        const event = serializeEvent(envelope ? envelope.event : (parsed as AgentEvent));
         if (event.type) onEvent(event);
       } catch {
         /* ignore malformed SSE payloads */
@@ -218,4 +229,17 @@ export class RemoteRuntimeClient {
 
     return response.json() as Promise<T>;
   }
+}
+
+function isEnvelope(value: unknown): value is RuntimeAgentEventEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { sequence: unknown }).sequence === 'number' &&
+    typeof (value as { timestamp: unknown }).timestamp === 'number' &&
+    typeof (value as { sessionId: unknown }).sessionId === 'string' &&
+    typeof (value as { runId: unknown }).runId === 'number' &&
+    typeof (value as { event: unknown }).event === 'object' &&
+    (value as { event: unknown }).event !== null
+  );
 }

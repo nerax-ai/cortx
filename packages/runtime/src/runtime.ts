@@ -585,44 +585,51 @@ export class CortxRuntime {
     for (const snapshot of await store.listRuntimeSessions()) {
       if (this.sessions.has(snapshot.id)) continue;
       if (this.deletedSessionIds.has(snapshot.id)) continue;
-      const checkpoint = await this.durableStore?.loadCheckpoint(snapshot.id);
-      const resumableCheckpoint =
-        checkpoint && checkpoint.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && !checkpoint.state.terminal
-          ? checkpoint
-          : undefined;
+      try {
+        const checkpoint = await this.durableStore?.loadCheckpoint(snapshot.id);
+        const resumableCheckpoint =
+          checkpoint && checkpoint.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && !checkpoint.state.terminal
+            ? checkpoint
+            : undefined;
 
-      const info = await this.createSession({
-        id: snapshot.id,
-        workingDirectory: snapshot.workingDirectory,
-        model: snapshot.model,
-        reasoningEffort: snapshot.reasoningEffort,
-        system: snapshot.system,
-        maxIterations: snapshot.maxIterations,
-        toolMode: snapshot.toolMode,
-        approvalMode: snapshot.approvalMode,
-        capabilities: snapshot.capabilities,
-        skillPaths: snapshot.skillPaths,
-        skillPacks: snapshot.skillPacks,
-        metadata: snapshot.metadata,
-      });
-      const session = this.requireSession(info.id);
-      if (checkpoint?.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && checkpoint.state.messages?.length) {
-        session.cortx.replaceMessages(checkpoint.state.messages);
-      }
-      session.createdAt = snapshot.createdAt;
-      session.lastActivityAt = snapshot.lastActivityAt;
-      session.runId = snapshot.runId;
-      session.nextEventSequence = snapshot.nextEventSequence;
-      session.promptHistory = snapshot.promptHistory?.slice(-100) ?? [];
-      session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
-      const eventSnapshots = store.listEventEnvelopes ? await store.listEventEnvelopes(snapshot.id) : [];
-      session.usage = this.aggregateUsageFromEventSnapshots(session, eventSnapshots) ?? snapshot.usage;
-      this.restoreSessionEventHistory(session, eventSnapshots, resumableCheckpoint);
-      await this.persistRuntimeSession(session);
-      restored.push(this.info(session));
+        const info = await this.createSession({
+          id: snapshot.id,
+          workingDirectory: snapshot.workingDirectory,
+          model: snapshot.model,
+          reasoningEffort: snapshot.reasoningEffort,
+          system: snapshot.system,
+          maxIterations: snapshot.maxIterations,
+          tools: snapshot.requestTools,
+          toolMode: snapshot.toolMode,
+          approvalMode: snapshot.approvalMode,
+          capabilities: snapshot.capabilities,
+          skillPaths: snapshot.skillPaths,
+          skillPacks: snapshot.skillPacks,
+          metadata: snapshot.metadata,
+        });
+        const session = this.requireSession(info.id);
+        if (checkpoint?.schemaVersion === AGENT_RUN_CHECKPOINT_SCHEMA_VERSION && checkpoint.state.messages?.length) {
+          session.cortx.replaceMessages(checkpoint.state.messages);
+        }
+        session.createdAt = snapshot.createdAt;
+        session.lastActivityAt = snapshot.lastActivityAt;
+        session.runId = snapshot.runId;
+        session.nextEventSequence = snapshot.nextEventSequence;
+        session.promptHistory = snapshot.promptHistory?.slice(-100) ?? [];
+        session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
+        const eventSnapshots = store.listEventEnvelopes ? await store.listEventEnvelopes(snapshot.id) : [];
+        session.usage = this.aggregateUsageFromEventSnapshots(session, eventSnapshots) ?? snapshot.usage;
+        this.restoreSessionEventHistory(session, eventSnapshots, resumableCheckpoint);
+        await this.persistRuntimeSession(session);
+        restored.push(this.info(session));
 
-      if (options.autoResume && resumableCheckpoint) {
-        await this.resume(session.id);
+        if (options.autoResume && resumableCheckpoint) {
+          await this.resume(session.id);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to restore runtime session "${snapshot.id}": ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
     return restored;
@@ -786,10 +793,12 @@ export class CortxRuntime {
     void this.persistRuntimeSession(session);
   }
 
-  answer(sessionId: string, toolCallId: string, response: string): void {
+  answer(sessionId: string, toolCallId: string, response: string): boolean {
     const session = this.requireSession(sessionId);
-    session.cortx.controller.answerUser(toolCallId, response);
+    const answered = session.cortx.controller.answerUser(toolCallId, response);
+    if (!answered) return false;
     this.broadcast(session, { type: 'user_answer', toolCallId, response });
+    return true;
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -1171,6 +1180,7 @@ export class CortxRuntime {
       skillPaths: session.skillPaths,
       skillPacks: session.skillPacks,
       promptHistory: session.promptHistory,
+      requestTools: session.requestTools,
       usage: session.usage,
       runId: session.runId,
       nextEventSequence: session.nextEventSequence,

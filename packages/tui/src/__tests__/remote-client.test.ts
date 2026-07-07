@@ -266,7 +266,7 @@ describe('RemoteRuntimeClient', () => {
         return jsonResponse({ token: 'short-token', expiresAt: Date.now() + 60_000 });
       },
       eventSourceFactory: (url) => {
-        expect(url).toBe('http://localhost:3000/sessions/sess_remote/events?token=short-token');
+        expect(url).toBe('http://localhost:3000/sessions/sess_remote/events?format=envelope&token=short-token');
         eventSource = {
           onmessage: null,
           onerror: null,
@@ -278,7 +278,24 @@ describe('RemoteRuntimeClient', () => {
 
     const events: string[] = [];
     const unsubscribe = await client.connectEvents('sess_remote', (event) => events.push(event.type));
-    eventSource?.onmessage?.({ data: JSON.stringify({ type: 'text_delta', delta: 'hi' }) });
+    eventSource?.onmessage?.({
+      data: JSON.stringify({
+        sequence: 1,
+        timestamp: 100,
+        sessionId: 'sess_remote',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'hi' },
+      }),
+    });
+    eventSource?.onmessage?.({
+      data: JSON.stringify({
+        sequence: 1,
+        timestamp: 100,
+        sessionId: 'sess_remote',
+        runId: 1,
+        event: { type: 'text_delta', delta: 'duplicate' },
+      }),
+    });
     eventSource?.onmessage?.({ data: '{}' });
     unsubscribe();
 
@@ -311,8 +328,8 @@ describe('RemoteRuntimeClient', () => {
     unsubscribeSecond();
 
     expect(eventUrls).toEqual([
-      'http://localhost:3000/sessions/sess_remote/events?token=near-expiry-token',
-      'http://localhost:3000/sessions/sess_remote/events?token=fresh-token',
+      'http://localhost:3000/sessions/sess_remote/events?format=envelope&token=near-expiry-token',
+      'http://localhost:3000/sessions/sess_remote/events?format=envelope&token=fresh-token',
     ]);
   });
 });
