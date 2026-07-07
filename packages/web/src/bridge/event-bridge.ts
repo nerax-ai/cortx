@@ -2,7 +2,7 @@ import type { AgentDoneUsage, AgentEvent, ContextUsageSource, RuntimeAgentEventE
 import type { AgentStore, AgentStoreEventInput } from '@cortx/store';
 import { createAuthClient, getAuthToken, apiFetch, type AuthClient } from './auth';
 
-export type WebWorkspaceToolMode = 'none' | 'read-only' | 'coding' | 'all';
+export type WebWorkspaceToolMode = string;
 export type WebApprovalMode = 'deny' | 'interactive' | 'full-access';
 export type WebEventConnectionPhase =
   | 'connecting'
@@ -110,6 +110,16 @@ export interface WebSkillPackInfo {
   skillPaths: string[];
   agentSpecPaths: string[];
   metadata?: Record<string, unknown>;
+}
+
+export interface WebToolProfileInfo {
+  id: string;
+  use: string;
+  name?: string;
+  description?: string;
+  pluginId?: string;
+  packageName?: string;
+  tools: Array<{ use: string; options?: Record<string, unknown> }>;
 }
 
 export interface WebSkillPackInstallRequest {
@@ -268,6 +278,13 @@ export class EventBridge {
     await throwIfError(res, 'Get session failed');
     const data = (await res.json()) as { session: WebRuntimeSessionInfo };
     return data.session;
+  }
+
+  async listToolProfiles(): Promise<WebToolProfileInfo[]> {
+    const res = await apiFetch(this.client, '/tool-profiles');
+    await throwIfError(res, 'List tool profiles failed');
+    const data = (await res.json()) as { toolProfiles?: WebToolProfileInfo[] };
+    return data.toolProfiles ?? [];
   }
 
   async listSessions(): Promise<WebRuntimeSessionInfo[]> {

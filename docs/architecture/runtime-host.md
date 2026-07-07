@@ -22,7 +22,7 @@ flowchart TB
   Tui["@cortx/tui\nlocal runtime 或 remote server"]
   Web["@cortx/web\nremote frontend"]
   Desktop["future desktop\nembedded runtime 或 server client"]
-  WorkspaceTools["runtime workspace-tools\nhost-mounted tool capability"]
+  WorkspaceTools["cortx-plugins/workspace-tools\nofficial tool plugin"]
   Plugins["official/user plugins\nskills/tools/policies/sub-agents"]
 
   Runtime --> Core
@@ -49,7 +49,7 @@ flowchart TB
 | 包               | 应该负责                                                                                                                                      | 不应该负责                                                                                |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `@cortx/core`    | 单 agent loop、模型流、工具执行 pipeline、extension hooks、event emission、checkpoint/resume primitive、控制信号                              | 多 session map、HTTP/SSE、TUI/Web 状态、多工作区选择、workspace root 策略、产品默认工具集 |
-| `@cortx/runtime` | session 生命周期、多目录 workspace 验证、工具挂载、默认 capability、event history、prompt/steer/follow-up/answer/abort/resume、运行错误归一化 | UI 渲染、HTTP 认证细节、浏览器状态、terminal keybinding                                   |
+| `@cortx/runtime` | session 生命周期、多目录 workspace 验证、插件挂载策略、默认 capability、event history、prompt/steer/follow-up/answer/abort/resume、运行错误归一化 | 具体 workspace 工具实现、UI 渲染、HTTP 认证细节、浏览器状态、terminal keybinding          |
 | `@cortx/server`  | 暴露 runtime REST/SSE API、认证、CORS、短期 SSE token、HTTP 错误格式化                                                                        | 自己创建和管理 `Cortx` session、绕过 runtime 验证 workspace、维护独立 agent 语义          |
 | `@cortx/tui`     | Ink UI、终端输入、历史消息、快捷键、local/remote runtime adapter、审批交互                                                                    | 直接复制 server session manager、绕过 runtime 运行 workspace tools                        |
 | `@cortx/web`     | React UI、server client、SSE event 消费、会话状态展示                                                                                         | 浏览器内运行 local agent、访问本地文件系统、导入 core/runtime/workspace-tools 执行本地能力                     |
@@ -153,9 +153,9 @@ workspace 安全属于 runtime/tool pack 边界，不属于 UI 约定。
 - 工具执行时仍以 session workspace 为根，不能读写 sibling workspace 或 root 外路径。
 - write/destructive 工具默认接入 approval policy。
 - 没有审批通道时默认拒绝 write/destructive，而不是静默执行。
-- workspace-tools 是 runtime 内部 host-mounted capability，TUI local、server runtime、未来 desktop 都通过 runtime 复用同一套工具语义；未来可再抽成官方插件或可安装 tool pack。
+- workspace-tools 是官方插件 `@cortx-ai/workspace-tools`；runtime 只按 session workspace 和 `toolMode` 选择插件贡献的 `runtime.toolProfile`，再生成插件 contribution 配置。TUI local、server runtime、未来 desktop 都通过 runtime 复用同一套挂载语义。
 
-工具模式建议：
+官方 workspace-tools 当前提供的工具 profile：
 
 | toolMode    | 能力                                       |
 | ----------- | ------------------------------------------ |
@@ -163,6 +163,8 @@ workspace 安全属于 runtime/tool pack 边界，不属于 UI 约定。
 | `read-only` | 只允许 read/list/grep/find 等读工具        |
 | `coding`    | 挂载常用读写编辑工具，destructive 仍需审批 |
 | `all`       | 挂载完整工具集，仍受 approval/policy 约束  |
+
+这些值不是 runtime 的封闭枚举；新的插件可以贡献新的 profile，例如运维插件提供 `ops`，安装后 server/web/TUI 只需要读取 `/tool-profiles` 就能展示和切换。
 
 ## 默认 Approval 行为
 
@@ -252,7 +254,7 @@ Web 保持 remote-only：
 
 - 只连接 server。
 - 只消费 REST/SSE。
-- 不导入 core、runtime 或 runtime workspace-tools 来运行本地 agent。
+- 不导入 core、runtime 或 workspace tool 插件来运行本地 agent。
 - 不获得浏览器本地文件系统权限。
 - 可以展示多个 session、切换 session、发送 prompt/steer/follow-up/answer/abort/resume。
 
@@ -289,7 +291,7 @@ Sub-agent 也类似：
 | 单 agent loop 必需语义                          | `@cortx/core`                  |
 | 新 agent extension point 类型                   | `@cortx/sdk` + `@cortx/core`   |
 | 多 session、多目录、默认能力组合                | `@cortx/runtime`               |
-| Workspace 文件/命令工具                         | runtime workspace-tools capability，未来可抽成官方 tool pack |
+| Workspace 文件/命令工具                         | `cortx-plugins/workspace-tools` 官方插件，由 runtime 按 session 挂载 |
 | HTTP/SSE/auth/CORS/remote API                   | `@cortx/server`                |
 | 终端布局、快捷键、输入体验                      | `@cortx/tui`                   |
 | 浏览器 UI、dashboard、连接状态                  | `@cortx/web`                   |

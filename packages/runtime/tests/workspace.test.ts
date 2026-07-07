@@ -1,14 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
-import { CortxRuntime, createWorkspaceTools, resolveWorkspace } from '../src/index';
+import { join, resolve } from 'path';
+import { PluginRegistry } from '../../../../nerax/packages/plugin/src/index.ts';
+import {
+  CortxRuntime,
+  createWorkspaceToolPluginEntries,
+  listRuntimeToolProfiles,
+  resolveWorkspace,
+  type CortxExtensionType,
+  type CortxFactoryMap,
+  type CortxRegistry,
+} from '../src/index';
 import type { AgentEvent } from '@cortx/sdk';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 
 let rootDir: string;
 let outsideDir: string;
+let workspaceToolRegistryPromise: Promise<CortxRegistry> | undefined;
 
 beforeEach(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'cortx-runtime-root-'));
@@ -46,6 +56,21 @@ function mockLanguage(responses: LanguageStreamPart[][]): LanguageClient {
       for (const part of parts) yield part;
     },
   } as unknown as LanguageClient;
+}
+
+async function createWorkspaceToolRegistry(): Promise<CortxRegistry> {
+  workspaceToolRegistryPromise ??= createFreshWorkspaceToolRegistry('cortx-runtime-workspace-tools-test');
+  return workspaceToolRegistryPromise;
+}
+
+async function createFreshWorkspaceToolRegistry(appName: string): Promise<CortxRegistry> {
+  const source = resolve(import.meta.dir, '../../../../cortx-plugins/workspace-tools');
+  const cleanSource = mkdtempSync(join(tmpdir(), 'cortx-workspace-tools-plugin-'));
+  cpSync(resolve(source, 'manifest.json'), resolve(cleanSource, 'manifest.json'));
+  cpSync(resolve(source, 'src'), resolve(cleanSource, 'src'), { recursive: true });
+  const registry = new PluginRegistry<CortxExtensionType, CortxFactoryMap>({ appName }) as CortxRegistry;
+  await registry.load(cleanSource);
+  return registry;
 }
 
 async function waitForEvent(events: AgentEvent[], type: AgentEvent['type'], timeoutMs = 1_000): Promise<AgentEvent> {
@@ -100,20 +125,79 @@ describe('workspace resolution', () => {
 });
 
 describe('runtime-mounted workspace tools', () => {
-  test('mounts read-only, coding and all tool packs', () => {
-    expect(createWorkspaceTools(rootDir, 'none').map((tool) => tool.name)).toEqual([]);
-    expect(createWorkspaceTools(rootDir, 'read-only').map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['read', 'grep', 'find', 'ls']),
+  test('builds workspace tool plugin entries from plugin-provided profiles', async () => {
+    const registry = await createWorkspaceToolRegistry();
+    expect((await listRuntimeToolProfiles(registry)).map((profile) => profile.id)).toEqual([
+      'none',
+      'read-only',
+      'coding',
+      'all',
+    ]);
+    expect((await createWorkspaceToolPluginEntries(rootDir, 'none', registry)).map((entry) => entry.use)).toEqual([]);
+    expect((await createWorkspaceToolPluginEntries(rootDir, 'read-only', registry)).map((entry) => entry.use)).toEqual([
+      '@cortx-ai/workspace-tools/read',
+      '@cortx-ai/workspace-tools/grep',
+      '@cortx-ai/workspace-tools/find',
+      '@cortx-ai/workspace-tools/ls',
+    ]);
+    expect((await createWorkspaceToolPluginEntries(rootDir, 'coding', registry)).map((entry) => entry.use)).toEqual([
+      '@cortx-ai/workspace-tools/read',
+      '@cortx-ai/workspace-tools/bash',
+      '@cortx-ai/workspace-tools/edit',
+      '@cortx-ai/workspace-tools/write',
+    ]);
+    expect((await createWorkspaceToolPluginEntries(rootDir, 'all', registry)).map((entry) => entry.use)).toEqual([
+      '@cortx-ai/workspace-tools/read',
+      '@cortx-ai/workspace-tools/bash',
+      '@cortx-ai/workspace-tools/edit',
+      '@cortx-ai/workspace-tools/write',
+      '@cortx-ai/workspace-tools/grep',
+      '@cortx-ai/workspace-tools/find',
+      '@cortx-ai/workspace-tools/ls',
+    ]);
+  });
+
+  test('mounts custom tool profiles contributed by another plugin', async () => {
+    const registry = await createFreshWorkspaceToolRegistry('cortx-runtime-custom-tool-profile-test');
+    const customSource = mkdtempSync(join(tmpdir(), 'cortx-ops-tool-profile-plugin-'));
+    mkdirSync(join(customSource, 'src'));
+    writeFileSync(join(customSource, 'src', 'index.ts'), 'export function setup() {}\n', 'utf8');
+    writeFileSync(
+      join(customSource, 'manifest.json'),
+      JSON.stringify({
+        manifestVersion: 1,
+        id: '@cortx-ai/ops-tools',
+        name: 'Cortx Ops Tools',
+        version: '0.0.1',
+        runtime: { main: 'src/index.ts' },
+        contributes: {
+          'runtime.toolProfile': [
+            {
+              id: 'ops',
+              name: 'Ops',
+              description: 'Read operational workspace context.',
+              tools: ['@cortx-ai/workspace-tools/read'],
+            },
+          ],
+        },
+      }),
+      'utf8',
     );
-    expect(createWorkspaceTools(rootDir, 'coding').map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['read', 'bash', 'edit', 'write']),
-    );
-    expect(createWorkspaceTools(rootDir, 'all').map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']),
-    );
+
+    try {
+      await registry.load(customSource);
+      const profiles = await listRuntimeToolProfiles(registry);
+      expect(profiles.map((profile) => profile.id)).toEqual(['none', 'read-only', 'coding', 'all', 'ops']);
+      expect((await createWorkspaceToolPluginEntries(rootDir, 'ops', registry)).map((entry) => entry.use)).toEqual([
+        '@cortx-ai/workspace-tools/read',
+      ]);
+    } finally {
+      rmSync(customSource, { recursive: true, force: true });
+    }
   });
 
   test('uses session workspace boundaries for mounted tools', async () => {
+    const registry = await createWorkspaceToolRegistry();
     mkdirSync(join(rootDir, 'a'));
     mkdirSync(join(rootDir, 'b'));
     writeFileSync(join(rootDir, 'a', 'visible.txt'), 'visible');
@@ -129,6 +213,7 @@ describe('runtime-mounted workspace tools', () => {
       defaultWorkingDirectory: rootDir,
       allowedWorkspaceRoots: [rootDir],
       toolMode: 'all',
+      registry,
     });
     const session = await runtime.createSession({ workingDirectory: 'a' });
     const events: AgentEvent[] = [];
@@ -150,6 +235,7 @@ describe('runtime-mounted workspace tools', () => {
   });
 
   test('denies write tools without an approval channel before writing', async () => {
+    const registry = await createWorkspaceToolRegistry();
     mkdirSync(join(rootDir, 'project'));
     const runtime = new CortxRuntime({
       language: mockLanguage([
@@ -160,6 +246,7 @@ describe('runtime-mounted workspace tools', () => {
       defaultWorkingDirectory: rootDir,
       allowedWorkspaceRoots: [rootDir],
       toolMode: 'all',
+      registry,
     });
     const session = await runtime.createSession({ workingDirectory: 'project' });
     const events: AgentEvent[] = [];

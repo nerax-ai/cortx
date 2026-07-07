@@ -19,6 +19,7 @@ export interface CortxConfig {
       workingDirectory?: string;
     };
   };
+  workspaceToolsPlugin?: string | false;
   plugins?: string[];
   agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
   providers?: ProviderConfig[];

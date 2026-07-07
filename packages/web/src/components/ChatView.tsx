@@ -1,7 +1,7 @@
 import { useRef, useEffect, useMemo, useState, useLayoutEffect, useCallback } from 'react';
 import type { AgentState } from '@cortx/store';
 import type { ActivityEntry, TurnEntry, TokenUsage, ToolCallEntry, AgentSessionSummary } from '@cortx/store';
-import type { WebApprovalMode, WebModelInfo, WebSkillInfo, WebWorkspaceToolMode } from '../bridge/event-bridge';
+import type { WebApprovalMode, WebModelInfo, WebSkillInfo, WebToolProfileInfo, WebWorkspaceToolMode } from '../bridge/event-bridge';
 import { visibleActivityEntries } from '../activity';
 import type { ContextUsageSummary } from '../context-usage';
 import { ActivityCard } from './ActivityTimeline';
@@ -23,6 +23,7 @@ interface ChatViewProps {
   status: AgentStatus;
   error: string | undefined;
   skills: WebSkillInfo[];
+  toolProfiles?: WebToolProfileInfo[];
   models: WebModelInfo[];
   model?: string;
   reasoningEffort?: string;
@@ -108,6 +109,7 @@ export function ChatView({
   status,
   error,
   skills,
+  toolProfiles = [],
   models,
   model,
   reasoningEffort,
@@ -271,6 +273,7 @@ export function ChatView({
       <PromptInput
         onSend={onSend}
         skills={skills}
+        toolProfiles={toolProfiles}
         models={models}
         model={model}
         reasoningEffort={reasoningEffort}

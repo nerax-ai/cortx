@@ -11,6 +11,7 @@ import type {
   WebSkillInfo,
   WebSkillPackInfo,
   WebSkillPackInstallRequest,
+  WebToolProfileInfo,
   WebWorkspaceDirectoryListing,
   WebWorkspaceToolMode,
 } from '../bridge/event-bridge';
@@ -27,6 +28,7 @@ interface DesktopWorkspaceProps {
   agentSpecs: WebAgentSpecInfo[];
   models: WebModelInfo[];
   sessionSkills: WebSkillInfo[];
+  toolProfiles?: WebToolProfileInfo[];
   queuedPrompts: QueuedPrompt[];
   skillPacks: WebSkillPackInfo[];
   selectedSkillPackIds: string[];
@@ -107,6 +109,7 @@ export function DesktopWorkspace({
   agentSpecs,
   models,
   sessionSkills,
+  toolProfiles = [],
   queuedPrompts,
   skillPacks,
   selectedSkillPackIds,
@@ -183,6 +186,7 @@ export function DesktopWorkspace({
             status={state.status}
             error={state.error}
             skills={sessionSkills}
+            toolProfiles={toolProfiles}
             models={models}
             model={session?.model}
             reasoningEffort={session?.reasoningEffort}

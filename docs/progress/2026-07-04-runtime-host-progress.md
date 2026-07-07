@@ -20,7 +20,7 @@ Runtime Host 新版本已经完成 core purity + runtime closure + upper asset p
 - `@cortx/server` 已从自有 session manager 改为 runtime adapter。
 - TUI 已拆成 local runtime 和 remote server 两种 adapter。
 - Web 已对齐 runtime-backed server API，并保持 remote-only。
-- `@cortx/code` 包已删除；原文件/命令工具能力已迁入 runtime 内部 `workspace-tools` capability，并保留路径边界测试。
+- `@cortx/code` 包已删除；原文件/命令工具能力已迁入兄弟项目 `cortx-plugins/workspace-tools` 官方插件，并保留路径边界测试。runtime 只保留按 session workspace 和 `toolMode` 选择插件贡献的 `runtime.toolProfile`、再生成插件 contribution 的挂载策略。
 - core 已移除产品默认能力：不再 discovery skills、不再默认创建 `agent` sub-agent tool、不再内置 default approval policy。
 - skills、sub-agent、default approval 已迁入 `@cortx/runtime` official capabilities，由 runtime per-session 挂载或禁用。
 - runtime event envelope 已落地，事件带 `sequence`、`timestamp`、`sessionId`、`runId`，child lifecycle event 带 parent attribution。
@@ -47,7 +47,7 @@ Runtime Host 新版本已经完成 core purity + runtime closure + upper asset p
 | 单元 | 状态 | 当前证据 |
 | --- | --- | --- |
 | U1 新增 `@cortx/runtime` | 已完成 | `packages/runtime/src/runtime.ts`，runtime tests 覆盖 create/list/get/delete/prompt/steer/follow-up/resume/answer/abort/subscribe |
-| U2 Workspace 与工具挂载 | 已完成 | `packages/runtime/src/workspace.ts`、`packages/runtime/src/tool-mount.ts`、`packages/runtime/src/workspace-tools/index.ts`，workspace tests 覆盖 lexical/realpath/symlink、tool mode、无审批拒绝写入；`packages/code` 已删除 |
+| U2 Workspace 与工具挂载 | 已完成 | `packages/runtime/src/workspace.ts`、`packages/runtime/src/tool-mount.ts`、`../cortx-plugins/workspace-tools`，workspace tests 覆盖 lexical/realpath/symlink、tool mode、无审批拒绝写入；`packages/code` 已删除 |
 | U3 Server runtime 化 | 已完成 | `packages/server/src/session-manager.ts` 已删除，`packages/server/src/server.ts` 创建 `CortxRuntime` 并委托所有 session action；`createServerRuntime()` 提供嵌入式 dispose |
 | U4 TUI local/remote adapter | 已完成 | `packages/tui/src/runtime-session.ts`、`packages/tui/src/remote-client.ts`，TUI adapter tests 覆盖 local 和 remote |
 | U5 Web remote contract | 已完成 | `packages/web/src/bridge/event-bridge.ts`，Web tests 覆盖 runtime API、typed errors、SSE 短期 token、remote-only manifest |
@@ -83,17 +83,17 @@ Runtime Host 新版本已经完成 core purity + runtime closure + upper asset p
 
 - 根据新的架构判断，彻底删除独立 `@cortx/code` 包：
   - 移除 `packages/code/package.json` 和 `packages/code/tsconfig.json`。
-  - 将原 read/write/edit/bash/grep/find/ls/path-safety/search 工具实现迁入 `packages/runtime/src/workspace-tools/`。
-  - 将原 code 工具测试迁入 `packages/runtime/tests/workspace-tools.test.ts`。
+  - 将原 read/write/edit/bash/grep/find/ls/path-safety/search 工具实现迁入 `../cortx-plugins/workspace-tools`。
+  - 将原 code 工具测试迁入 `../cortx-plugins/workspace-tools/test/workspace-tools.test.ts`。
   - 移除 `@cortx/runtime` 对 `@cortx/code` 的 workspace 依赖。
   - 更新 lockfile，使 workspace 图只剩 sdk/store/core/runtime/server/tui/web 这 7 个包。
 - 更新当前权威文档：
   - `@cortx/code` 不再被描述为包职责边界的一部分。
-  - workspace tools 被定义为 runtime 内部 host-mounted capability。
-  - 后续如果需要产品化分发，再抽成官方插件或可安装 tool pack，而不是恢复 `code` 这个模糊包。
+  - workspace tools 被定义为官方插件；runtime 只持有挂载策略。
+  - 后续如果需要产品化分发，继续扩展 `cortx-plugins` 官方插件集合，而不是恢复 `code` 这个模糊包。
 - 加强架构边界测试：
   - `packages/code` 不能重新出现。
-  - server/TUI/Web 不能直接导入 runtime 内部 `workspace-tools` 实现。
+  - server/TUI/Web 不能直接导入 workspace tool 实现；server/TUI 只能通过插件加载，Web 保持 remote-only。
 - 本轮验证：
   - `bun run lint`：通过，7 个 workspace package 全部成功。
   - `bun run build`：通过，7 个 workspace package 全部成功。
@@ -104,7 +104,7 @@ Runtime Host 新版本已经完成 core purity + runtime closure + upper asset p
 - 完成本轮 LFG 收尾审计：
   - 重新确认 plan metadata：`artifact_contract: ce-unified-plan/v1`、`artifact_readiness: implementation-ready`、`execution: code`。
   - 重新核对需求文档和最终设计文档中的 95% 验收标准。
-  - 当前实现已经覆盖 runtime host、server adapter、TUI local/remote adapter、Web remote-only contract、workspace-tools capability、core capability boundary、conformance/boundary tests 和最终设计文档。
+  - 当前实现已经覆盖 runtime host、server adapter、TUI local/remote adapter、Web remote-only contract、官方 workspace-tools 插件挂载、core capability boundary、conformance/boundary tests 和最终设计文档。
 - 完成最新顺序全量验证：
   - `bun run lint`：通过，8 个 workspace package lint 全部成功。
   - `bun run build`：通过，8 个 workspace package build 全部成功，包含 Web production build。
@@ -127,7 +127,7 @@ Runtime Host 新版本已经完成 core purity + runtime closure + upper asset p
 ### Round 4
 
 - 完成 LFG simplify/review 方向的 focused pass：
-  - reuse：确认 workspace path safety、workspace-tools capability、runtime host contract 已复用共享实现，没有发现需要再复制/合并的核心路径。
+  - reuse：确认 workspace path safety、官方 workspace-tools 插件、runtime host contract 已复用共享实现，没有发现需要再复制/合并的核心路径。
   - quality：修复 server SSE replay event id 固定为 `0` 的问题，改为连续序号。
   - quality/security：把 server 短期 token store 从模块级全局 `Map` 改为每个 `createServerRuntime()` 实例独立，避免同一进程多个 server 之间 token 串用。
   - reliability：Web `AuthClient` 记录 `tokenExpiresAt`，REST/SSE 统一通过 `getAuthToken()` 在 token 临近过期时自动刷新。
@@ -199,7 +199,7 @@ Runtime Host 新版本已经完成 core purity + runtime closure + upper asset p
 - 修复 `packages/core/tests/capabilities.test.ts` 的 `PluginRegistry` 单例污染，保证完整测试套件稳定。
 - 扩展 `packages/runtime/tests/core-boundary.test.ts`：
   - core 不能导入 runtime/server/tui/web。
-  - TUI/Web 不能直接依赖 runtime workspace-tools implementation。
+  - TUI/Web 不能直接依赖 workspace tool implementation。
   - server 不能重新出现 `session-manager.ts`。
   - server 不能直接 `new Cortx` 或导入 workspace-tools implementation。
   - Web 源码不能导入 core、runtime 或 workspace-tools implementation。

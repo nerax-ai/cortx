@@ -97,7 +97,7 @@ describe('runtime durable resume', () => {
       model: 'test',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
-      toolMode: 'read-only',
+      toolMode: 'none',
       approvalMode: 'deny',
       capabilities: { skills: false, subAgents: false, approval: false },
       durableStore: firstStore,
@@ -146,7 +146,7 @@ describe('runtime durable resume', () => {
     expect(second.getSession('file-backed-session')).toMatchObject({
       workingDirectory: tmpDir,
       model: 'test',
-      toolMode: 'read-only',
+      toolMode: 'none',
       approvalMode: 'deny',
       promptHistory: ['resume me'],
       metadata: { source: 'durable-test' },

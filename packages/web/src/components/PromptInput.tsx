@@ -7,6 +7,7 @@ import type {
   WebModelInfo,
   WebReasoningEffortOption,
   WebSkillInfo,
+  WebToolProfileInfo,
   WebWorkspaceToolMode,
 } from '../bridge/event-bridge';
 import { surface } from '../design';
@@ -41,6 +42,7 @@ type PromptMenuItem =
 interface PromptInputProps {
   onSend: (message: string) => void;
   skills: WebSkillInfo[];
+  toolProfiles?: WebToolProfileInfo[];
   models: WebModelInfo[];
   model?: string;
   reasoningEffort?: string;
@@ -67,13 +69,6 @@ interface PromptSelectOption<T extends string> {
   value: T;
   label: string;
 }
-
-const TOOL_MODE_OPTIONS: Array<PromptSelectOption<WebWorkspaceToolMode>> = [
-  { value: 'all', label: 'All' },
-  { value: 'coding', label: 'Coding' },
-  { value: 'read-only', label: 'Read only' },
-  { value: 'none', label: 'None' },
-];
 
 const APPROVAL_MODE_OPTIONS: Array<PromptSelectOption<WebApprovalMode>> = [
   { value: 'interactive', label: 'Ask first' },
@@ -368,6 +363,7 @@ function SendIcon({ running }: { running: boolean }) {
 export function PromptInput({
   onSend,
   skills,
+  toolProfiles = [],
   models,
   model,
   reasoningEffort,
@@ -406,6 +402,7 @@ export function PromptInput({
     : status === 'running'
       ? 'Type a follow-up. Enter queues it after the current turn.'
       : 'Ask Cortx to inspect, change, or explain this workspace...';
+  const toolModeOptions = useMemo(() => profileSelectOptions(toolProfiles, toolMode), [toolProfiles, toolMode]);
   const menuItems = useMemo<PromptMenuItem[]>(() => [
     {
       kind: 'command',
@@ -423,13 +420,13 @@ export function PromptInput({
       disabled: status !== 'error',
       run: onResume,
     },
-    ...(['all', 'coding', 'read-only', 'none'] as const).map((mode) => ({
+    ...toolModeOptions.map((option) => ({
       kind: 'command' as const,
-      id: `tools-${mode}`,
-      label: `/tools ${mode}`,
-      detail: `Set tools to ${mode}`,
+      id: `tools-${option.value}`,
+      label: `/tools ${option.value}`,
+      detail: `Set tools to ${option.label}`,
       disabled: !canChangeModes,
-      run: () => onToolModeChange(mode),
+      run: () => onToolModeChange(option.value),
     })),
     ...([
       ['interactive', 'ask'] as const,
@@ -458,6 +455,7 @@ export function PromptInput({
     onToolModeChange,
     skills,
     status,
+    toolModeOptions,
   ]);
   const slashMenuOpen = !disabled && value.startsWith('/') && !value.includes('\n');
   const slashQuery = slashMenuOpen ? value.slice(1).trimStart() : '';
@@ -663,7 +661,7 @@ export function PromptInput({
             <PromptSelect
               label="Tools"
               value={toolMode}
-              options={TOOL_MODE_OPTIONS}
+              options={toolModeOptions}
               disabled={!canChangeModes}
               onChange={onToolModeChange}
             />
@@ -699,4 +697,28 @@ export function PromptInput({
       </div>
     </div>
   );
+}
+
+function profileSelectOptions(
+  profiles: WebToolProfileInfo[],
+  current: WebWorkspaceToolMode,
+): Array<PromptSelectOption<WebWorkspaceToolMode>> {
+  const options = profiles.map((profile) => ({
+    value: profile.id,
+    label: profile.name ?? labelFromToolProfileId(profile.id),
+  }));
+  if (current && !options.some((option) => option.value === current)) {
+    options.unshift({ value: current, label: labelFromToolProfileId(current) });
+  }
+  return options.length ? options : [{ value: 'none', label: 'None' }];
+}
+
+function labelFromToolProfileId(value: string): string {
+  if (!value) return 'None';
+  const label = value
+    .split(/[./:_-]+/)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase())
+    .join(' ');
+  return label.slice(0, 1).toUpperCase() + label.slice(1);
 }

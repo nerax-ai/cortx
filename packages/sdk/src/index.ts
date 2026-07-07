@@ -125,7 +125,7 @@ export type {
   AgentTracer,
 } from './runtime.js';
 
-export type { PluginModule, PluginContext, PluginManifest, InlinePlugin } from '@nerax-ai/plugin';
+export type { PluginModule, PluginContext, PluginManifest, PluginContribution, InlinePlugin } from '@nerax-ai/plugin';
 export type { SkillInfo } from './skill.js';
 export { formatToolSummary } from './tool-format.js';
 export type { FormatToolSummaryOptions } from './tool-format.js';

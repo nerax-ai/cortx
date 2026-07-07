@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { PluginRegistry } from '../../nerax/packages/plugin/src/index.ts';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 import { AgentStore } from '../packages/store/src/index';
 import { createServerRuntime, type ServerRuntimeHandle } from '../packages/server/src/server';
+import type { CortxExtensionType, CortxFactoryMap, CortxRegistry } from '../packages/runtime/src/index';
 import { EventBridge, EventBridgeError } from '../packages/web/src/bridge/event-bridge';
 import { RemoteRuntimeClient } from '../packages/tui/src/remote-client';
 
@@ -123,13 +125,25 @@ class ServerBackedEventSource {
   }
 }
 
-function createRuntimeHandle(input: {
+async function createWorkspaceToolRegistry(): Promise<CortxRegistry> {
+  const source = resolve(import.meta.dir, '../../cortx-plugins/workspace-tools');
+  const cleanSource = mkdtempSync(join(tmpdir(), 'cortx-smoke-workspace-tools-plugin-'));
+  cpSync(resolve(source, 'manifest.json'), resolve(cleanSource, 'manifest.json'));
+  cpSync(resolve(source, 'src'), resolve(cleanSource, 'src'), { recursive: true });
+  const registry = new PluginRegistry<CortxExtensionType, CortxFactoryMap>({
+    appName: `cortx-smoke-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  }) as CortxRegistry;
+  await registry.load(cleanSource);
+  return registry;
+}
+
+async function createRuntimeHandle(input: {
   language: LanguageClient;
   rootA: string;
   rootB?: string;
   stateDir: string;
   approvalMode?: 'interactive' | 'full-access';
-}): ServerRuntimeHandle {
+}): Promise<ServerRuntimeHandle> {
   return createServerRuntime({
     apiKey: 'root-key',
     apiKeys: [
@@ -152,6 +166,7 @@ function createRuntimeHandle(input: {
           ]
         : []),
     ],
+    registry: await createWorkspaceToolRegistry(),
     language: input.language,
     model: 'smoke-model',
     defaultWorkingDirectory: input.rootA,
@@ -226,7 +241,7 @@ describe('product dogfood smoke', () => {
     mkdirSync(rootB, { recursive: true });
     mkdirSync(stateDir, { recursive: true });
     createSkillPack(rootA);
-    const handle = createRuntimeHandle({
+    const handle = await createRuntimeHandle({
       rootA,
       rootB,
       stateDir,
@@ -300,7 +315,7 @@ describe('product dogfood smoke', () => {
     const stateDir = join(tmpRoot, 'state');
     mkdirSync(rootA, { recursive: true });
     mkdirSync(stateDir, { recursive: true });
-    const handle = createRuntimeHandle({
+    const handle = await createRuntimeHandle({
       rootA,
       stateDir,
       approvalMode: 'full-access',

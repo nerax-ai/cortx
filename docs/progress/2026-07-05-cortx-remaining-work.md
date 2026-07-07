@@ -11,7 +11,7 @@ language: zh-CN
 
 ## 当前判断
 
-Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最小 agent kernel，`@cortx/runtime` 承担多 session、多目录、workspace tools、skills、sub-agent、approval、AgentSpec 和 SkillPack 等 host 能力，server/TUI/Web 也已经按薄前端和 runtime host 分层。
+Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最小 agent kernel，`@cortx/runtime` 承担多 session、多目录、workspace tool 挂载策略、skills、sub-agent、approval、AgentSpec 和 SkillPack 等 host 能力，具体 workspace tools 已下沉到兄弟项目 `cortx-plugins/workspace-tools`，server/TUI/Web 也已经按薄前端和 runtime host 分层。
 
 因此当前缺口不再是“核心方向是否正确”，而是从架构底座走向长期可用产品所需的最后几块：真实端到端验证、TUI/Web 体验、SDK 易用性、AgentSpec/SkillPack 产品入口，以及更高阶的运维能力。
 
@@ -44,7 +44,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
 - 当前全量测试：`bun test` 通过，`830 pass / 0 fail / 2442 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
-- `packages/code` 已删除，workspace tools 已迁入 runtime-hosted capability
+- `packages/code` 已删除，workspace tools 已迁入 `cortx-plugins/workspace-tools` 官方插件；runtime 只保留 `toolMode` 到插件 `runtime.toolProfile` 的解析和挂载策略
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
 
 ## 总体完成度

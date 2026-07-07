@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'fs';
+import { cpSync, mkdtempSync, rmSync } from 'fs';
 import { mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
-import { DEFAULT_RUNTIME_CAPABILITIES, CortxRuntime, RuntimeError } from '../src/index';
+import { join, resolve } from 'path';
+import { PluginRegistry } from '../../../../nerax/packages/plugin/src/index.ts';
+import {
+  DEFAULT_RUNTIME_CAPABILITIES,
+  CortxRuntime,
+  RuntimeError,
+  type CortxExtensionType,
+  type CortxFactoryMap,
+  type CortxRegistry,
+} from '../src/index';
 import type {
   AgentEvent,
   AgentRunCheckpoint,
@@ -79,6 +87,18 @@ async function waitForEnvelope(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for ${type}`);
+}
+
+async function createWorkspaceToolRegistry(): Promise<CortxRegistry> {
+  const source = resolve(import.meta.dir, '../../../../cortx-plugins/workspace-tools');
+  const cleanSource = mkdtempSync(join(tmpdir(), 'cortx-runtime-workspace-tools-plugin-'));
+  cpSync(resolve(source, 'manifest.json'), resolve(cleanSource, 'manifest.json'));
+  cpSync(resolve(source, 'src'), resolve(cleanSource, 'src'), { recursive: true });
+  const registry = new PluginRegistry<CortxExtensionType, CortxFactoryMap>({
+    appName: `cortx-runtime-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  }) as CortxRegistry;
+  await registry.load(cleanSource);
+  return registry;
 }
 
 class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
@@ -732,6 +752,7 @@ describe('CortxRuntime sessions', () => {
       model: 'test-model',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
+      registry: await createWorkspaceToolRegistry(),
       toolMode: 'none',
       approvalMode: 'interactive',
       capabilities: { skills: false, subAgents: false, approval: true },
@@ -832,6 +853,7 @@ describe('CortxRuntime sessions', () => {
       model: 'test-model',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
+      registry: await createWorkspaceToolRegistry(),
       toolMode: 'none',
       approvalMode: 'interactive',
       capabilities: { skills: false, subAgents: false, approval: true },

@@ -40,7 +40,7 @@ flowchart TB
   Web["@cortx/web\nremote-only frontend"]
   Desktop["future desktop\nruntime embed / server client"]
   Official["official capabilities\nskills / sub-agent / approval"]
-  WorkspaceTools["runtime workspace-tools\nhost-mounted tool capability"]
+  WorkspaceTools["cortx-plugins/workspace-tools\nofficial tool plugin"]
   Plugins["user plugins\npolicies / tools / observers"]
 
   Runtime --> Core
@@ -121,7 +121,7 @@ Web：
 - remote-only。
 - 通过 server 控制 runtime session。
 - 不在浏览器里运行 local agent。
-- 不导入 core、runtime 或 runtime workspace-tools 执行本地文件工具。
+- 不导入 core、runtime 或 workspace tool 插件执行本地文件工具。
 
 未来 Desktop：
 
@@ -297,7 +297,7 @@ runtime 不应该假设：
 
 ## Workspace 与工具安全
 
-workspace 安全不依赖 UI 约定，而由 runtime 的 workspace-tools capability 共同保证。该 capability 现在是 runtime 内部能力，未来可以再抽成官方插件或可安装 tool pack，但不再作为独立 `code` 包存在。
+workspace 安全不依赖 UI 约定，而由 runtime 的 workspace 验证和官方 `@cortx-ai/workspace-tools` 插件共同保证。工具实现不再位于 runtime 内部，也不再作为独立 `code` 包存在。
 
 第一版必须满足：
 
@@ -307,7 +307,7 @@ workspace 安全不依赖 UI 约定，而由 runtime 的 workspace-tools capabil
 - 工具不能读写 sibling workspace 或 allowed root 外路径。
 - write/destructive 工具默认接入 approval policy。
 - 没有审批通道时，write/destructive 默认拒绝。
-- workspace-tools 作为 runtime-hosted capability，被 server、TUI local 和未来 Desktop 通过 runtime 间接复用；frontend 不直接装配这些工具。
+- workspace-tools 作为官方插件，被 server、TUI local 和未来 Desktop 通过 runtime 间接挂载；frontend 不直接装配这些工具。
 
 建议 tool mode：
 
@@ -427,7 +427,7 @@ TUI、Web、Desktop 应该共享同一套 session/action/event 语义。
 - server 不再出现自有 session manager。
 - server 不直接 new `Cortx` 绕过 runtime。
 - server 不直接导入或实现 workspace-tools，所有工具挂载都通过 runtime。
-- web 不导入 core、runtime 或 runtime workspace-tools。
+- web 不导入 core、runtime 或 workspace tool 插件。
 - TUI remote mode 不扫描本地 skill/workspace。
 - workspace tool path safety 覆盖 lexical、realpath、symlink escape。
 - write/destructive 无审批通道时默认拒绝。
@@ -442,7 +442,7 @@ TUI、Web、Desktop 应该共享同一套 session/action/event 语义。
 - server 所有 session action 都委托 runtime。
 - TUI local/remote 通过同一抽象操控 session。
 - Web remote-only，不导入本地 agent 执行包。
-- workspace tools 由 runtime 内部 workspace-tools capability 挂载，不由 UI 复制。
+- workspace tools 由 `cortx-plugins/workspace-tools` 提供实现，并由 runtime 按 session 挂载，不由 UI 复制。
 - core 不再包含 skills/sub-agent/default approval 产品默认能力，宿主能力由 runtime official capabilities 控制。
 - runtime event envelope 提供 sequence、timestamp、sessionId、runId 和 child lifecycle parent attribution。
 - AgentSpec/SkillPack v1 可作为数据资产启动 session。

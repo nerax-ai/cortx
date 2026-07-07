@@ -55,13 +55,15 @@ describe('architecture boundaries', () => {
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
       expect(
         deps['@cortx/code'],
-        `@cortx/${packageDir} should receive workspace tools through runtime`,
+        `@cortx/${packageDir} should receive workspace tools through runtime/plugin mounting`,
       ).toBeUndefined();
 
       const srcDir = join(import.meta.dir, '..', '..', packageDir, 'src');
       for (const file of await walk(srcDir)) {
         const source = await readFile(file, 'utf8');
-        expect(source, `${file} must not import runtime workspace-tools internals`).not.toContain('workspace-tools');
+        expect(source, `${file} must not import workspace tool implementation internals`).not.toMatch(
+          /from ['"].*runtime\/src\/workspace-tools/,
+        );
       }
     }
   });
@@ -83,7 +85,9 @@ describe('architecture boundaries', () => {
 
       expect(source, `${file} must not construct Cortx directly`).not.toMatch(/\bnew\s+Cortx\b/);
       expect(source, `${file} must not import workspace tool packs directly`).not.toContain('@cortx/code');
-      expect(source, `${file} must not import runtime workspace-tools internals`).not.toContain('workspace-tools');
+      expect(source, `${file} must not import workspace tool implementation internals`).not.toMatch(
+        /from ['"].*runtime\/src\/workspace-tools/,
+      );
     }
 
     expect(importsRuntime).toBe(true);
@@ -103,7 +107,7 @@ describe('architecture boundaries', () => {
 
   test('web source remains a remote-only client', async () => {
     const webSrc = join(import.meta.dir, '..', '..', 'web', 'src');
-    const forbidden = ['@cortx/core', '@cortx/runtime', '@cortx/code', 'workspace-tools'];
+    const forbidden = ['@cortx/core', '@cortx/runtime', '@cortx/code'];
 
     for (const file of await walk(webSrc)) {
       const source = await readFile(file, 'utf8');

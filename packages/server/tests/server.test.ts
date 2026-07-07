@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createServer, createServerRuntime, type ServerRuntimeHandle } from '../src/server';
 import { createLogger, createMemorySink } from '@nerax-ai/logger';
-import { FileDurableRunStore } from '@cortx/runtime';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { PluginRegistry } from '@nerax-ai/plugin';
+import { FileDurableRunStore, type CortxExtensionType, type CortxFactoryMap, type CortxRegistry } from '@cortx/runtime';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import type { ServerConfig } from '../src/types';
 import type { AgentEvent, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 
@@ -59,6 +60,18 @@ async function waitForCondition(predicate: () => boolean | Promise<boolean>, tim
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('Timed out waiting for condition');
+}
+
+async function createWorkspaceToolRegistry(): Promise<CortxRegistry> {
+  const source = resolve(import.meta.dir, '../../../../cortx-plugins/workspace-tools');
+  const cleanSource = mkdtempSync(join(tmpdir(), 'cortx-server-workspace-tools-plugin-'));
+  cpSync(resolve(source, 'manifest.json'), resolve(cleanSource, 'manifest.json'));
+  cpSync(resolve(source, 'src'), resolve(cleanSource, 'src'), { recursive: true });
+  const registry = new PluginRegistry<CortxExtensionType, CortxFactoryMap>({
+    appName: `cortx-server-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  }) as CortxRegistry;
+  await registry.load(cleanSource);
+  return registry;
 }
 
 async function readFirstSseJson(
@@ -130,8 +143,12 @@ describe('server routes', () => {
   let server: ReturnType<typeof Bun.serve> | undefined;
   let handle: ServerRuntimeHandle | undefined;
 
-  beforeAll(() => {
-    handle = createServerRuntime(config);
+  beforeAll(async () => {
+    handle = createServerRuntime({
+      ...config,
+      registry: await createWorkspaceToolRegistry(),
+      toolMode: 'all',
+    });
     server = Bun.serve({ port: config.port, fetch: handle.app.fetch });
   });
 
@@ -221,6 +238,19 @@ describe('server routes', () => {
         { value: 'xhigh', label: 'Extra High' },
       ]),
     }));
+  });
+
+  test('lists plugin-provided tool profiles', async () => {
+    const res = await fetch(`${BASE}/tool-profiles`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { toolProfiles: Array<{ id: string; tools: Array<{ use: string }> }> };
+    expect(body.toolProfiles.map((profile) => profile.id)).toEqual(['none', 'read-only', 'coding', 'all']);
+    expect(body.toolProfiles.find((profile) => profile.id === 'coding')?.tools.map((tool) => tool.use)).toEqual([
+      '@cortx-ai/workspace-tools/read',
+      '@cortx-ai/workspace-tools/bash',
+      '@cortx-ai/workspace-tools/edit',
+      '@cortx-ai/workspace-tools/write',
+    ]);
   });
 
   test('updates session model and reasoning without creating a new session', async () => {
@@ -357,6 +387,7 @@ describe('server routes', () => {
 
       const packHandle = createServerRuntime({
         ...config,
+        registry: await createWorkspaceToolRegistry(),
         defaultWorkingDirectory: specRoot,
         allowedWorkspaceRoots: [specRoot],
         agentSpecRoots: [specRoot],
@@ -1035,6 +1066,8 @@ describe('server scoped API keys', () => {
     const rootB = mkdtempSync(join(tmpdir(), 'cortx-server-root-b-'));
     const handle = createServerRuntime({
       ...config,
+      registry: await createWorkspaceToolRegistry(),
+      toolMode: 'all',
       apiKey: 'admin-key',
       defaultWorkingDirectory: rootA,
       allowedWorkspaceRoots: [rootA],
@@ -1133,6 +1166,8 @@ describe('server scoped API keys', () => {
     const rootA = mkdtempSync(join(tmpdir(), 'cortx-server-token-root-a-'));
     const handle = createServerRuntime({
       ...config,
+      registry: await createWorkspaceToolRegistry(),
+      toolMode: 'all',
       apiKey: 'admin-key',
       defaultWorkingDirectory: rootA,
       allowedWorkspaceRoots: [rootA],

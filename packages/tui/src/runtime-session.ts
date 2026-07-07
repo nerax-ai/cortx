@@ -8,6 +8,7 @@ import type {
   DiscoveredAgentSpec,
   InstalledSkillPack,
   PluginConfig,
+  WorkspaceToolMode,
 } from '@cortx/runtime';
 import {
   CortxRuntime,
@@ -59,6 +60,7 @@ export interface LocalRuntimeSessionOptions {
   workingDirectory: string;
   registry?: ProjectPluginRegistry | CortxRegistry;
   plugins?: PluginConfig[];
+  toolMode?: WorkspaceToolMode;
   logger?: Logger;
   skillPackRegistryPath?: string;
 }
@@ -341,7 +343,7 @@ export async function createLocalRuntimeSession(options: LocalRuntimeSessionOpti
     plugins: options.plugins,
     defaultWorkingDirectory: options.workingDirectory,
     allowedWorkspaceRoots: [options.workingDirectory],
-    toolMode: 'all',
+    toolMode: options.toolMode ?? 'none',
     approvalMode: 'interactive',
     logger: options.logger,
     skillPackRegistryPath,
@@ -353,6 +355,7 @@ export async function createLocalRuntimeSession(options: LocalRuntimeSessionOpti
     maxIterations: options.maxIterations,
     registry: options.registry as CortxRegistry | undefined,
     plugins: options.plugins,
+    toolMode: options.toolMode,
     metadata: { tuiMode: 'local' },
   });
   return new LocalRuntimeSessionAdapter(runtime, info.id, skillPackRegistryPath);

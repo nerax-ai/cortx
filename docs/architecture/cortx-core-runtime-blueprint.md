@@ -15,7 +15,7 @@ related_progress: docs/progress/2026-07-04-runtime-host-progress.md
 
 > `@cortx/core` 是单 agent 执行内核，`@cortx/runtime` 是多 session agent host，`@cortx/server` 是 runtime 的网络适配层，TUI/Web/Desktop 都是 thin frontend。
 
-这个设计的目标不是让 core 变得无所不包，而是让 core 足够小、足够强、足够稳定；让所有产品形态通过 runtime、server、官方 capability 和前端适配组合出来。
+这个设计的目标不是让 core 变得无所不包，而是让 core 足够小、足够强、足够稳定；让所有产品形态通过 runtime、server、官方插件、官方 capability 和前端适配组合出来。
 
 ## 核心判断
 
@@ -32,7 +32,7 @@ Cortx 未来需要同时服务两类完全不同的 agent：
 正确分层是：
 
 - `core` 只处理所有 agent 都绕不开的单 agent 执行语义。
-- `runtime` 处理真实产品运行时需要的 session、workspace、工具、安全、默认能力和事件缓存。
+- `runtime` 处理真实产品运行时需要的 session、workspace、工具挂载策略、安全、默认能力和事件缓存。
 - `server` 把 runtime 暴露给远程客户端。
 - `tui`、`web`、未来 `desktop` 只控制和展示 runtime session。
 
@@ -47,7 +47,7 @@ flowchart TB
   Web["@cortx/web\nremote-only frontend"]
   Desktop["future desktop\nembedded runtime or server client"]
   Capabilities["official capabilities\nskills / sub-agent / approval"]
-  WorkspaceTools["runtime workspace-tools\nhost-mounted tool capability"]
+  WorkspaceTools["cortx-plugins/workspace-tools\nofficial tool plugin"]
   Plugins["user plugins\npolicies / tools / observers"]
 
   Runtime --> Core
@@ -67,7 +67,7 @@ flowchart TB
 | 包 | 应该负责 | 不应该负责 |
 | --- | --- | --- |
 | `@cortx/core` | 单 agent loop、model streaming、tool pipeline、policy/transform/observer/error recovery、AbortSignal、timeout、checkpoint primitive、`AgentEvent` | 多 session map、workspace root、HTTP/SSE、TUI/Web/Desktop 状态、默认 coding 工具集、产品级审批 UX |
-| `@cortx/runtime` | session 生命周期、多目录、多 agent、workspace 验证、工具挂载、默认 capability、event history、prompt/steer/follow-up/answer/abort/resume | UI 渲染、HTTP 认证细节、终端快捷键、浏览器状态 |
+| `@cortx/runtime` | session 生命周期、多目录、多 agent、workspace 验证、工具挂载策略、默认 capability、event history、prompt/steer/follow-up/answer/abort/resume | 具体 workspace 工具实现、UI 渲染、HTTP 认证细节、终端快捷键、浏览器状态 |
 | `@cortx/server` | REST/SSE、认证、CORS、短期 SSE token、HTTP 错误格式化、日志脱敏 | 自己维护 session manager、自己 new `Cortx`、自己决定 workspace 策略、自己挂载工具 |
 | `@cortx/tui` | Ink UI、本地输入体验、历史消息、快捷键、local/remote adapter、审批表现 | 复制 server/runtime session manager、绕开 runtime 装配工具 |
 | `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行 local agent、访问本地 filesystem、导入 core/runtime/workspace-tools 执行本地能力 |
@@ -86,8 +86,8 @@ flowchart TB
 - 每个 session 独立绑定 working directory、model/profile、tool mode、approval mode、metadata 和 event stream。
 - 统一处理 `prompt`、`steer`、`follow-up`、`answer`、`abort`、`resume`。
 - 保存 bounded event history，让 Web/TUI/Desktop 可以迟到订阅或断线重连。
-- 验证 workspace root，并挂载 workspace tools。
-- 挂载默认 capability，例如 skills bridge、sub-agent、workspace-tools capability、approval policy。
+- 验证 workspace root，并按 `toolMode` 挂载官方 workspace tools 插件。
+- 挂载默认 capability，例如 skills bridge、sub-agent、approval policy。
 
 ### 2. Server 与前端薄化
 
@@ -103,7 +103,7 @@ TUI、Web、Desktop 不应该再各自理解“agent 如何运行”，它们只
 
 `@cortx/core` 继续保留最底层 agent 能力，但不再吸收 host 层职责。
 
-core 可以提供 extension hooks、tool pipeline、checkpoint primitive 和事件事实；但 skills discovery、默认 sub-agent、workspace-tools capability、approval UX、multi-session orchestration 都应该由 runtime 或官方 capability 挂载。
+core 可以提供 extension hooks、tool pipeline、checkpoint primitive 和事件事实；但 skills discovery、默认 sub-agent、workspace tools、approval UX、multi-session orchestration 都应该由 runtime、官方插件或官方 capability 挂载。
 
 ## Runtime Host Contract
 
@@ -213,7 +213,7 @@ runtime 必须保证：
 
 ## Workspace 与工具安全
 
-workspace 安全不应该由 UI 约定保证，而应该由 runtime 的 workspace-tools capability 共同保证。该 capability 现在内置在 runtime 中，未来可以再抽成官方插件或可安装 tool pack；不再保留独立 `code` 包。
+workspace 安全不应该由 UI 约定保证，而应该由 runtime 的 workspace 验证和官方 `@cortx-ai/workspace-tools` 插件共同保证。具体工具实现位于 `cortx-plugins/workspace-tools`，runtime 只保留按 session workspace 和 `toolMode` 挂载 contribution 的策略；不再保留独立 `code` 包。
 
 第一版要求：
 
@@ -223,7 +223,7 @@ workspace 安全不应该由 UI 约定保证，而应该由 runtime 的 workspac
 - 工具不能读写 sibling workspace 或 allowed root 外路径。
 - write/destructive 工具默认接入 approval policy。
 - 没有审批通道时，write/destructive 默认拒绝。
-- workspace-tools 作为 runtime-hosted capability，被 server、TUI local 和未来 Desktop 通过 runtime 间接复用；frontend 不直接装配这些工具。
+- workspace-tools 作为官方插件，被 server、TUI local 和未来 Desktop 通过 runtime 间接挂载；frontend 不直接装配这些工具。
 
 建议 tool mode：
 
@@ -322,7 +322,7 @@ Web 保持 remote-only：
 
 - 只连接 server。
 - 只消费 REST/SSE。
-- 不导入 core、runtime 或 runtime workspace-tools 来运行本地 agent。
+- 不导入 core、runtime 或 workspace tool 插件来运行本地 agent。
 - 不获得浏览器本地文件系统权限。
 - 可以展示多个 session、切换 session、发送 prompt/steer/follow-up/answer/abort/resume。
 
@@ -423,7 +423,7 @@ await runtime.prompt(session.sessionId, {
 - runtime 可以创建多个不同 workspace 的 session，并保证工具边界不串。
 - server 委托 runtime，不再拥有独立 session manager。
 - TUI local 和 remote 使用同一套 UI action adapter。
-- Web remote-only，不导入 core、runtime 或 runtime workspace-tools 执行本地能力。
+- Web remote-only，不导入 core、runtime 或 workspace tool 插件执行本地能力。
 - core 不导入 runtime/server/tui/web，也不拥有 workspace root 和 multi-session host。
 - write/destructive 工具默认受 approval/policy 控制。
 - invalid workspace、permission denied、session busy、session missing 等错误可被前端区分。

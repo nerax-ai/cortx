@@ -7,7 +7,6 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope, type SkillInfo } from '@cortx/sdk';
 import {
-  buildFileEditDetails,
   CortxRuntime,
   discoverAgentSpecs,
   installSkillPack,
@@ -21,6 +20,7 @@ import {
   type DiscoveredAgentSpec,
   type InstalledSkillPack,
   type RuntimeApprovalMode,
+  type RuntimeToolProfile,
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
   type RuntimeSessionUpdateRequest,
@@ -28,6 +28,7 @@ import {
 } from '@cortx/runtime';
 import type { ServerConfig } from './types.js';
 import { createAuthHandlers, getAuthPrincipal, type AuthPrincipal } from './auth.js';
+import { buildFileEditDetails } from './file-edit-details.js';
 
 export interface ServerRuntimeHandle {
   app: Hono;
@@ -518,7 +519,7 @@ function assertOptionalString(value: unknown, field: string): string | undefined
   return value;
 }
 
-const TOOL_MODE_RANK: Record<WorkspaceToolMode, number> = {
+const TOOL_MODE_RANK: Record<string, number> = {
   none: 0,
   'read-only': 1,
   coding: 2,
@@ -535,20 +536,67 @@ function assertWithinToolScope(
   requested: WorkspaceToolMode | undefined,
   allowed: WorkspaceToolMode | undefined,
   principal: AuthPrincipal,
+  profiles: RuntimeToolProfile[],
 ): void {
   if (!requested || !allowed) return;
-  const requestedRank = (TOOL_MODE_RANK as Record<string, number | undefined>)[requested];
-  if (requestedRank === undefined) {
-    throw new RuntimeError('invalid_request', 'toolMode must be one of: none, read-only, coding, all', {
-      toolMode: requested,
-    });
-  }
-  if (requestedRank <= TOOL_MODE_RANK[allowed]) return;
+  const requestedProfile = assertKnownToolProfile(requested, profiles);
+  const allowedProfile = assertKnownToolProfile(allowed, profiles);
+  if (requestedProfile.use === allowedProfile.use) return;
+  const requestedRank = TOOL_MODE_RANK[requestedProfile.id];
+  const allowedRank = TOOL_MODE_RANK[allowedProfile.id];
+  if (requestedRank !== undefined && allowedRank !== undefined && requestedRank <= allowedRank) return;
+  if (requestedProfile.id === 'none') return;
   throw new RuntimeError('permission_denied', 'toolMode is outside the current API key scope', {
     requested,
     allowed,
     principal: principal.id,
   });
+}
+
+function assertKnownToolProfile(mode: WorkspaceToolMode, profiles: RuntimeToolProfile[]): RuntimeToolProfile {
+  const matches = profiles.filter((profile) => matchesToolProfileMode(profile, mode));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new RuntimeError('invalid_request', `toolMode is ambiguous: ${mode}`, {
+      toolMode: mode,
+      matches: matches.map((profile) => profile.use),
+    });
+  }
+  throw new RuntimeError('invalid_request', `toolMode profile not found: ${mode}`, {
+    toolMode: mode,
+    availableToolModes: profiles.map((profile) => profile.id),
+  });
+}
+
+function matchesToolProfileMode(profile: RuntimeToolProfile, mode: WorkspaceToolMode): boolean {
+  return (
+    profile.id === mode ||
+    profile.use === mode ||
+    profile.pluginId === mode ||
+    (profile.pluginId ? `${profile.pluginId}/${profile.id}` === mode : false)
+  );
+}
+
+function isToolProfileWithinScope(
+  profile: RuntimeToolProfile,
+  allowed: WorkspaceToolMode | undefined,
+  profiles: RuntimeToolProfile[],
+): boolean {
+  if (!allowed) return true;
+  const allowedProfile = profiles.find((candidate) => matchesToolProfileMode(candidate, allowed));
+  if (!allowedProfile) return false;
+  if (profile.use === allowedProfile.use) return true;
+  const profileRank = TOOL_MODE_RANK[profile.id];
+  const allowedRank = TOOL_MODE_RANK[allowedProfile.id];
+  if (profile.id === 'none') return true;
+  return profileRank !== undefined && allowedRank !== undefined && profileRank <= allowedRank;
+}
+
+function filterToolProfilesForPrincipal(
+  profiles: RuntimeToolProfile[],
+  principal: AuthPrincipal | undefined,
+): RuntimeToolProfile[] {
+  return profiles.filter((profile) => isToolProfileWithinScope(profile, principal?.toolMode, profiles));
 }
 
 function assertWithinApprovalScope(
@@ -574,12 +622,14 @@ function assertWithinApprovalScope(
 function applyPrincipalSessionBounds<T extends RuntimeSessionCreateRequest | AgentSpec>(
   request: T,
   principal: AuthPrincipal | undefined,
+  profiles: RuntimeToolProfile[],
 ): T {
   const next = { ...request };
 
   if (principal?.toolMode) {
-    assertWithinToolScope(next.toolMode, principal.toolMode, principal);
-    next.toolMode = next.toolMode ?? principal.toolMode;
+    const toolMode = next.toolMode ?? principal.toolMode;
+    assertWithinToolScope(toolMode, principal.toolMode, principal, profiles);
+    next.toolMode = toolMode;
   }
 
   if (principal?.approvalMode) {
@@ -594,6 +644,7 @@ async function buildAuthorizedSessionRequest(
   c: Context,
   config: ServerConfig,
   body: Record<string, unknown>,
+  profiles: RuntimeToolProfile[],
 ): Promise<RuntimeSessionCreateRequest> {
   const principal = getAuthPrincipal(c);
   const requested = assertOptionalString(body.workingDirectory, 'workingDirectory');
@@ -604,13 +655,18 @@ async function buildAuthorizedSessionRequest(
       workingDirectory: workspace.workingDirectory,
     } as RuntimeSessionCreateRequest,
     principal,
+    profiles,
   ) as RuntimeSessionCreateRequest;
 }
 
-function buildAuthorizedSessionUpdateRequest(c: Context, body: Record<string, unknown>): RuntimeSessionUpdateRequest {
+function buildAuthorizedSessionUpdateRequest(
+  c: Context,
+  body: Record<string, unknown>,
+  profiles: RuntimeToolProfile[],
+): RuntimeSessionUpdateRequest {
   const principal = getAuthPrincipal(c);
   const request = { ...body } as RuntimeSessionUpdateRequest;
-  if (principal?.toolMode) assertWithinToolScope(request.toolMode, principal.toolMode, principal);
+  if (principal?.toolMode) assertWithinToolScope(request.toolMode, principal.toolMode, principal, profiles);
   if (principal?.approvalMode) assertWithinApprovalScope(request.approvalMode, principal.approvalMode, principal);
   return request;
 }
@@ -795,6 +851,7 @@ async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, 
     const authorizedSpec = applyPrincipalSessionBounds(
       { ...spec, workingDirectory: workspace.workingDirectory },
       principal,
+      await runtime.listToolProfiles(),
     ) as AgentSpec;
     return runtime.launchAgentSpec(authorizedSpec);
   });
@@ -813,6 +870,7 @@ async function launchInlineAgentSpec(runtime: CortxRuntime, config: ServerConfig
     const authorizedSpec = applyPrincipalSessionBounds(
       { ...spec, workingDirectory: workspace.workingDirectory },
       principal,
+      await runtime.listToolProfiles(),
     ) as AgentSpec;
     return runtime.launchAgentSpec(authorizedSpec);
   });
@@ -896,7 +954,9 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
   app.post('/sessions', async (c) => {
     try {
       const body = await readOptionalJson(c);
-      const session = await runtime.createSession(await buildAuthorizedSessionRequest(c, config, body));
+      const session = await runtime.createSession(
+        await buildAuthorizedSessionRequest(c, config, body, await runtime.listToolProfiles()),
+      );
       return c.json({ sessionId: session.id, session }, 201);
     } catch (error) {
       const response = errorResponse(error);
@@ -922,6 +982,16 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
   app.get('/agent-specs', async (c) => {
     try {
       return c.json({ agentSpecs: await listAuthorizedAgentSpecs(c, config) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.get('/tool-profiles', async (c) => {
+    try {
+      const profiles = filterToolProfilesForPrincipal(await runtime.listToolProfiles(), getAuthPrincipal(c));
+      return c.json({ toolProfiles: profiles });
     } catch (error) {
       const response = errorResponse(error);
       return c.json(response.body, response.status);
@@ -983,7 +1053,10 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     try {
       await getAuthorizedSession(runtime, c, config, id);
       const body = await readOptionalJson(c);
-      const session = await runtime.updateSession(id, buildAuthorizedSessionUpdateRequest(c, body));
+      const session = await runtime.updateSession(
+        id,
+        buildAuthorizedSessionUpdateRequest(c, body, await runtime.listToolProfiles()),
+      );
       return c.json({ session });
     } catch (error) {
       const response = errorResponse(error);

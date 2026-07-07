@@ -23,7 +23,7 @@ import {
 import { Cortx, type CortxRegistry, type PluginConfig } from '@cortx/core';
 import { RuntimeError, toRuntimeError } from './errors.js';
 import { DEFAULT_RUNTIME_CAPABILITIES, type RuntimeDefaultCapabilities } from './default-capabilities.js';
-import { createWorkspaceTools, parseWorkspaceToolMode } from './tool-mount.js';
+import { createWorkspaceToolPluginEntries, listRuntimeToolProfiles, parseWorkspaceToolMode } from './tool-mount.js';
 import type { WorkspaceToolMode } from './workspace-tool-mode.js';
 import { resolveWorkspace } from './workspace.js';
 import {
@@ -459,7 +459,7 @@ export class CortxRuntime {
     this.registry = options.registry;
     this.plugins = options.plugins;
     this.tools = options.tools ?? [];
-    this.toolMode = options.toolMode ?? 'all';
+    this.toolMode = options.toolMode ?? 'none';
     this.approvalMode = options.approvalMode ?? 'deny';
     this.capabilities = options.capabilities ?? DEFAULT_RUNTIME_CAPABILITIES;
     this.defaultWorkingDirectory = options.defaultWorkingDirectory ?? process.cwd();
@@ -749,6 +749,10 @@ export class CortxRuntime {
     const session = this.requireSession(sessionId);
     if (session.capabilities.skills === false) return [];
     return discoverSkills(session.workingDirectory, { skillPaths: session.skillPaths }, this.logger);
+  }
+
+  async listToolProfiles() {
+    return listRuntimeToolProfiles(this.registry);
   }
 
   getLocalState(sessionId: string): RuntimeSessionLocalState {
@@ -1322,19 +1326,23 @@ export class CortxRuntime {
       toolApprovalRequirements.set(wrapped, true);
       return wrapped;
     });
-    const workspaceTools = createWorkspaceTools(input.workingDirectory, input.toolMode);
-    for (const tool of workspaceTools) toolApprovalRequirements.set(tool, workspaceToolNeedsApproval(tool));
     const requestTools = input.requestTools.map((tool) => {
       const wrapped = requireApprovalForExternalTool(tool);
       toolApprovalRequirements.set(wrapped, true);
       return wrapped;
     });
-    const mountedTools = [...runtimeTools, ...workspaceTools, ...requestTools];
+    const mountedTools = [...runtimeTools, ...requestTools];
+    const toolProfilePluginEntries = await createWorkspaceToolPluginEntries(
+      input.workingDirectory,
+      input.toolMode,
+      input.registry ?? this.registry,
+    );
+    const pluginEntries = [...toolProfilePluginEntries, ...((input.plugins ?? this.plugins) ?? [])];
     const officialExtensions = await this.createOfficialExtensions({
       workingDirectory: input.workingDirectory,
       capabilities,
       skillPaths: input.skillPaths,
-      needsToolApproval: (tool) => (tool ? toolApprovalRequirements.get(tool) ?? true : true),
+      needsToolApproval: (tool) => (tool ? toolApprovalRequirements.get(tool) ?? workspaceToolNeedsApproval(tool) : true),
     });
     const extensions = officialExtensions.extensions;
 
@@ -1344,7 +1352,7 @@ export class CortxRuntime {
         model: input.model,
         reasoning: input.reasoningEffort ? { enabled: true, effort: input.reasoningEffort } : undefined,
         registry: input.registry ?? this.registry,
-        plugins: input.plugins ?? this.plugins,
+        plugins: pluginEntries,
         agentSessions: input.agentSessions,
         getTools: () => mountedTools,
         getExtensions: () => extensions,
@@ -1359,7 +1367,7 @@ export class CortxRuntime {
       contextWindowSource: input.contextWindowSource,
       systemPromptTokens: estimateTextTokens(input.system),
       toolDefinitionTokens: estimateToolDefinitionTokens(allModelTools),
-      toolCount: allModelTools.length,
+      toolCount: allModelTools.length + toolProfilePluginEntries.length,
       skillSummaryTokens: officialExtensions.skillSummaryTokens,
       skillCount: officialExtensions.skillCount,
     };
@@ -1371,7 +1379,7 @@ export class CortxRuntime {
       system: input.system,
       maxIterations: input.maxIterations,
       registry: input.registry ?? this.registry,
-      plugins: input.plugins ?? this.plugins,
+      plugins: pluginEntries,
       tools: mountedTools,
       extensions,
       workingDirectory: input.workingDirectory,

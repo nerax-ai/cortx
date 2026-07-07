@@ -216,7 +216,7 @@ Core 扩展点只描述“单 agent loop 内可以发生什么”。一个能力
 这能让同一个能力同时服务很小的 agent 和完整 coding agent 产品：
 
 - 小 agent 可以只传一份 prompt、少量 `tools` 和几个 policy。
-- TUI/server 可以用 runtime 默认能力挂载 workspace tools、skills bridge、sub-agent capability 和 approval policy。
+- TUI/server 可以用 runtime 默认能力挂载官方 workspace tools 插件、skills bridge、sub-agent capability 和 approval policy。
 - Web/Desktop 不需要知道能力如何实现，只消费 runtime 的 session/action/event contract。
 
 ### 什么时候写 Core 插件
@@ -233,7 +233,7 @@ Core 扩展点只描述“单 agent loop 内可以发生什么”。一个能力
 
 当能力依赖宿主配置或 workspace 时，放到 runtime mount 层：
 
-- 按 `toolMode` 装配 workspace tools。
+- 按 `toolMode` 装配 `@cortx-ai/workspace-tools` 的 contribution。
 - 按 `approvalMode` 决定 write/destructive 工具是否询问或默认拒绝。
 - 按 session working directory 发现 skills。
 - 按产品配置启用/禁用 sub-agent。

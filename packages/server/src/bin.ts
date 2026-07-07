@@ -3,7 +3,8 @@ import { PluginRegistry } from '@nerax-ai/plugin';
 import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
 import type { ContextUsageSource } from '@cortx/sdk';
-import { existsSync } from 'fs';
+import { cpSync, existsSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
 import { delimiter, dirname, parse, resolve } from 'path';
 import {
   FileDurableRunStore,
@@ -30,6 +31,7 @@ interface CortxConfig {
   apiKeys?: ServerAuthKey[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
+  workspaceToolsPlugin?: string | false;
   plugins?: string[];
   agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
   providers?: Array<{ id: string; use: string; options: Record<string, unknown> }>;
@@ -99,6 +101,28 @@ function resolveMaxSessions(config: CortxConfig): number {
   );
 }
 
+function resolveWorkspaceToolsPluginSource(config: CortxConfig, projectRoot: string): string | undefined {
+  if (config.workspaceToolsPlugin === false) return undefined;
+  if (typeof config.workspaceToolsPlugin === 'string' && config.workspaceToolsPlugin.trim()) {
+    return config.workspaceToolsPlugin.trim();
+  }
+  const envSource = process.env.CORTX_WORKSPACE_TOOLS_PLUGIN;
+  if (envSource?.trim()) return envSource.trim();
+  const candidate = resolve(projectRoot, '..', 'cortx-plugins', 'workspace-tools');
+  return existsSync(resolve(candidate, 'manifest.json')) ? candidate : undefined;
+}
+
+function cleanLocalPluginSource(source: string, prefix: string): string {
+  const localSource = source.startsWith('file:') ? source.slice(5) : source;
+  if (/^[a-z][a-z\d+.-]*:/i.test(localSource) && !localSource.startsWith('/')) return source;
+  const dir = resolve(localSource);
+  if (!existsSync(resolve(dir, 'manifest.json')) || !existsSync(resolve(dir, 'src'))) return source;
+  const cleanDir = mkdtempSync(resolve(tmpdir(), prefix));
+  cpSync(resolve(dir, 'manifest.json'), resolve(cleanDir, 'manifest.json'));
+  cpSync(resolve(dir, 'src'), resolve(cleanDir, 'src'), { recursive: true });
+  return cleanDir;
+}
+
 async function main() {
   const config = await loadServerConfig();
   if (!config) {
@@ -108,11 +132,19 @@ async function main() {
   }
 
   const apiKey = process.env.CORTX_API_KEY || 'cortx-dev-key';
+  const projectRoot = findProjectRoot(process.cwd());
+  const configuredWorkspaceToolsPluginSource = resolveWorkspaceToolsPluginSource(config, projectRoot);
+  const workspaceToolsPluginSource = configuredWorkspaceToolsPluginSource
+    ? cleanLocalPluginSource(configuredWorkspaceToolsPluginSource, 'cortx-workspace-tools-plugin-')
+    : undefined;
 
   const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({
     appName: 'cortx',
     logger: log,
   }) as CortxRegistry;
+  if (workspaceToolsPluginSource) {
+    await registry.load(workspaceToolsPluginSource);
+  }
   for (const source of config.plugins ?? []) {
     await registry.load(source);
   }
@@ -128,7 +160,7 @@ async function main() {
     await synax.addProvider(p);
   }
 
-  const defaultWorkingDirectory = resolve(config.workingDirectory ?? findProjectRoot(process.cwd()));
+  const defaultWorkingDirectory = resolve(config.workingDirectory ?? projectRoot);
   const configuredRoots = [...readEnvPathList('CORTX_WORKSPACE_ROOTS'), ...(config.allowedWorkspaceRoots ?? [])];
   const browseRoots = configuredRoots.length ? configuredRoots : [parse(defaultWorkingDirectory).root];
   const allowedWorkspaceRoots = [...new Set([...browseRoots, defaultWorkingDirectory].map((path) => resolve(path)))];
@@ -157,7 +189,7 @@ async function main() {
     defaultWorkingDirectory,
     allowedWorkspaceRoots,
     agentSpecRoots,
-    toolMode: config.toolMode ?? 'all',
+    toolMode: config.toolMode ?? (workspaceToolsPluginSource ? 'all' : 'none'),
     approvalMode: config.approvalMode ?? 'interactive',
     durableStore: new FileDurableRunStore(
       process.env.CORTX_DURABLE_DIR || resolve(defaultWorkingDirectory, '.cortx', 'runtime'),
@@ -183,6 +215,7 @@ async function main() {
   console.log(`  Idle TTL: ${idleTimeoutMs} ms\n`);
   console.log(`  Workspace: ${defaultWorkingDirectory}`);
   console.log(`  Roots: ${allowedWorkspaceRoots.join(', ')}\n`);
+  console.log(`  Workspace tools: ${workspaceToolsPluginSource ?? 'disabled'}\n`);
   console.log(`  AgentSpecs: ${agentSpecRoots.join(', ')}\n`);
 
   const keepAlive = setInterval(() => {}, 60 * 60 * 1000);

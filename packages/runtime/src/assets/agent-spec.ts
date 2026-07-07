@@ -60,7 +60,7 @@ export function parseAgentSpec(value: unknown): AgentSpec {
   assertOptionalString(spec, 'system');
   assertOptionalString(spec, 'model');
   assertOptionalString(spec, 'workingDirectory');
-  assertOptionalEnum(spec, 'toolMode', ['none', 'read-only', 'coding', 'all']);
+  assertOptionalString(spec, 'toolMode');
   assertOptionalEnum(spec, 'approvalMode', ['deny', 'interactive', 'full-access']);
   assertOptionalStringArray(spec, 'skillPaths');
   assertOptionalStringArray(spec, 'skillPacks');

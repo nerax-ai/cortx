@@ -219,7 +219,7 @@ function normalizeRuntimeEventEnvelope(value: Record<string, unknown>): RuntimeE
 }
 
 function parseToolMode(value: unknown): RuntimeSessionSnapshot['toolMode'] {
-  if (value === 'none' || value === 'read-only' || value === 'coding' || value === 'all') return value;
+  if (typeof value === 'string' && value.trim()) return value.trim();
   return 'none';
 }
 

@@ -13,6 +13,7 @@ import {
   type WebSkillPackInfo,
   type WebSkillPackInstallRequest,
   type WebSkillInfo,
+  type WebToolProfileInfo,
   type WebWorkspaceToolMode,
 } from './bridge/event-bridge';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -60,6 +61,7 @@ export function App() {
   const [sessions, setSessions] = useState<WebRuntimeSessionInfo[]>([]);
   const [agentSpecs, setAgentSpecs] = useState<WebAgentSpecInfo[]>([]);
   const [models, setModels] = useState<WebModelInfo[]>([]);
+  const [toolProfiles, setToolProfiles] = useState<WebToolProfileInfo[]>([]);
   const [sessionSkills, setSessionSkills] = useState<WebSkillInfo[]>([]);
   const [skillPacks, setSkillPacks] = useState<WebSkillPackInfo[]>([]);
   const [selectedSkillPackIds, setSelectedSkillPackIds] = useState<string[]>([]);
@@ -114,11 +116,13 @@ export function App() {
     });
     bridgeRef.current = bridge;
     try {
-      const [existing, availableModels] = await Promise.all([
+      const [existing, availableModels, availableToolProfiles] = await Promise.all([
         bridge.listSessions(),
         bridge.listModels().catch(() => [] as WebModelInfo[]),
+        bridge.listToolProfiles().catch(() => [] as WebToolProfileInfo[]),
       ]);
       setModels(availableModels);
+      setToolProfiles(availableToolProfiles);
       const target =
         [...existing].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0] ??
         await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' });
@@ -525,6 +529,7 @@ export function App() {
         sessions={sessions}
         agentSpecs={agentSpecs}
         models={models}
+        toolProfiles={toolProfiles}
         sessionSkills={sessionSkills}
         queuedPrompts={activeQueuedPrompts}
         skillPacks={skillPacks}

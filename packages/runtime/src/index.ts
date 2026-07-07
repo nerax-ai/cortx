@@ -5,10 +5,17 @@ export { RuntimeError, isRuntimeError, toRuntimeError } from './errors.js';
 export type { RuntimeErrorKind } from './errors.js';
 export { DEFAULT_RUNTIME_CAPABILITIES } from './default-capabilities.js';
 export type { RuntimeDefaultCapabilities } from './default-capabilities.js';
-export { createWorkspaceTools } from './tool-mount.js';
+export {
+  WORKSPACE_TOOLS_PLUGIN_ID,
+  WORKSPACE_TOOL_IDS,
+  RUNTIME_TOOL_PROFILE,
+  createWorkspaceToolPluginEntries,
+  listRuntimeToolProfiles,
+  parseWorkspaceToolMode,
+  workspaceToolUse,
+} from './tool-mount.js';
+export type { RuntimeToolProfile, RuntimeToolProfileToolRef, WorkspaceToolId } from './tool-mount.js';
 export type { WorkspaceToolMode } from './workspace-tool-mode.js';
-export { buildFileEditDetails } from './workspace-tools/index.js';
-export type { FileDiffLine, FileEditDetails } from './workspace-tools/index.js';
 export { resolveWorkspace, resolveWorkspaceRoot } from './workspace.js';
 export type { WorkspaceResolution } from './workspace.js';
 export { MemoryDurableRunStore } from './durable/memory-store.js';

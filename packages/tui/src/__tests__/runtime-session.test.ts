@@ -101,7 +101,7 @@ describe('TUI runtime session adapters', () => {
       workingDirectory: tmpDir,
       model: 'default',
       maxIterations: 9,
-      toolMode: 'all',
+      toolMode: 'none',
       approvalMode: 'interactive',
       isRunning: false,
     });

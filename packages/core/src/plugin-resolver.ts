@@ -22,6 +22,7 @@ import {
 import type { CortxConfig, CortxRegistry, PluginConfig } from './types.js';
 
 type RegistryExtension = ReturnType<CortxRegistry['listExtensions']>[number];
+type RegistryContribution = Awaited<ReturnType<CortxRegistry['listContributions']>>[number];
 type ExtensionValidatorMap = {
   [T in AgentExtensionType]: (value: unknown) => value is AgentRuntimeExtensionValue<T>;
 };
@@ -64,7 +65,7 @@ export async function resolveExtensions(
   if (!entries?.length) return resolved;
 
   for (const entry of entries) {
-    const extensions = findConfiguredExtensions(registry, entry);
+    const extensions = await findConfiguredExtensions(registry, entry);
     if (!extensions.length) throw new Error(`agent extension not found: "${entry.use}"`);
 
     for (const ext of extensions) {
@@ -98,16 +99,43 @@ function assertExtensionValue<T extends AgentExtensionType>(
   throw new Error(`agent extension "${ext.fullId}" (${ext.type}) returned an invalid contribution shape`);
 }
 
-function findConfiguredExtensions(registry: CortxRegistry, entry: PluginConfig): RegistryExtension[] {
-  const matches: RegistryExtension[] = [];
+async function findConfiguredExtensions(registry: CortxRegistry, entry: PluginConfig): Promise<RegistryExtension[]> {
+  const matches = new Map<string, RegistryExtension>();
   for (const type of AGENT_EXTENSION_TYPES) {
-    matches.push(...registry.listExtensions(type).filter((ext) => matchesConfiguredUse(ext, entry.use)));
+    for (const ext of registry.listExtensions(type).filter((candidate) => matchesConfiguredUse(candidate, entry.use))) {
+      matches.set(ext.fullId, ext);
+    }
   }
-  return matches;
+
+  const contributions = await registry.listContributions();
+  for (const contribution of contributions) {
+    if (!isAgentExtensionType(contribution.type)) continue;
+    if (!matchesConfiguredContribution(contribution, entry.use)) continue;
+    const ext = registry
+      .listExtensions(contribution.type)
+      .find((candidate) => candidate.fullId === contribution.fullId);
+    if (ext) matches.set(ext.fullId, ext);
+  }
+
+  return [...matches.values()];
 }
 
 function matchesConfiguredUse(ext: RegistryExtension, use: string): boolean {
   return ext.id === use || ext.fullId === use || ext.packageName === use;
+}
+
+function matchesConfiguredContribution(contribution: RegistryContribution, use: string): boolean {
+  return (
+    contribution.id === use ||
+    contribution.fullId === use ||
+    contribution.packageName === use ||
+    contribution.pluginId === use ||
+    `${contribution.pluginId}/${contribution.id}` === use
+  );
+}
+
+function isAgentExtensionType(value: string): value is AgentExtensionType {
+  return (AGENT_EXTENSION_TYPES as readonly string[]).includes(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
