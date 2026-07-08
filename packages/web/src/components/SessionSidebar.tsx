@@ -1,33 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Dialog } from '@base-ui-components/react/dialog';
-import type { AgentStatus, TokenUsage } from '@cortx/store';
-import { compactPath, compactSessionId, formatElapsed, formatTokenUsage, statusTone, surface } from '../design';
+import { compactPath, compactSessionId, surface } from '../design';
 import type {
-  WebAgentSpecInfo,
   WebRuntimeSessionInfo,
-  WebSkillPackInfo,
-  WebSkillPackInstallRequest,
   WebWorkspaceDirectoryListing,
 } from '../bridge/event-bridge';
 
 interface SessionSidebarProps {
-  status: AgentStatus;
   session: WebRuntimeSessionInfo | null;
   sessions: WebRuntimeSessionInfo[];
-  agentSpecs: WebAgentSpecInfo[];
-  skillPacks: WebSkillPackInfo[];
-  selectedSkillPackIds: string[];
   selectedWorkingDirectory: string | null;
-  tokenUsage: TokenUsage;
-  elapsed: number;
   onCreateSession: (request: {
     workingDirectory: string;
     skillPacks?: string[];
   }) => void | Promise<void>;
   onBrowseWorkspaceDirectories: (path?: string) => Promise<WebWorkspaceDirectoryListing>;
-  onLaunchAgentSpec: (path: string) => void | Promise<void>;
-  onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
-  onSkillPackSelectionChange: (ids: string[]) => void;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
   onDeleteSession: (sessionId: string) => void | Promise<void>;
@@ -54,13 +41,18 @@ interface DeleteSessionDialogContentProps {
   onConfirm: () => void | Promise<void>;
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-xs">
-      <span className="text-zinc-500">{label}</span>
-      <span className="min-w-0 truncate text-right text-zinc-800">{value}</span>
-    </div>
-  );
+interface AddProjectDialogProps {
+  open: boolean;
+  projectPath: string;
+  isAdding: boolean;
+  directoryListing: WebWorkspaceDirectoryListing | null;
+  directoryLoading: boolean;
+  directoryError: string | null;
+  projectError: string | null;
+  onOpenChange: (open: boolean) => void;
+  onProjectPathChange: (path: string) => void;
+  onLoadDirectories: (path?: string) => void | Promise<void>;
+  onSubmit: () => void | Promise<void>;
 }
 
 function truncatePromptTitle(value: string, max = 34): string {
@@ -160,54 +152,217 @@ export function DeleteSessionDialogContent({
   );
 }
 
+function AddProjectDialog({
+  open,
+  projectPath,
+  isAdding,
+  directoryListing,
+  directoryLoading,
+  directoryError,
+  projectError,
+  onOpenChange,
+  onProjectPathChange,
+  onLoadDirectories,
+  onSubmit,
+}: AddProjectDialogProps) {
+  return (
+    <Dialog.Root
+      open={open}
+      modal
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && isAdding) return;
+        onOpenChange(nextOpen);
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-zinc-950/20 backdrop-blur-sm" />
+        <Dialog.Popup
+          initialFocus
+          className={`fixed left-1/2 top-1/2 z-50 flex max-h-[82vh] w-[min(760px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl shadow-2xl shadow-zinc-300/60 ${surface.panel}`}
+        >
+          <form
+            className="flex min-h-0 flex-1 flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void onSubmit();
+            }}
+          >
+            <div className="border-b border-zinc-200 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <Dialog.Title className="text-sm font-semibold text-zinc-950">Add project</Dialog.Title>
+                  <Dialog.Description className="mt-1 text-xs text-zinc-500">
+                    Enter a server directory or choose one from the browser.
+                  </Dialog.Description>
+                </div>
+                <button
+                  type="button"
+                  disabled={isAdding}
+                  onClick={() => onOpenChange(false)}
+                  className={`rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-50 ${surface.focus}`}
+                >
+                  Close
+                </button>
+              </div>
+              <input
+                value={projectPath}
+                onChange={(event) => onProjectPathChange(event.target.value)}
+                placeholder="/Users/you/work/project"
+                className={`mt-3 h-9 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-xs text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
+              />
+              {projectError && (
+                <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs leading-4 text-rose-700">
+                  {projectError}
+                </div>
+              )}
+            </div>
+
+            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)]">
+              <div className="border-b border-zinc-200 bg-zinc-50 p-3 md:border-b-0 md:border-r">
+                <div className="mb-2 text-xs font-medium text-zinc-500">Roots</div>
+                <div className="space-y-1">
+                  {(directoryListing?.roots ?? []).map((root) => (
+                    <button
+                      key={root}
+                      type="button"
+                      title={root}
+                      onClick={() => void onLoadDirectories(root)}
+                      className={`w-full rounded-md px-2 py-1.5 text-left font-mono text-[11px] text-zinc-600 hover:bg-white hover:text-zinc-950 ${surface.focus}`}
+                    >
+                      <span className="block truncate">{compactPath(root)}</span>
+                    </button>
+                  ))}
+                  {!directoryListing?.roots.length && (
+                    <div className="rounded-md border border-dashed border-zinc-200 bg-white/60 px-2 py-2 text-[11px] leading-4 text-zinc-500">
+                      Loading roots...
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="min-h-0 overflow-y-auto p-3">
+                {directoryError && (
+                  <div className="mb-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                    {directoryError}
+                  </div>
+                )}
+                {directoryLoading ? (
+                  <div className="rounded-md border border-dashed border-zinc-200 px-3 py-8 text-center text-xs text-zinc-500">
+                    Loading directories...
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {directoryListing?.parent && (
+                      <button
+                        type="button"
+                        onClick={() => void onLoadDirectories(directoryListing.parent)}
+                        className={`w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-left text-xs text-zinc-700 hover:bg-white ${surface.focus}`}
+                      >
+                        ..
+                      </button>
+                    )}
+                    {(directoryListing?.entries ?? []).map((entry) => (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        title={entry.path}
+                        onClick={() => void onLoadDirectories(entry.path)}
+                        className={`w-full rounded-md border border-transparent px-3 py-2 text-left text-xs text-zinc-700 hover:border-zinc-200 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
+                      >
+                        <div className="truncate font-medium">{entry.name}</div>
+                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">{entry.path}</div>
+                      </button>
+                    ))}
+                    {!directoryListing?.entries.length && !directoryListing?.parent && (
+                      <div className="rounded-md border border-dashed border-zinc-200 px-3 py-8 text-center text-xs text-zinc-500">
+                        No folders
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3">
+              <button
+                type="button"
+                disabled={isAdding}
+                onClick={() => onOpenChange(false)}
+                className={`h-8 rounded-md border border-zinc-200 px-3 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-50 ${surface.focus}`}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!projectPath.trim() || isAdding}
+                className={`h-8 rounded-md bg-zinc-950 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 ${surface.focus}`}
+              >
+                {isAdding ? 'Adding...' : 'Add project'}
+              </button>
+            </div>
+          </form>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 export function SessionSidebar({
-  status,
   session,
   sessions,
-  agentSpecs,
-  skillPacks,
-  selectedSkillPackIds,
   selectedWorkingDirectory,
-  tokenUsage,
-  elapsed,
   onCreateSession,
   onBrowseWorkspaceDirectories,
-  onLaunchAgentSpec,
-  onInstallSkillPack,
-  onSkillPackSelectionChange,
   onSelectProject,
   onSwitchSession,
   onDeleteSession,
 }: SessionSidebarProps) {
-  const tone = statusTone(status);
   const [projectPath, setProjectPath] = useState('');
-  const [skillPackPath, setSkillPackPath] = useState('');
-  const [skillPackId, setSkillPackId] = useState('');
   const [isAdding, setIsAdding] = useState(false);
-  const [isInstallingPack, setIsInstallingPack] = useState(false);
-  const [isDirectoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const [isAddProjectOpen, setAddProjectOpen] = useState(false);
   const [directoryListing, setDirectoryListing] = useState<WebWorkspaceDirectoryListing | null>(null);
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState<string | null>(null);
-  const [launchingSpecPath, setLaunchingSpecPath] = useState<string | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<WebRuntimeSessionInfo | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
-  const [skillPackError, setSkillPackError] = useState<string | null>(null);
+  const [expandedProjects, setExpandedProjects] = useState<string[]>(
+    () => (selectedWorkingDirectory ? [selectedWorkingDirectory] : []),
+  );
   const projects = groupSessions(sessions);
 
+  useEffect(() => {
+    if (!selectedWorkingDirectory) return;
+    setExpandedProjects((current) =>
+      current.includes(selectedWorkingDirectory) ? current : [...current, selectedWorkingDirectory],
+    );
+  }, [selectedWorkingDirectory]);
+
+  function expandProject(workingDirectory: string) {
+    setExpandedProjects((current) => (current.includes(workingDirectory) ? current : [...current, workingDirectory]));
+  }
+
+  function toggleProject(workingDirectory: string) {
+    setExpandedProjects((current) =>
+      current.includes(workingDirectory)
+        ? current.filter((item) => item !== workingDirectory)
+        : [...current, workingDirectory],
+    );
+  }
+
   async function createProjectFromPath(workingDirectory: string) {
-    if (!workingDirectory || isAdding) return;
+    const path = workingDirectory.trim();
+    if (!path || isAdding) return;
     setIsAdding(true);
     setProjectError(null);
     try {
       await onCreateSession({
-        workingDirectory,
-        skillPacks: selectedSkillPackIds.length ? selectedSkillPackIds : undefined,
+        workingDirectory: path,
       });
+      expandProject(path);
       setProjectPath('');
-      setDirectoryPickerOpen(false);
+      setAddProjectOpen(false);
     } catch (err) {
       setProjectError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -233,47 +388,10 @@ export function SessionSidebar({
     }
   }
 
-  async function openDirectoryPicker() {
-    setDirectoryPickerOpen(true);
-    await loadDirectories();
-  }
-
-  async function submitSkillPack() {
-    const path = skillPackPath.trim();
-    const id = skillPackId.trim();
-    if (!path || isInstallingPack) return;
-    setIsInstallingPack(true);
-    setSkillPackError(null);
-    try {
-      await onInstallSkillPack({ path, id: id || undefined });
-      setSkillPackPath('');
-      setSkillPackId('');
-    } catch (err) {
-      setSkillPackError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsInstallingPack(false);
-    }
-  }
-
-  function toggleSkillPack(id: string) {
-    onSkillPackSelectionChange(
-      selectedSkillPackIds.includes(id)
-        ? selectedSkillPackIds.filter((item) => item !== id)
-        : [...selectedSkillPackIds, id],
-    );
-  }
-
-  async function launchSpec(spec: WebAgentSpecInfo) {
-    if (launchingSpecPath) return;
-    setLaunchingSpecPath(spec.path);
-    setActionError(null);
-    try {
-      await onLaunchAgentSpec(spec.path);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLaunchingSpecPath(null);
-    }
+  async function openAddProjectDialog() {
+    setAddProjectOpen(true);
+    setProjectError(null);
+    await loadDirectories(selectedWorkingDirectory ?? undefined);
   }
 
   function requestDeleteSession(item: WebRuntimeSessionInfo) {
@@ -310,30 +428,25 @@ export function SessionSidebar({
         </div>
       </div>
 
-      <div className="border-b border-zinc-200 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-zinc-900">Active Project</span>
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] ${tone.badgeClass}`}>{tone.label}</span>
-        </div>
-        <div className="space-y-2">
-          <DetailRow label="Model" value={session?.model ?? 'not connected'} />
-          <DetailRow label="Workspace" value={session ? compactPath(session.workingDirectory) : '-'} />
-          <DetailRow label="Session" value={compactSessionId(session?.id, 13)} />
-          <DetailRow label="Tools" value={session?.toolMode ?? '-'} />
-          <DetailRow label="Control" value={session?.approvalMode ?? '-'} />
-          <DetailRow label="Packs" value={session?.skillPacks?.length ? session.skillPacks.join(', ') : 'none'} />
-          <DetailRow label="Session Tokens" value={formatTokenUsage(tokenUsage)} />
-          <DetailRow label="Elapsed" value={formatElapsed(elapsed)} />
-        </div>
-      </div>
-
       <section className="min-h-0 flex-1 overflow-y-auto p-2">
         <div className="space-y-4">
           <div>
-            <div className="mb-2 px-1 text-xs font-medium text-zinc-500">Projects</div>
+            <div className="mb-2 flex items-center justify-between px-1">
+              <span className="text-xs font-medium text-zinc-500">Projects</span>
+              <button
+                type="button"
+                title="Add project"
+                aria-label="Add project"
+                onClick={() => void openAddProjectDialog()}
+                className={`grid h-6 w-6 place-items-center rounded-md text-sm leading-none text-zinc-400 hover:bg-white hover:text-zinc-900 ${surface.focus}`}
+              >
+                +
+              </button>
+            </div>
             <div className="space-y-2">
               {projects.map((project) => {
                 const activeProject = project.workingDirectory === selectedWorkingDirectory;
+                const expanded = expandedProjects.includes(project.workingDirectory);
                 return (
                   <div key={project.workingDirectory} className="space-y-1">
                     <div
@@ -343,8 +456,20 @@ export function SessionSidebar({
                     >
                       <button
                         type="button"
+                        title={expanded ? 'Collapse project' : 'Expand project'}
+                        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${compactPath(project.workingDirectory)}`}
+                        onClick={() => toggleProject(project.workingDirectory)}
+                        className={`ml-1 mt-1 grid h-6 w-5 shrink-0 place-items-center rounded-md text-[10px] text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 ${surface.focus}`}
+                      >
+                        {expanded ? '▾' : '▸'}
+                      </button>
+                      <button
+                        type="button"
                         title={project.workingDirectory}
-                        onClick={() => void onSelectProject(project.workingDirectory)}
+                        onClick={() => {
+                          expandProject(project.workingDirectory);
+                          void onSelectProject(project.workingDirectory);
+                        }}
                         className={`min-w-0 flex-1 px-2 py-2 text-left text-xs ${surface.focus}`}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -370,7 +495,7 @@ export function SessionSidebar({
                       </button>
                     </div>
 
-                    {activeProject && (
+                    {expanded && (
                       <div className="ml-2 space-y-1 border-l border-zinc-200 pl-2">
                         {project.sessions.map((item) => {
                           const activeSession = item.id === session?.id;
@@ -423,82 +548,6 @@ export function SessionSidebar({
             </div>
           </div>
 
-          {agentSpecs.length > 0 && (
-            <div>
-              <div className="mb-2 flex items-center justify-between px-1">
-                <span className="text-xs font-medium text-zinc-500">Agents</span>
-                <span className="text-[10px] text-zinc-400">{agentSpecs.length}</span>
-              </div>
-              <div className="space-y-1">
-                {agentSpecs.map((spec) => (
-                  <button
-                    key={spec.path}
-                    type="button"
-                    title={spec.path}
-                    disabled={Boolean(launchingSpecPath)}
-                    onClick={() => void launchSpec(spec)}
-                    className={`w-full rounded-md border border-transparent px-2 py-2 text-left text-xs text-zinc-600 transition-colors hover:border-zinc-200 hover:bg-white hover:text-zinc-950 disabled:cursor-wait disabled:opacity-60 ${surface.focus}`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-medium">{spec.name}</span>
-                      <span className="shrink-0 text-[10px] text-zinc-400">
-                        {launchingSpecPath === spec.path ? 'launching' : spec.toolMode ?? 'agent'}
-                      </span>
-                    </div>
-                    <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
-                      {spec.relativePath || compactPath(spec.path)}
-                    </div>
-                    <div className="mt-1 max-h-8 overflow-hidden text-[11px] leading-4 text-zinc-500">{spec.promptPreview}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <div className="mb-2 flex items-center justify-between px-1">
-              <span className="text-xs font-medium text-zinc-500">Skill Packs</span>
-              <span className="text-[10px] text-zinc-400">{skillPacks.length}</span>
-            </div>
-            <div className="space-y-1">
-              {skillPacks.length === 0 && (
-                <div className="rounded-md border border-dashed border-zinc-200 bg-white/60 px-2 py-2 text-[11px] leading-4 text-zinc-500">
-                  No packs installed
-                </div>
-              )}
-              {skillPacks.map((pack) => {
-                const selected = selectedSkillPackIds.includes(pack.id);
-                return (
-                  <label
-                    key={pack.id}
-                    className={`block rounded-md border px-2 py-2 text-xs transition-colors ${
-                      selected ? 'border-zinc-900 bg-white text-zinc-950' : 'border-transparent text-zinc-600 hover:border-zinc-200 hover:bg-white'
-                    }`}
-                  >
-                    <div className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() => toggleSkillPack(pack.id)}
-                        className={`mt-0.5 h-3.5 w-3.5 rounded border-zinc-300 ${surface.focus}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium">{pack.name ?? pack.id}</span>
-                          <span className="shrink-0 text-[10px] text-zinc-400">{pack.skillPaths.length} skills</span>
-                        </div>
-                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">{pack.id}</div>
-                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">
-                          {pack.sourcePath || compactPath(pack.path)}
-                        </div>
-                      </div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
           {actionError && (
             <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
               {actionError}
@@ -507,186 +556,23 @@ export function SessionSidebar({
         </div>
       </section>
 
-      <form
-        className="space-y-2 border-t border-zinc-200 p-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submitSkillPack();
-        }}
-      >
-        <div className="text-xs font-medium text-zinc-500">Install Skill Pack</div>
-        <input
-          value={skillPackPath}
-          onChange={(e) => {
-            setSkillPackPath(e.target.value);
-            if (skillPackError) setSkillPackError(null);
-          }}
-          placeholder="Pack path on server"
-          className={`h-9 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
-        />
-        <input
-          value={skillPackId}
-          onChange={(e) => {
-            setSkillPackId(e.target.value);
-            if (skillPackError) setSkillPackError(null);
-          }}
-          placeholder="Optional id"
-          className={`h-8 w-full rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
-        />
-        <button
-          type="submit"
-          disabled={!skillPackPath.trim() || isInstallingPack}
-          className={`h-8 w-full rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:text-zinc-300 ${surface.focus}`}
-        >
-          {isInstallingPack ? 'Installing...' : 'Install pack'}
-        </button>
-        {skillPackError && (
-          <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
-            {skillPackError}
-          </div>
-        )}
-      </form>
-
-      <form
-        className="space-y-2 border-t border-zinc-200 p-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submitProject();
-        }}
-      >
-        <div className="text-xs font-medium text-zinc-500">Add Project</div>
-        <div className="flex gap-2">
-          <input
-            value={projectPath}
-            readOnly
-            placeholder="Choose a directory"
-            className={`h-9 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 font-mono text-[11px] text-zinc-900 placeholder:text-zinc-400 ${surface.focus}`}
-          />
-          <button
-            type="button"
-            onClick={() => void openDirectoryPicker()}
-            className={`h-9 rounded-md border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-800 hover:bg-zinc-50 ${surface.focus}`}
-          >
-            Browse
-          </button>
-        </div>
-        {projectError && (
-          <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] leading-4 text-rose-700">
-            {projectError}
-          </div>
-        )}
-        <button
-          type="submit"
-          disabled={!projectPath.trim() || isAdding}
-          className={`h-8 w-full rounded-md bg-zinc-950 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 ${surface.focus}`}
-        >
-          {isAdding ? 'Adding...' : 'Add project'}
-        </button>
-      </form>
-
-      {isDirectoryPickerOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/25 p-4">
-          <div className="flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl">
-            <div className="border-b border-zinc-200 px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-zinc-950">Select Project Directory</div>
-                  <div className="mt-1 truncate font-mono text-xs text-zinc-500">
-                    {directoryListing?.current ?? 'Loading...'}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDirectoryPickerOpen(false)}
-                  className={`rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 ${surface.focus}`}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-
-            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)]">
-              <div className="border-b border-zinc-200 bg-zinc-50 p-3 md:border-b-0 md:border-r">
-                <div className="mb-2 text-xs font-medium text-zinc-500">Roots</div>
-                <div className="space-y-1">
-                  {(directoryListing?.roots ?? []).map((root) => (
-                    <button
-                      key={root}
-                      type="button"
-                      title={root}
-                      onClick={() => void loadDirectories(root)}
-                      className={`w-full rounded-md px-2 py-1.5 text-left font-mono text-[11px] text-zinc-600 hover:bg-white hover:text-zinc-950 ${surface.focus}`}
-                    >
-                      <span className="block truncate">{compactPath(root)}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="min-h-0 overflow-y-auto p-3">
-                {directoryError && (
-                  <div className="mb-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
-                    {directoryError}
-                  </div>
-                )}
-                {directoryLoading ? (
-                  <div className="rounded-md border border-dashed border-zinc-200 px-3 py-8 text-center text-xs text-zinc-500">
-                    Loading directories...
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {directoryListing?.parent && (
-                      <button
-                        type="button"
-                        onClick={() => void loadDirectories(directoryListing.parent)}
-                        className={`w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-left text-xs text-zinc-700 hover:bg-white ${surface.focus}`}
-                      >
-                        ..
-                      </button>
-                    )}
-                    {(directoryListing?.entries ?? []).map((entry) => (
-                      <button
-                        key={entry.path}
-                        type="button"
-                        title={entry.path}
-                        onClick={() => void loadDirectories(entry.path)}
-                        className={`w-full rounded-md border border-transparent px-3 py-2 text-left text-xs text-zinc-700 hover:border-zinc-200 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
-                      >
-                        <div className="truncate font-medium">{entry.name}</div>
-                        <div className="mt-1 truncate font-mono text-[10px] text-zinc-400">{entry.path}</div>
-                      </button>
-                    ))}
-                    {!directoryListing?.entries.length && !directoryListing?.parent && (
-                      <div className="rounded-md border border-dashed border-zinc-200 px-3 py-8 text-center text-xs text-zinc-500">
-                        No folders
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3">
-              <button
-                type="button"
-                onClick={() => setDirectoryPickerOpen(false)}
-                className={`h-8 rounded-md border border-zinc-200 px-3 text-xs text-zinc-700 hover:bg-zinc-50 ${surface.focus}`}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={!directoryListing?.current || isAdding}
-                onClick={() => directoryListing?.current && void createProjectFromPath(directoryListing.current)}
-                className={`h-8 rounded-md bg-zinc-950 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 ${surface.focus}`}
-              >
-                {isAdding ? 'Adding...' : 'Use this directory'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       </aside>
+      <AddProjectDialog
+        open={isAddProjectOpen}
+        projectPath={projectPath}
+        isAdding={isAdding}
+        directoryListing={directoryListing}
+        directoryLoading={directoryLoading}
+        directoryError={directoryError}
+        projectError={projectError}
+        onOpenChange={setAddProjectOpen}
+        onProjectPathChange={(path) => {
+          setProjectPath(path);
+          if (projectError) setProjectError(null);
+        }}
+        onLoadDirectories={loadDirectories}
+        onSubmit={submitProject}
+      />
       <DeleteSessionDialog
         sessionTitle={deleteCandidate ? sessionTitle(deleteCandidate) : null}
         isDeleting={Boolean(deletingSessionId)}

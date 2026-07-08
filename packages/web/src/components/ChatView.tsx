@@ -1,7 +1,15 @@
 import { useRef, useEffect, useMemo, useState, useLayoutEffect, useCallback } from 'react';
 import type { AgentState } from '@cortx/store';
 import type { ActivityEntry, TurnEntry, TokenUsage, ToolCallEntry, AgentSessionSummary } from '@cortx/store';
-import type { WebApprovalMode, WebModelInfo, WebSkillInfo, WebToolProfileInfo, WebWorkspaceToolMode } from '../bridge/event-bridge';
+import type {
+  WebAgentSpecInfo,
+  WebApprovalMode,
+  WebModelInfo,
+  WebSkillInfo,
+  WebSkillPackInfo,
+  WebToolProfileInfo,
+  WebWorkspaceToolMode,
+} from '../bridge/event-bridge';
 import { visibleActivityEntries } from '../activity';
 import type { ContextUsageSummary } from '../context-usage';
 import { ActivityCard } from './ActivityTimeline';
@@ -23,6 +31,9 @@ interface ChatViewProps {
   status: AgentStatus;
   error: string | undefined;
   skills: WebSkillInfo[];
+  agentSpecs: WebAgentSpecInfo[];
+  skillPacks: WebSkillPackInfo[];
+  selectedSkillPackIds: string[];
   toolProfiles?: WebToolProfileInfo[];
   models: WebModelInfo[];
   model?: string;
@@ -39,6 +50,8 @@ interface ChatViewProps {
   onSteerQueuedPrompt: (id: string) => void;
   onDeleteQueuedPrompt: (id: string) => void;
   onLoadOlderHistory: () => void | Promise<void>;
+  onLaunchAgentSpec: (path: string) => void | Promise<void>;
+  onSkillPackSelectionChange: (ids: string[]) => void;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: string | null) => void;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
@@ -109,6 +122,9 @@ export function ChatView({
   status,
   error,
   skills,
+  agentSpecs,
+  skillPacks,
+  selectedSkillPackIds,
   toolProfiles = [],
   models,
   model,
@@ -125,6 +141,8 @@ export function ChatView({
   onSteerQueuedPrompt,
   onDeleteQueuedPrompt,
   onLoadOlderHistory,
+  onLaunchAgentSpec,
+  onSkillPackSelectionChange,
   onModelChange,
   onReasoningEffortChange,
   onToolModeChange,
@@ -273,6 +291,9 @@ export function ChatView({
       <PromptInput
         onSend={onSend}
         skills={skills}
+        agentSpecs={agentSpecs}
+        skillPacks={skillPacks}
+        selectedSkillPackIds={selectedSkillPackIds}
         toolProfiles={toolProfiles}
         models={models}
         model={model}
@@ -290,6 +311,8 @@ export function ChatView({
         onResume={onResume}
         onSteerQueuedPrompt={onSteerQueuedPrompt}
         onDeleteQueuedPrompt={onDeleteQueuedPrompt}
+        onLaunchAgentSpec={onLaunchAgentSpec}
+        onSkillPackSelectionChange={onSkillPackSelectionChange}
         onModelChange={onModelChange}
         onReasoningEffortChange={onReasoningEffortChange}
         onToolModeChange={onToolModeChange}

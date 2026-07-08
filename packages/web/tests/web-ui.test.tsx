@@ -10,6 +10,7 @@ import { PromptInput, buildPromptHistory, shouldSubmitPromptInput } from '../src
 import { ApprovalDialogBody } from '../src/components/AskUserDialog';
 import { ConnectionStatus } from '../src/components/ConnectionStatus';
 import { ContextUsageButton, ContextUsagePanel, breakdownDotColor } from '../src/components/ContextUsageButton';
+import { InspectorPanel } from '../src/components/InspectorPanel';
 import { MarkdownContent } from '../src/components/MarkdownContent';
 import { DeleteSessionDialogContent } from '../src/components/SessionSidebar';
 import { ToolCard } from '../src/components/ToolCard';
@@ -67,11 +68,11 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
       percentUsed: 0.765,
       cacheHitRate: 20,
       breakdown: [
-        { key: 'messages', label: '消息', tokens: 700, source: 'runtime_estimate', count: 2 },
-        { key: 'tools', label: '系统工具', tokens: 500, source: 'runtime_estimate', count: 4 },
-        { key: 'skills', label: '技能', tokens: 200, source: 'runtime_estimate', count: 1 },
-        { key: 'system_prompt', label: '系统提示词', tokens: 100, source: 'runtime_estimate' },
-        { key: 'other', label: '其他', tokens: 30, source: 'provider' },
+        { key: 'messages', label: 'Messages', tokens: 700, source: 'runtime_estimate', count: 2 },
+        { key: 'tools', label: 'Tools', tokens: 500, source: 'runtime_estimate', count: 4 },
+        { key: 'skills', label: 'Skills', tokens: 200, source: 'runtime_estimate', count: 1 },
+        { key: 'system_prompt', label: 'System Prompt', tokens: 100, source: 'runtime_estimate' },
+        { key: 'other', label: 'Other', tokens: 30, source: 'provider' },
       ],
     },
     totalElapsed: 65,
@@ -253,17 +254,16 @@ describe('web desktop UI', () => {
 
     expect(html).toContain('Cortx');
     expect(html).toContain('Agent workspace');
+    expect(html).not.toContain('Active Project');
     expect(html).toContain('Projects');
-    expect(html).toContain('Agents');
-    expect(html).toContain('basic-reviewer');
-    expect(html).toContain('/review current changes');
-    expect(html).toContain('Skill Packs');
-    expect(html).toContain('Review Pack');
-    expect(html).toContain('Install Skill Pack');
-    expect(html).toContain('Install pack');
-    expect(html).toContain('Add Project');
-    expect(html).toContain('Browse');
+    expect(html).not.toContain('basic-reviewer');
+    expect(html).not.toContain('/review current changes');
+    expect(html).not.toContain('Skill Packs');
+    expect(html).not.toContain('Review Pack');
+    expect(html).not.toContain('Install Skill Pack');
+    expect(html).not.toContain('Install pack');
     expect(html).toContain('Add project');
+    expect(html).not.toContain('Browse');
     expect(html).toContain('Working');
     expect(html).toContain('Live');
     expect(html).toContain('event 7');
@@ -274,13 +274,18 @@ describe('web desktop UI', () => {
     expect(html).toContain('Delete Review current changes and summar…');
     expect(html).toContain('read-only');
     expect(html).toContain('full-access');
-    expect(html).toContain('Inspector');
+    expect(html).toContain('Panels');
+    expect(html).not.toContain('Inspector');
     expect(html).toContain('Tools');
-    expect(html).toContain('Agents');
+    expect(html).not.toContain('Turn Agents');
+    expect(html).not.toContain('Runtime facts and tool activity');
+    expect(html).not.toContain('Session Tokens');
+    expect(html).not.toContain('Elapsed');
     expect(html).toContain('Tool call');
     expect(html).toContain('Sub-agent');
     expect(html).toContain('I will inspect the changed files.');
     expect(html).toContain('Context');
+    expect(html).toContain('Templates');
     expect(html).toContain('GPT-5.5');
     expect(html).toContain('Queued for next turn');
     expect(html).toContain('Check the pending UI state after this turn');
@@ -288,6 +293,19 @@ describe('web desktop UI', () => {
     expect(html).toContain('Edit');
     expect(html).toContain('Delete');
     expect(html).toContain('Stop');
+  });
+
+  test('InspectorPanel renders as a tabbed workspace panel', () => {
+    const html = renderToStaticMarkup(
+      <InspectorPanel activity={makeState().activity} activeTab="activity" onTabChange={() => undefined} onClose={() => undefined} />,
+    );
+
+    expect(html).toContain('Activity');
+    expect(html).toContain('Review');
+    expect(html).toContain('Browser');
+    expect(html).toContain('Turn Tools');
+    expect(html).toContain('Turn Agents');
+    expect(html).toContain('Close panel');
   });
 
   test('DeleteSessionDialogContent renders the in-app confirmation content', () => {
@@ -313,25 +331,25 @@ describe('web desktop UI', () => {
       <ContextUsagePanel summary={summary!} sessionTokenUsage={{ inputTokens: 1530, outputTokens: 220, cacheReadTokens: 470 }} />,
     );
 
-    expect(html).toContain('当前请求上下文');
+    expect(html).toContain('Current Request Context');
     expect(html).not.toContain('default');
-    expect(html).not.toContain('模型配置');
-    expect(html).toContain('显示更多');
+    expect(html).not.toContain('Model metadata');
+    expect(html).toContain('Show more');
     expect(html).toContain('0.8%');
-    expect(html).toContain('缓存命中率');
+    expect(html).toContain('Cache Hit Rate');
     expect(html).toContain('23.5%');
-    expect(html.match(/命中率/g)?.length).toBe(1);
-    expect(html.indexOf('显示更多')).toBeLessThan(html.indexOf('缓存命中率'));
-    expect(html).not.toContain('本轮');
-    expect(html).not.toContain('会话');
-    expect(html).not.toContain('输入');
-    expect(html).not.toContain('输出');
-    expect(html).not.toContain('缓存读');
-    expect(html).not.toContain('缓存写');
-    expect(html).not.toContain('消息');
-    expect(html).not.toContain('系统工具');
-    expect(html).not.toContain('技能');
-    expect(html).not.toContain('系统提示词');
+    expect(html.match(/Hit Rate/g)?.length).toBe(1);
+    expect(html.indexOf('Show more')).toBeLessThan(html.indexOf('Cache Hit Rate'));
+    expect(html).not.toContain('This Turn');
+    expect(html).not.toContain('Session');
+    expect(html).not.toContain('Input');
+    expect(html).not.toContain('Output');
+    expect(html).not.toContain('Cache Read');
+    expect(html).not.toContain('Cache Write');
+    expect(html).not.toContain('Messages');
+    expect(html).not.toContain('Tools');
+    expect(html).not.toContain('Skills');
+    expect(html).not.toContain('System Prompt');
     expect(html).not.toContain('Provider');
   });
 
@@ -363,11 +381,11 @@ describe('web desktop UI', () => {
             percentUsed: 73.84453125,
             cacheHitRate: 99.97888959256913,
             breakdown: [
-              { key: 'messages', label: '消息', tokens: 93604, source: 'runtime_estimate', count: 145 },
-              { key: 'tools', label: '系统工具', tokens: 393, source: 'runtime_estimate', count: 5 },
-              { key: 'skills', label: '技能', tokens: 500, source: 'runtime_estimate', count: 43 },
-              { key: 'system_prompt', label: '系统提示词', tokens: 24, source: 'runtime_estimate' },
-              { key: 'other', label: '其他', tokens: 0, source: 'provider' },
+              { key: 'messages', label: 'Messages', tokens: 93604, source: 'runtime_estimate', count: 145 },
+              { key: 'tools', label: 'Tools', tokens: 393, source: 'runtime_estimate', count: 5 },
+              { key: 'skills', label: 'Skills', tokens: 500, source: 'runtime_estimate', count: 43 },
+              { key: 'system_prompt', label: 'System Prompt', tokens: 24, source: 'runtime_estimate' },
+              { key: 'other', label: 'Other', tokens: 0, source: 'provider' },
             ],
           },
         },
@@ -398,12 +416,12 @@ describe('web desktop UI', () => {
       />,
     );
 
-    expect(html).toContain('读取 src/example.ts');
-    expect(html).toContain('读取内容');
+    expect(html).toContain('Read src/example.ts');
+    expect(html).toContain('Read content');
     expect(html).toContain('const answer = 42;');
     expect(html).toContain('offset 3');
     expect(html).toContain('limit 2');
-    expect(html).toContain('原始详情');
+    expect(html).toContain('Raw details');
   });
 
   test('ToolCard renders write tools as added file content', () => {
@@ -418,9 +436,9 @@ describe('web desktop UI', () => {
       />,
     );
 
-    expect(html).toContain('写入 src/new-file.ts');
-    expect(html).toContain('写入内容');
-    expect(html).toContain('+1 行');
+    expect(html).toContain('Write src/new-file.ts');
+    expect(html).toContain('Written content');
+    expect(html).toContain('+1 lines');
     expect(html).toContain('export const name = &quot;cortx&quot;;');
     expect(html).toContain('Wrote 29 bytes to src/new-file.ts');
   });
@@ -453,16 +471,16 @@ describe('web desktop UI', () => {
       />,
     );
 
-    expect(html).toContain('编辑 src/example.ts');
-    expect(html).toContain('编辑对比');
-    expect(html).toContain('第 10 行');
-    expect(html).toContain('修改位置 第 10 行');
+    expect(html).toContain('Edit src/example.ts');
+    expect(html).toContain('Edit diff');
+    expect(html).toContain('Line 10');
+    expect(html).toContain('Changed at Line 10');
     expect(html).toContain('@@ -8,3 +8,4 @@');
     expect(html).toContain('old');
     expect(html).toContain('new');
-    expect(html).toContain('-0 +1 行');
-    expect(html).not.toContain('原内容');
-    expect(html).not.toContain('新内容');
+    expect(html).toContain('-0 +1 lines');
+    expect(html).not.toContain('Old content');
+    expect(html).not.toContain('New content');
     expect(html).toContain('const name = &quot;cortx&quot;;');
     expect(html).toContain('const status = &quot;draft&quot;;');
     expect(html).toContain('const ready = true;');
@@ -476,8 +494,8 @@ describe('web desktop UI', () => {
           toolName: 'edit',
           input: {
             path: 'hello.txt',
-            oldText: '再次编辑，又添加了一行！',
-            newText: '再次编辑，又添加了一行！\n文件内容越来越丰富了。',
+            oldText: 'Edited again, adding one more line!',
+            newText: 'Edited again, adding one more line!\nThe file is becoming richer.',
           },
           result: 'Edited hello.txt',
           status: 'complete',
@@ -485,15 +503,15 @@ describe('web desktop UI', () => {
       />,
     );
 
-    expect(html).toContain('编辑 hello.txt');
-    expect(html).toContain('编辑对比');
-    expect(html).toContain('输入片段 第 2 行');
+    expect(html).toContain('Edit hello.txt');
+    expect(html).toContain('Edit diff');
+    expect(html).toContain('Input fragment Line 2');
     expect(html).toContain('@@ -1,1 +1,2 @@');
-    expect(html).toContain('-0 +1 行');
-    expect(html).toContain('再次编辑，又添加了一行！');
-    expect(html).toContain('文件内容越来越丰富了。');
-    expect(html).not.toContain('原内容');
-    expect(html).not.toContain('新内容');
+    expect(html).toContain('-0 +1 lines');
+    expect(html).toContain('Edited again, adding one more line!');
+    expect(html).toContain('The file is becoming richer.');
+    expect(html).not.toContain('Old content');
+    expect(html).not.toContain('New content');
     expect(html).not.toContain('md:grid-cols-2');
   });
 
@@ -529,12 +547,12 @@ describe('web desktop UI', () => {
       />,
     );
 
-    expect(html).toContain('第 42 行');
-    expect(html).toContain('修改位置 第 42 行');
+    expect(html).toContain('Line 42');
+    expect(html).toContain('Changed at Line 42');
     expect(html).toContain('@@ -40,4 +40,4 @@');
     expect(html).toContain('draft');
     expect(html).toContain('ready');
-    expect(html).toContain('-1 +1 行');
+    expect(html).toContain('-1 +1 lines');
   });
 
   test('breakdownDotColor uses one neutral theme with percent-based depth', () => {
@@ -562,11 +580,11 @@ describe('web desktop UI', () => {
       percentUsed: 0.3109375,
       cacheHitRate: 78.7,
       breakdown: [
-        { key: 'messages' as const, label: '消息', tokens: 259, source: 'runtime_estimate' as const, count: 6 },
-        { key: 'tools' as const, label: '系统工具', tokens: 876, source: 'runtime_estimate' as const, count: 9 },
-        { key: 'skills' as const, label: '技能', tokens: 500, source: 'runtime_estimate' as const, count: 42 },
-        { key: 'system_prompt' as const, label: '系统提示词', tokens: 24, source: 'runtime_estimate' as const },
-        { key: 'other' as const, label: '其他', tokens: 0, source: 'provider' as const },
+        { key: 'messages' as const, label: 'Messages', tokens: 259, source: 'runtime_estimate' as const, count: 6 },
+        { key: 'tools' as const, label: 'Tools', tokens: 876, source: 'runtime_estimate' as const, count: 9 },
+        { key: 'skills' as const, label: 'Skills', tokens: 500, source: 'runtime_estimate' as const, count: 42 },
+        { key: 'system_prompt' as const, label: 'System Prompt', tokens: 24, source: 'runtime_estimate' as const },
+        { key: 'other' as const, label: 'Other', tokens: 0, source: 'provider' as const },
       ],
     };
 
@@ -591,7 +609,7 @@ describe('web desktop UI', () => {
     expect(html).toContain('Context usage 0%');
     expect(html).toContain('stroke="#e4e4e7"');
     expect(html).not.toContain('border border-zinc-200');
-    expect(html).not.toContain('暂无上下文占用数据');
+    expect(html).not.toContain('No context usage data yet');
     expect(html).not.toContain('>0</span>');
     expect(html).not.toContain('>–</span>');
   });
@@ -608,20 +626,20 @@ describe('web desktop UI', () => {
       />,
     );
 
-    expect(html).toContain('0/20万');
+    expect(html).toContain('0/200k');
     expect(html).toContain('(0%)');
-    expect(html).toContain('显示更多');
-    expect(html).toContain('缓存命中率');
-    expect(html.match(/命中率/g)?.length).toBe(1);
-    expect(html.indexOf('显示更多')).toBeLessThan(html.indexOf('缓存命中率'));
+    expect(html).toContain('Show more');
+    expect(html).toContain('Cache Hit Rate');
+    expect(html.match(/Hit Rate/g)?.length).toBe(1);
+    expect(html.indexOf('Show more')).toBeLessThan(html.indexOf('Cache Hit Rate'));
     expect(html).toContain('bg-white');
     expect(html).toContain('bg-zinc-200/90');
-    expect(html).not.toContain('本轮');
-    expect(html).not.toContain('会话');
-    expect(html).not.toContain('输入');
-    expect(html).not.toContain('缓存写');
-    expect(html).not.toContain('暂无数据');
-    expect(html).not.toContain('未知/20万');
+    expect(html).not.toContain('This Turn');
+    expect(html).not.toContain('Session');
+    expect(html).not.toContain('Input');
+    expect(html).not.toContain('Cache Write');
+    expect(html).not.toContain('No data');
+    expect(html).not.toContain('Unknown/200k');
     expect(html).not.toContain('Provider');
   });
 
@@ -640,8 +658,6 @@ describe('web desktop UI', () => {
           isRunning: false,
           eventCount: 7,
         }}
-        tokenUsage={{ inputTokens: 100, outputTokens: 20 }}
-        elapsed={12}
         iteration={0}
         eventConnection={{
           phase: 'reconnecting',
@@ -667,8 +683,6 @@ describe('web desktop UI', () => {
           isRunning: false,
           eventCount: 7,
         }}
-        tokenUsage={{ inputTokens: 100, outputTokens: 20 }}
-        elapsed={12}
         iteration={0}
         eventConnection={{
           phase: 'live',
@@ -891,6 +905,7 @@ describe('web desktop UI', () => {
     expect(prompt).toContain('Ask Cortx to inspect');
     expect(prompt).toContain('Tools');
     expect(prompt).toContain('Control');
+    expect(prompt).toContain('Templates');
     expect(prompt).toContain('GPT-5.5');
     expect(prompt).toContain('Extra High');
     expect(prompt).not.toContain('New session');

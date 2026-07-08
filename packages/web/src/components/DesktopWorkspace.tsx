@@ -1,4 +1,5 @@
 import type { AgentState } from '@cortx/store';
+import { useState } from 'react';
 import type { QueuedPrompt } from './PromptInput';
 import type { ContextUsageSummary } from '../context-usage';
 import type {
@@ -10,14 +11,13 @@ import type {
   WebRuntimeSessionInfo,
   WebSkillInfo,
   WebSkillPackInfo,
-  WebSkillPackInstallRequest,
   WebToolProfileInfo,
   WebWorkspaceDirectoryListing,
   WebWorkspaceToolMode,
 } from '../bridge/event-bridge';
 import { surface } from '../design';
 import { ChatView } from './ChatView';
-import { InspectorPanel } from './InspectorPanel';
+import { InspectorPanel, type WorkspacePanelTab } from './InspectorPanel';
 import { SessionSidebar } from './SessionSidebar';
 import { WorkspaceHeader } from './WorkspaceHeader';
 
@@ -50,7 +50,6 @@ interface DesktopWorkspaceProps {
   }) => void | Promise<void>;
   onBrowseWorkspaceDirectories: (path?: string) => Promise<WebWorkspaceDirectoryListing>;
   onLaunchAgentSpec: (path: string) => void | Promise<void>;
-  onInstallSkillPack: (request: WebSkillPackInstallRequest) => void | Promise<void>;
   onSkillPackSelectionChange: (ids: string[]) => void;
   onSelectProject: (workingDirectory: string) => void | Promise<void>;
   onSwitchSession: (sessionId: string) => void | Promise<void>;
@@ -102,6 +101,37 @@ export function contextUsageForSession(
   };
 }
 
+function normalizePathForCompare(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  return path.replace(/\/+$/, '') || '/';
+}
+
+function pathWithin(path: string | undefined, root: string | undefined): boolean {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedRoot = normalizePathForCompare(root);
+  if (!normalizedPath || !normalizedRoot) return false;
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+}
+
+function filterAgentSpecsForWorkspace(
+  specs: WebAgentSpecInfo[],
+  workingDirectory: string | null,
+): WebAgentSpecInfo[] {
+  if (!workingDirectory) return specs;
+  return specs.filter((spec) => {
+    if (spec.workingDirectory) return normalizePathForCompare(spec.workingDirectory) === normalizePathForCompare(workingDirectory);
+    return pathWithin(spec.path, workingDirectory) || pathWithin(spec.sourceRoot, workingDirectory);
+  });
+}
+
+function filterSkillPacksForWorkspace(
+  packs: WebSkillPackInfo[],
+  workingDirectory: string | null,
+): WebSkillPackInfo[] {
+  if (!workingDirectory) return packs;
+  return packs.filter((pack) => pathWithin(pack.sourcePath || pack.path, workingDirectory));
+}
+
 export function DesktopWorkspace({
   state,
   session,
@@ -128,7 +158,6 @@ export function DesktopWorkspace({
   onCreateSession,
   onBrowseWorkspaceDirectories,
   onLaunchAgentSpec,
-  onInstallSkillPack,
   onSkillPackSelectionChange,
   onSelectProject,
   onSwitchSession,
@@ -139,25 +168,25 @@ export function DesktopWorkspace({
   onApprovalModeChange,
 }: DesktopWorkspaceProps) {
   const contextUsage = contextUsageForSession(state, session);
+  const workspaceAgentSpecs = filterAgentSpecsForWorkspace(agentSpecs, selectedWorkingDirectory);
+  const workspaceSkillPacks = filterSkillPacksForWorkspace(skillPacks, selectedWorkingDirectory);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  const [workspacePanelTab, setWorkspacePanelTab] = useState<WorkspacePanelTab>('activity');
+
+  function openWorkspacePanel(tab: WorkspacePanelTab) {
+    setWorkspacePanelTab(tab);
+    setWorkspacePanelOpen(true);
+  }
 
   return (
     <div className={`${surface.page} flex h-screen overflow-hidden`}>
       <div className="hidden w-[252px] shrink-0 md:block">
         <SessionSidebar
-          status={state.status}
           session={session}
           sessions={sessions}
-          agentSpecs={agentSpecs}
-          skillPacks={skillPacks}
-          selectedSkillPackIds={selectedSkillPackIds}
           selectedWorkingDirectory={selectedWorkingDirectory}
-          tokenUsage={state.tokenUsage}
-          elapsed={state.totalElapsed}
           onCreateSession={onCreateSession}
           onBrowseWorkspaceDirectories={onBrowseWorkspaceDirectories}
-          onLaunchAgentSpec={onLaunchAgentSpec}
-          onInstallSkillPack={onInstallSkillPack}
-          onSkillPackSelectionChange={onSkillPackSelectionChange}
           onSelectProject={onSelectProject}
           onSwitchSession={onSwitchSession}
           onDeleteSession={onDeleteSession}
@@ -168,13 +197,19 @@ export function DesktopWorkspace({
         <WorkspaceHeader
           status={state.status}
           session={session}
-          tokenUsage={state.tokenUsage}
-          elapsed={state.totalElapsed}
           iteration={state.iteration}
           eventConnection={eventConnection}
           onRecoverEventStream={onRecoverEventStream}
+          panelOpen={workspacePanelOpen}
+          activePanel={workspacePanelTab}
+          onOpenPanel={openWorkspacePanel}
+          onClosePanel={() => setWorkspacePanelOpen(false)}
         />
-        <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_344px]">
+        <div
+          className={`grid min-h-0 flex-1 grid-cols-1 ${
+            workspacePanelOpen ? 'xl:grid-cols-[minmax(0,1fr)_384px]' : ''
+          }`}
+        >
           <ChatView
             sessionId={session?.id ?? state.sessionId}
             messages={state.messages}
@@ -186,6 +221,9 @@ export function DesktopWorkspace({
             status={state.status}
             error={state.error}
             skills={sessionSkills}
+            agentSpecs={workspaceAgentSpecs}
+            skillPacks={workspaceSkillPacks}
+            selectedSkillPackIds={selectedSkillPackIds}
             toolProfiles={toolProfiles}
             models={models}
             model={session?.model}
@@ -202,20 +240,23 @@ export function DesktopWorkspace({
             onSteerQueuedPrompt={onSteerQueuedPrompt}
             onDeleteQueuedPrompt={onDeleteQueuedPrompt}
             onLoadOlderHistory={onLoadOlderHistory}
+            onLaunchAgentSpec={onLaunchAgentSpec}
+            onSkillPackSelectionChange={onSkillPackSelectionChange}
             onModelChange={onModelChange}
             onReasoningEffortChange={onReasoningEffortChange}
             onToolModeChange={onToolModeChange}
             onApprovalModeChange={onApprovalModeChange}
           />
-          <div className="hidden min-h-0 border-l border-zinc-200 xl:block">
-            <InspectorPanel
-              session={session}
-              status={state.status}
-              tokenUsage={state.tokenUsage}
-              elapsed={state.totalElapsed}
-              activity={state.activity}
-            />
-          </div>
+          {workspacePanelOpen && (
+            <div className="hidden min-h-0 border-l border-zinc-200 xl:block">
+              <InspectorPanel
+                activity={state.activity}
+                activeTab={workspacePanelTab}
+                onTabChange={setWorkspacePanelTab}
+                onClose={() => setWorkspacePanelOpen(false)}
+              />
+            </div>
+          )}
         </div>
       </main>
     </div>

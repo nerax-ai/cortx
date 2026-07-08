@@ -11,7 +11,6 @@ import {
   type WebRuntimeSessionInfo,
   type WebWorkspaceDirectoryListing,
   type WebSkillPackInfo,
-  type WebSkillPackInstallRequest,
   type WebSkillInfo,
   type WebToolProfileInfo,
   type WebWorkspaceToolMode,
@@ -44,6 +43,12 @@ function createQueuedPrompt(message: string): QueuedPrompt {
 
 function latestSession(items: WebRuntimeSessionInfo[]): WebRuntimeSessionInfo | undefined {
   return [...items].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+}
+
+function sameWorkspace(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  const normalize = (value: string) => value.replace(/\/+$/, '') || '/';
+  return normalize(left) === normalize(right);
 }
 
 export function App() {
@@ -216,13 +221,6 @@ export function App() {
     setAgentSpecs(await bridgeRef.current.listAgentSpecs());
   }
 
-  async function refreshSkillPacks() {
-    if (!bridgeRef.current) return;
-    const installed = await bridgeRef.current.listSkillPacks();
-    setSkillPacks(installed);
-    setSelectedSkillPackIds((current) => current.filter((id) => installed.some((pack) => pack.id === id)));
-  }
-
   async function refreshSessionSkills(sessionId = session?.id, bridge = bridgeRef.current) {
     if (!sessionId || !bridge) {
       setSessionSkills([]);
@@ -255,13 +253,16 @@ export function App() {
     skillPacks?: string[];
   }) {
     if (!bridgeRef.current) return;
+    const workingDirectory = request.workingDirectory.trim();
+    const skillPacks =
+      request.skillPacks ?? (sameWorkspace(workingDirectory, session?.workingDirectory) ? selectedSkillPacksForRequest() : undefined);
     const created = await bridgeRef.current.createSession({
-      workingDirectory: request.workingDirectory.trim(),
+      workingDirectory,
       model: session?.model,
       reasoningEffort: session?.reasoningEffort,
       toolMode,
       approvalMode,
-      skillPacks: request.skillPacks ?? selectedSkillPacksForRequest(),
+      skillPacks,
     });
     await bridgeRef.current.connect(created.id);
     const nextSessions = await bridgeRef.current.listSessions();
@@ -339,12 +340,6 @@ export function App() {
     await refreshSessionSkills(launched.id);
     await refreshSessions();
     await refreshAgentSpecs();
-  }
-
-  async function installSkillPack(request: WebSkillPackInstallRequest) {
-    if (!bridgeRef.current) return;
-    await bridgeRef.current.installSkillPack(request);
-    await Promise.all([refreshSkillPacks(), refreshAgentSpecs()]);
   }
 
   async function updateActiveSession(request: {
@@ -549,7 +544,6 @@ export function App() {
         onCreateSession={createWorkspaceSession}
         onBrowseWorkspaceDirectories={listWorkspaceDirectories}
         onLaunchAgentSpec={launchAgentSpec}
-        onInstallSkillPack={installSkillPack}
         onSkillPackSelectionChange={handleSkillPackSelectionChange}
         onSelectProject={selectProject}
         onSwitchSession={switchSession}

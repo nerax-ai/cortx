@@ -1303,8 +1303,8 @@ describe('server scoped API keys', () => {
   test('lists discovered AgentSpec assets within the current API key workspace scope', async () => {
     const rootA = mkdtempSync(join(tmpdir(), 'cortx-server-discover-root-a-'));
     const rootB = mkdtempSync(join(tmpdir(), 'cortx-server-discover-root-b-'));
-    const agentsA = join(rootA, 'agents');
-    const agentsB = join(rootB, 'agents');
+    const agentsA = join(rootA, '.cortx', 'agents');
+    const agentsB = join(rootB, '.cortx', 'agents');
     mkdirSync(agentsA, { recursive: true });
     mkdirSync(agentsB, { recursive: true });
     writeFileSync(
@@ -1364,7 +1364,7 @@ describe('server scoped API keys', () => {
     const parent = mkdtempSync(join(tmpdir(), 'cortx-server-broad-root-'));
     const rootA = join(parent, 'project-a');
     const rootB = join(parent, 'project-b');
-    const agentsA = join(rootA, 'agents');
+    const agentsA = join(rootA, '.cortx', 'agents');
     const agentsB = join(rootB, 'agents');
     mkdirSync(agentsA, { recursive: true });
     mkdirSync(agentsB, { recursive: true });

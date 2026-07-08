@@ -3,14 +3,16 @@ import { createPortal } from 'react-dom';
 import { Select } from '@base-ui-components/react/select';
 import type { AgentStatus, TokenUsage } from '@cortx/store';
 import type {
+  WebAgentSpecInfo,
   WebApprovalMode,
   WebModelInfo,
   WebReasoningEffortOption,
   WebSkillInfo,
+  WebSkillPackInfo,
   WebToolProfileInfo,
   WebWorkspaceToolMode,
 } from '../bridge/event-bridge';
-import { surface } from '../design';
+import { compactPath, surface } from '../design';
 import type { ContextUsageSummary } from '../context-usage';
 import { ContextUsageButton } from './ContextUsageButton';
 import { ControlButton } from './ControlButton';
@@ -42,6 +44,9 @@ type PromptMenuItem =
 interface PromptInputProps {
   onSend: (message: string) => void;
   skills: WebSkillInfo[];
+  agentSpecs?: WebAgentSpecInfo[];
+  skillPacks?: WebSkillPackInfo[];
+  selectedSkillPackIds?: string[];
   toolProfiles?: WebToolProfileInfo[];
   models: WebModelInfo[];
   model?: string;
@@ -59,6 +64,8 @@ interface PromptInputProps {
   onResume: () => void;
   onSteerQueuedPrompt: (id: string) => void;
   onDeleteQueuedPrompt: (id: string) => void;
+  onLaunchAgentSpec?: (path: string) => void | Promise<void>;
+  onSkillPackSelectionChange?: (ids: string[]) => void | Promise<void>;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: string | null) => void;
   onToolModeChange: (mode: WebWorkspaceToolMode) => void;
@@ -348,6 +355,191 @@ function ModelSelector({
   );
 }
 
+function TemplateSelector({
+  agentSpecs,
+  skillPacks,
+  selectedSkillPackIds,
+  disabled,
+  onLaunchAgentSpec,
+  onSkillPackSelectionChange,
+}: {
+  agentSpecs: WebAgentSpecInfo[];
+  skillPacks: WebSkillPackInfo[];
+  selectedSkillPackIds: string[];
+  disabled?: boolean;
+  onLaunchAgentSpec?: (path: string) => void | Promise<void>;
+  onSkillPackSelectionChange?: (ids: string[]) => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ bottom: number; left: number } | null>(null);
+  const [launchingPath, setLaunchingPath] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const count = agentSpecs.length + skillPacks.length;
+  const canOpen = !disabled;
+
+  useLayoutEffect(() => {
+    if (!open || typeof window === 'undefined') return undefined;
+
+    function updatePosition() {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const panelWidth = 360;
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - panelWidth - 12));
+      const bottom = Math.max(12, window.innerHeight - rect.top + 8);
+      setPosition({ bottom, left });
+    }
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open]);
+
+  async function launch(spec: WebAgentSpecInfo) {
+    if (!onLaunchAgentSpec || launchingPath) return;
+    setLaunchingPath(spec.path);
+    setError(null);
+    try {
+      await onLaunchAgentSpec(spec.path);
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunchingPath(null);
+    }
+  }
+
+  function togglePack(id: string) {
+    const next = selectedSkillPackIds.includes(id)
+      ? selectedSkillPackIds.filter((item) => item !== id)
+      : [...selectedSkillPackIds, id];
+    void onSkillPackSelectionChange?.(next);
+  }
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="Open templates"
+        aria-expanded={open}
+        disabled={!canOpen}
+        onClick={() => setOpen((current) => !current)}
+        className={`flex h-7 items-center gap-1 rounded-md border border-transparent bg-white px-1.5 text-xs text-zinc-800 hover:border-zinc-200 disabled:cursor-not-allowed disabled:text-zinc-400 data-[popup-open]:border-zinc-300 ${surface.focus}`}
+      >
+        <span className="text-[11px] text-zinc-400">Templates</span>
+        <span className="font-medium text-zinc-800">{count}</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3 w-3 text-zinc-400">
+          <path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed z-[100] w-[360px] overflow-hidden rounded-xl border border-zinc-200 bg-white p-1.5 text-sm text-zinc-800 shadow-2xl shadow-zinc-200/80"
+            style={{
+              bottom: position?.bottom ?? 56,
+              left: position?.left ?? 12,
+            }}
+          >
+            <div className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-400">
+              Agent templates
+            </div>
+            <div className="max-h-56 overflow-y-auto">
+              {agentSpecs.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-zinc-200 px-2.5 py-3 text-xs text-zinc-400">
+                  No templates for this project
+                </div>
+              ) : (
+                agentSpecs.map((spec) => (
+                  <button
+                    key={spec.path}
+                    type="button"
+                    title={spec.path}
+                    disabled={Boolean(launchingPath)}
+                    onClick={() => void launch(spec)}
+                    className={`flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-50 ${surface.focus}`}
+                  >
+                    <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-zinc-100 text-[10px] font-semibold text-zinc-500">
+                      A
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium text-zinc-950">{spec.name}</span>
+                        <span className="shrink-0 text-[10px] text-zinc-400">
+                          {launchingPath === spec.path ? 'launching' : spec.toolMode ?? 'agent'}
+                        </span>
+                      </span>
+                      <span className="mt-0.5 block truncate font-mono text-[10px] text-zinc-400">
+                        {spec.relativePath || compactPath(spec.path)}
+                      </span>
+                      <span className="mt-1 block max-h-8 overflow-hidden text-[11px] leading-4 text-zinc-500">
+                        {spec.promptPreview}
+                      </span>
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div className="mt-1 border-t border-zinc-200 pt-1">
+              <div className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-400">
+                Skill packs
+              </div>
+              {skillPacks.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-zinc-200 px-2.5 py-3 text-xs text-zinc-400">
+                  No installed packs in this project
+                </div>
+              ) : (
+                <div className="max-h-40 overflow-y-auto">
+                  {skillPacks.map((pack) => {
+                    const selected = selectedSkillPackIds.includes(pack.id);
+                    return (
+                      <button
+                        key={pack.id}
+                        type="button"
+                        title={pack.sourcePath || pack.path}
+                        onClick={() => togglePack(pack.id)}
+                        className={`flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-zinc-50 ${surface.focus}`}
+                      >
+                        <span
+                          className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border text-[10px] ${
+                            selected ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 text-transparent'
+                          }`}
+                        >
+                          ✓
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="truncate font-medium text-zinc-950">{pack.name ?? pack.id}</span>
+                            <span className="shrink-0 text-[10px] text-zinc-400">{pack.skillPaths.length} skills</span>
+                          </span>
+                          <span className="mt-0.5 block truncate font-mono text-[10px] text-zinc-400">{pack.id}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {error && (
+              <div className="mt-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-700">
+                {error}
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 function SendIcon({ running }: { running: boolean }) {
   return running ? (
     <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5">
@@ -363,6 +555,9 @@ function SendIcon({ running }: { running: boolean }) {
 export function PromptInput({
   onSend,
   skills,
+  agentSpecs = [],
+  skillPacks = [],
+  selectedSkillPackIds = [],
   toolProfiles = [],
   models,
   model,
@@ -380,6 +575,8 @@ export function PromptInput({
   onResume,
   onSteerQueuedPrompt,
   onDeleteQueuedPrompt,
+  onLaunchAgentSpec,
+  onSkillPackSelectionChange,
   onModelChange,
   onReasoningEffortChange,
   onToolModeChange,
@@ -440,6 +637,14 @@ export function PromptInput({
       disabled: !canChangeModes,
       run: () => onApprovalModeChange(mode),
     })),
+    ...agentSpecs.map((spec) => ({
+      kind: 'command' as const,
+      id: `template-${spec.path}`,
+      label: `/template ${spec.name}`,
+      detail: spec.promptPreview || spec.relativePath || spec.path,
+      disabled: !onLaunchAgentSpec,
+      run: () => onLaunchAgentSpec?.(spec.path),
+    })),
     ...skills.map((skill) => ({
       kind: 'skill' as const,
       id: `skill-${skill.name}`,
@@ -450,9 +655,11 @@ export function PromptInput({
   ], [
     canChangeModes,
     onAbort,
+    onLaunchAgentSpec,
     onApprovalModeChange,
     onResume,
     onToolModeChange,
+    agentSpecs,
     skills,
     status,
     toolModeOptions,
@@ -671,6 +878,14 @@ export function PromptInput({
               options={APPROVAL_MODE_OPTIONS}
               disabled={!canChangeModes}
               onChange={onApprovalModeChange}
+            />
+            <TemplateSelector
+              agentSpecs={agentSpecs}
+              skillPacks={skillPacks}
+              selectedSkillPackIds={selectedSkillPackIds}
+              disabled={disabled}
+              onLaunchAgentSpec={onLaunchAgentSpec}
+              onSkillPackSelectionChange={onSkillPackSelectionChange}
             />
             <div className="ml-auto flex items-center gap-2">
               <ModelSelector

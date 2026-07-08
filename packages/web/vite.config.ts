@@ -13,6 +13,8 @@ export default defineConfig({
       '/agent-specs': 'http://localhost:3000',
       '/skill-packs': 'http://localhost:3000',
       '/workspaces': 'http://localhost:3000',
+      '/models': 'http://localhost:3000',
+      '/tool-profiles': 'http://localhost:3000',
       '/auth': 'http://localhost:3000',
       '/health': 'http://localhost:3000',
     },

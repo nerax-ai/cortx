@@ -983,28 +983,28 @@ export class CortxRuntime {
     const baseBreakdown: ContextUsageBreakdownEntry[] = existing?.breakdown?.length ? existing.breakdown : [
       {
         key: 'messages',
-        label: '消息',
+        label: 'Messages',
         tokens: messagesTokens,
         source: 'runtime_estimate',
         count: session.cortx.messages.length,
       },
       {
         key: 'tools',
-        label: '系统工具',
+        label: 'Tools',
         tokens: metadata.toolDefinitionTokens,
         source: 'runtime_estimate',
         count: metadata.toolCount,
       },
       {
         key: 'skills',
-        label: '技能',
+        label: 'Skills',
         tokens: metadata.skillSummaryTokens,
         source: 'runtime_estimate',
         count: metadata.skillCount,
       },
       {
         key: 'system_prompt',
-        label: '系统提示词',
+        label: 'System Prompt',
         tokens: metadata.systemPromptTokens,
         source: 'runtime_estimate',
       },
@@ -1020,7 +1020,7 @@ export class CortxRuntime {
       ...baseBreakdown.filter((row) => row.key !== 'other'),
       {
         key: 'other',
-        label: existingOther?.label ?? '其他',
+        label: existingOther?.label ?? 'Other',
         tokens: otherTokens,
         source: usedTokens === undefined ? 'unknown' : 'provider',
         description:

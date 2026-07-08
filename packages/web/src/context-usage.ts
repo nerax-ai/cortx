@@ -15,20 +15,20 @@ export function contextRowPercent(row: ContextUsageBreakdownEntry, summary: Cont
 }
 
 export function formatContextTokenCount(value: number | undefined): string {
-  if (value === undefined) return '未知';
-  if (value >= 10_000) {
-    const units = value / 10_000;
-    return `${Number.isInteger(units) ? units.toFixed(0) : units.toFixed(1)}万`;
+  if (value === undefined) return 'Unknown';
+  if (value >= 1_000_000) {
+    const units = value / 1_000_000;
+    return `${Number.isInteger(units) ? units.toFixed(0) : units.toFixed(1)}M`;
   }
   if (value >= 1_000) {
     const units = value / 1_000;
-    return `${Number.isInteger(units) ? units.toFixed(0) : units.toFixed(1)}千`;
+    return `${Number.isInteger(units) ? units.toFixed(0) : units.toFixed(1)}k`;
   }
   return value.toLocaleString();
 }
 
 export function formatContextPercent(value: number | undefined): string {
-  if (value === undefined) return '未知';
+  if (value === undefined) return 'Unknown';
   if (value <= 0) return '0%';
   const displayValue = Math.max(0.1, value);
   return `${Number.isInteger(displayValue) ? displayValue.toFixed(0) : displayValue.toFixed(1)}%`;
@@ -69,17 +69,17 @@ export function sessionCacheHitRate(usage: TokenUsage | undefined): number | und
 export function formatContextSource(source: ContextUsageSource | undefined): string {
   switch (source) {
     case 'configured':
-      return '配置';
+      return 'Configured';
     case 'model_metadata':
-      return '模型配置';
+      return 'Model metadata';
     case 'provider':
       return 'Provider';
     case 'runtime_exact':
       return 'Runtime';
     case 'runtime_estimate':
-      return 'Runtime 估算';
+      return 'Runtime estimate';
     case 'unknown':
     default:
-      return '未知';
+      return 'Unknown';
   }
 }

@@ -1,27 +1,18 @@
 import { useState, type ReactNode } from 'react';
 import { Tabs } from '@base-ui-components/react/tabs';
-import type { ActivityEntry, AgentStatus, TokenUsage } from '@cortx/store';
-import type { WebRuntimeSessionInfo } from '../bridge/event-bridge';
+import type { ActivityEntry } from '@cortx/store';
 import { activityToInspectorMaps, latestIterationActivity } from '../activity';
-import {
-  compactPath,
-  compactSessionId,
-  formatElapsed,
-  formatTokenUsage,
-  statusTone,
-  summarizeInspector,
-  surface,
-} from '../design';
+import { summarizeInspector, surface } from '../design';
 import { ToolRegion } from './ToolRegion';
 
 const INSPECTOR_ACTIVITY_WINDOW = 80;
+export type WorkspacePanelTab = 'activity' | 'review' | 'browser';
 
 interface InspectorPanelProps {
-  session: WebRuntimeSessionInfo | null;
-  status: AgentStatus;
-  tokenUsage: TokenUsage;
-  elapsed: number;
   activity: ActivityEntry[];
+  activeTab: WorkspacePanelTab;
+  onTabChange: (tab: WorkspacePanelTab) => void;
+  onClose: () => void;
 }
 
 function StatTile({ label, value }: { label: string; value: string | number }) {
@@ -54,52 +45,35 @@ function InspectorTab({
   );
 }
 
-export function InspectorPanel({
-  session,
-  status,
-  tokenUsage,
-  elapsed,
-  activity,
-}: InspectorPanelProps) {
+const PANEL_LABELS: Record<WorkspacePanelTab, string> = {
+  activity: 'Activity',
+  review: 'Review',
+  browser: 'Browser',
+};
+
+function EmptyPanel({ title }: { title: string }) {
+  return (
+    <div className="grid min-h-full place-items-center p-4">
+      <div className={`w-full rounded-xl p-4 text-center text-sm ${surface.panel}`}>
+        <div className="font-medium text-zinc-900">{title}</div>
+        <div className="mt-1 text-xs text-zinc-500">Nothing open</div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityPanel({ activity }: { activity: ActivityEntry[] }) {
   const [tab, setTab] = useState('tools');
-  const tone = statusTone(status);
   const { toolCalls, agentSessions } = activityToInspectorMaps(activity);
   const latest = activityToInspectorMaps(latestIterationActivity(activity));
   const summary = summarizeInspector(latest.toolCalls, latest.agentSessions);
 
   return (
-    <aside className="flex h-full min-h-0 flex-col bg-[#f3f3f1]">
-      <div className="border-b border-zinc-200 p-4">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-zinc-950">Inspector</div>
-            <div className="text-xs text-zinc-500">Runtime facts and tool activity</div>
-          </div>
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] ${tone.badgeClass}`}>{tone.label}</span>
-        </div>
-
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b border-zinc-200 p-3">
         <div className="grid grid-cols-2 gap-2">
           <StatTile label="Turn Tools" value={summary.totalTools} />
           <StatTile label="Turn Agents" value={summary.totalAgents} />
-          <StatTile label="Session Tokens" value={formatTokenUsage(tokenUsage)} />
-          <StatTile label="Elapsed" value={formatElapsed(elapsed)} />
-        </div>
-      </div>
-
-      <div className="border-b border-zinc-200 p-4">
-        <div className="space-y-2 text-xs">
-          <div className="flex justify-between gap-3">
-            <span className="text-zinc-500">Workspace</span>
-            <span className="truncate text-zinc-800">{session ? compactPath(session.workingDirectory) : '-'}</span>
-          </div>
-          <div className="flex justify-between gap-3">
-            <span className="text-zinc-500">Session</span>
-            <span className="truncate font-mono text-zinc-600">{compactSessionId(session?.id, 16)}</span>
-          </div>
-          <div className="flex justify-between gap-3">
-            <span className="text-zinc-500">Events</span>
-            <span className="text-zinc-800">{session?.eventCount ?? 0}</span>
-          </div>
         </div>
       </div>
 
@@ -122,9 +96,59 @@ export function InspectorPanel({
 
       {summary.totalTools === 0 && summary.totalAgents === 0 && (
         <div className={`mx-3 mb-3 rounded-lg p-3 text-xs leading-relaxed ${surface.panel} text-zinc-500`}>
-          Tool calls and sub-agent runs will appear here as the session works.
+          No activity
         </div>
       )}
+    </div>
+  );
+}
+
+export function InspectorPanel({
+  activity,
+  activeTab,
+  onTabChange,
+  onClose,
+}: InspectorPanelProps) {
+  return (
+    <aside className="flex h-full min-h-0 flex-col bg-[#f3f3f1]">
+      <div className="border-b border-zinc-200 p-3">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-zinc-950">{PANEL_LABELS[activeTab]}</div>
+            <div className="text-xs text-zinc-500">Workspace panel</div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close panel"
+            onClick={onClose}
+            className={`grid h-7 w-7 place-items-center rounded-md text-zinc-400 hover:bg-white hover:text-zinc-900 ${surface.focus}`}
+          >
+            ×
+          </button>
+        </div>
+
+        <Tabs.Root
+          value={activeTab}
+          onValueChange={(value) => onTabChange(String(value) as WorkspacePanelTab)}
+          className="flex min-h-0 flex-col"
+        >
+          <Tabs.List className="flex rounded-lg border border-zinc-200 bg-zinc-100 p-1">
+            <InspectorTab value="activity" active={activeTab === 'activity'}>
+              Activity
+            </InspectorTab>
+            <InspectorTab value="review" active={activeTab === 'review'}>
+              Review
+            </InspectorTab>
+            <InspectorTab value="browser" active={activeTab === 'browser'}>
+              Browser
+            </InspectorTab>
+          </Tabs.List>
+        </Tabs.Root>
+      </div>
+
+      {activeTab === 'activity' && <ActivityPanel activity={activity} />}
+      {activeTab === 'review' && <EmptyPanel title="Review" />}
+      {activeTab === 'browser' && <EmptyPanel title="Browser" />}
     </aside>
   );
 }

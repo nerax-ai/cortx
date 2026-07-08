@@ -4,6 +4,7 @@ import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { readFile, readdir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope, type SkillInfo } from '@cortx/sdk';
 import {
@@ -478,8 +479,17 @@ function getPrincipalAllowedWorkspaceRoots(config: ServerConfig, principal: Auth
 
 function getAgentSpecDiscoveryRoots(config: ServerConfig, principal: AuthPrincipal | undefined): string[] {
   if (config.agentSpecRoots?.length) return config.agentSpecRoots.map((root) => resolve(root));
-  if (principal?.allowedWorkspaceRoots?.length) return principal.allowedWorkspaceRoots.map((root) => resolve(root));
-  return [resolve(getDefaultWorkingDirectory(config))];
+  const workspaceRoots = principal?.allowedWorkspaceRoots?.length
+    ? principal.allowedWorkspaceRoots
+    : [getDefaultWorkingDirectory(config)];
+  return [
+    resolve(homedir(), '.cortx', 'agents'),
+    resolve(homedir(), '.cortx', 'agent-specs'),
+    ...workspaceRoots.flatMap((root) => [
+      resolve(root, '.cortx', 'agents'),
+      resolve(root, '.cortx', 'agent-specs'),
+    ]),
+  ];
 }
 
 function isPathLikeReference(reference: string): boolean {

@@ -1,24 +1,19 @@
-import type { AgentStatus, TokenUsage } from '@cortx/store';
+import { useState } from 'react';
+import type { AgentStatus } from '@cortx/store';
 import type { WebEventConnectionState, WebRuntimeSessionInfo } from '../bridge/event-bridge';
-import { compactPath, compactSessionId, formatElapsed, formatTokenUsage, statusTone, surface } from '../design';
+import { compactPath, statusTone, surface } from '../design';
+import type { WorkspacePanelTab } from './InspectorPanel';
 
 interface WorkspaceHeaderProps {
   status: AgentStatus;
   session: WebRuntimeSessionInfo | null;
-  tokenUsage: TokenUsage;
-  elapsed: number;
   iteration: number;
   eventConnection: WebEventConnectionState;
   onRecoverEventStream: () => void | Promise<void>;
-}
-
-function HeaderMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-400">{label}</div>
-      <div className="truncate text-xs text-zinc-700">{value}</div>
-    </div>
-  );
+  panelOpen?: boolean;
+  activePanel?: WorkspacePanelTab;
+  onOpenPanel?: (tab: WorkspacePanelTab) => void;
+  onClosePanel?: () => void;
 }
 
 const CONNECTION_LABELS: Record<WebEventConnectionState['phase'], string> = {
@@ -70,14 +65,88 @@ function EventConnectionPill({
   );
 }
 
+const PANEL_ITEMS: Array<{ value: WorkspacePanelTab; label: string }> = [
+  { value: 'activity', label: 'Activity' },
+  { value: 'review', label: 'Review' },
+  { value: 'browser', label: 'Browser' },
+];
+
+function PanelLauncher({
+  panelOpen,
+  activePanel,
+  onOpenPanel,
+  onClosePanel,
+}: {
+  panelOpen: boolean;
+  activePanel: WorkspacePanelTab;
+  onOpenPanel: (tab: WorkspacePanelTab) => void;
+  onClosePanel: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-label="Open workspace panels"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className={`flex h-8 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 hover:bg-zinc-50 ${surface.focus}`}
+      >
+        <span>{panelOpen ? PANEL_ITEMS.find((item) => item.value === activePanel)?.label ?? 'Panels' : 'Panels'}</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3 w-3 text-zinc-400">
+          <path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-44 overflow-hidden rounded-xl border border-zinc-200 bg-white p-1 shadow-xl shadow-zinc-200/70">
+          {PANEL_ITEMS.map((item) => {
+            const selected = panelOpen && activePanel === item.value;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => {
+                  onOpenPanel(item.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs ${
+                  selected ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-700 hover:bg-zinc-50'
+                } ${surface.focus}`}
+              >
+                <span>{item.label}</span>
+                {selected && <span className="text-zinc-400">open</span>}
+              </button>
+            );
+          })}
+          {panelOpen && (
+            <button
+              type="button"
+              onClick={() => {
+                onClosePanel();
+                setOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center rounded-lg border-t border-zinc-100 px-2.5 py-2 text-left text-xs text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900 ${surface.focus}`}
+            >
+              Hide panel
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkspaceHeader({
   status,
   session,
-  tokenUsage,
-  elapsed,
   iteration,
   eventConnection,
   onRecoverEventStream,
+  panelOpen = false,
+  activePanel = 'activity',
+  onOpenPanel,
+  onClosePanel,
 }: WorkspaceHeaderProps) {
   const tone = statusTone(status);
 
@@ -101,12 +170,14 @@ export function WorkspaceHeader({
       </div>
 
       <EventConnectionPill connection={eventConnection} onRecover={onRecoverEventStream} />
-
-      <div className="hidden min-w-0 grid-cols-3 gap-5 md:grid">
-        <HeaderMetric label="Session" value={compactSessionId(session?.id, 14)} />
-        <HeaderMetric label="Session Tokens" value={formatTokenUsage(tokenUsage)} />
-        <HeaderMetric label="Elapsed" value={formatElapsed(elapsed)} />
-      </div>
+      {onOpenPanel && onClosePanel && (
+        <PanelLauncher
+          panelOpen={panelOpen}
+          activePanel={activePanel}
+          onOpenPanel={onOpenPanel}
+          onClosePanel={onClosePanel}
+        />
+      )}
     </header>
   );
 }

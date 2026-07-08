@@ -224,7 +224,7 @@ function formatLineRange(range: LineRange | null): string | undefined {
 
 function formatHumanLineRange(range: LineRange | null): string | undefined {
   if (!range) return undefined;
-  return range.start === range.end ? `第 ${range.start} 行` : `第 ${range.start}-${range.end} 行`;
+  return range.start === range.end ? `Line ${range.start}` : `Lines ${range.start}-${range.end}`;
 }
 
 function changedLineRange(details: EditDiffDetails): LineRange | null {
@@ -353,7 +353,7 @@ function DiffLinePreview({ details, locationLabel }: { details: EditDiffDetails;
         <span className="w-8 shrink-0 select-none text-right">new</span>
         <span className="w-3 shrink-0" />
         <span className="min-w-0 flex-1 normal-case tracking-normal text-zinc-500">
-          <span className="font-sans font-medium text-zinc-700">修改位置 {locationLabel}</span>
+          <span className="font-sans font-medium text-zinc-700">Changed at {locationLabel}</span>
           <span className="px-2 text-zinc-300">·</span>
           {formatHunkHeader(details)}
         </span>
@@ -417,7 +417,7 @@ function RawDetails({
 
   return (
     <details open={open} className="mt-3 border-t border-zinc-100 pt-2">
-      <summary className="cursor-pointer text-xs text-zinc-400 transition-colors hover:text-zinc-700">原始详情</summary>
+      <summary className="cursor-pointer text-xs text-zinc-400 transition-colors hover:text-zinc-700">Raw details</summary>
       <div className="mt-2">
         {inputStr && (
           <section className="mb-2">
@@ -477,18 +477,18 @@ function buildFileToolView(entry: ToolCallEntry, resultText: string, isError: bo
     return {
       kind,
       path,
-      summary: `读取 ${truncateMiddle(path, 34)} · ${lineCount(resultText)} 行`,
+      summary: `Read ${truncateMiddle(path, 34)} · ${lineCount(resultText)} lines`,
       meta: meta || undefined,
       body: (
         <section>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <SectionLabel>读取内容</SectionLabel>
+            <SectionLabel>Read content</SectionLabel>
             {meta && <FieldBadge>{meta}</FieldBadge>}
           </div>
           {resultText || isError ? (
             <LinePreview lines={lines} tone={isError ? 'remove' : 'plain'} />
           ) : (
-            <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">等待读取结果...</div>
+            <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">Waiting for read result...</div>
           )}
         </section>
       ),
@@ -504,13 +504,13 @@ function buildFileToolView(entry: ToolCallEntry, resultText: string, isError: bo
     return {
       kind,
       path,
-      summary: `写入 ${truncateMiddle(path, 34)} · +${lineCount(content)} 行`,
+      summary: `Write ${truncateMiddle(path, 34)} · +${lineCount(content)} lines`,
       meta: `${bytes} bytes`,
       body: (
         <section>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <SectionLabel>写入内容</SectionLabel>
-            <FieldBadge>+{lineCount(content)} 行 · {bytes} bytes</FieldBadge>
+            <SectionLabel>Written content</SectionLabel>
+            <FieldBadge>+{lineCount(content)} lines · {bytes} bytes</FieldBadge>
           </div>
           <LinePreview lines={contentLines} marker="+" tone="add" />
           <ResultNote result={resultText} isError={isError} />
@@ -528,22 +528,22 @@ function buildFileToolView(entry: ToolCallEntry, resultText: string, isError: bo
   const technicalLineLabel = formatLineRange(changedRange);
   const humanLineLabel = formatHumanLineRange(changedRange);
   const locationLabel = details.source === 'input'
-    ? humanLineLabel ? `输入片段 ${humanLineLabel}` : '输入片段'
-    : humanLineLabel ?? technicalLineLabel ?? '位置未知';
+    ? humanLineLabel ? `Input fragment ${humanLineLabel}` : 'Input fragment'
+    : humanLineLabel ?? technicalLineLabel ?? 'Unknown location';
   const detailMeta = details.source === 'input'
     ? locationLabel
-    : `${locationLabel} · 上下文 ±${details.contextLines ?? 0} 行`;
+    : `${locationLabel} · Context ±${details.contextLines ?? 0} lines`;
 
   return {
     kind,
     path,
-    summary: `编辑 ${truncateMiddle(path, 34)} · ${locationLabel} · -${removedCount} +${addedCount} 行`,
+    summary: `Edit ${truncateMiddle(path, 34)} · ${locationLabel} · -${removedCount} +${addedCount} lines`,
     meta: detailMeta,
     body: (
       <section>
         <div className="mb-2 flex items-center justify-between gap-2">
-          <SectionLabel>编辑对比</SectionLabel>
-          <FieldBadge>{detailMeta} · -{removedCount} +{addedCount} 行</FieldBadge>
+          <SectionLabel>Edit diff</SectionLabel>
+          <FieldBadge>{detailMeta} · -{removedCount} +{addedCount} lines</FieldBadge>
         </div>
         <DiffLinePreview details={details} locationLabel={locationLabel} />
         <ResultNote result={resultText} isError={isError} />

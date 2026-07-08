@@ -63,7 +63,7 @@ export function ContextUsagePanel({
   return (
     <div className="w-[380px] rounded-xl border border-zinc-200 bg-white p-4 text-zinc-950 shadow-2xl shadow-zinc-200/80">
       <div className="flex items-center justify-between gap-4">
-        <div className="text-sm font-medium text-zinc-950">当前请求上下文</div>
+        <div className="text-sm font-medium text-zinc-950">Current Request Context</div>
         <div className="font-mono text-xs text-zinc-500">
           {formatContextTokenCount(usedTokens)}/{formatContextTokenCount(windowTokens)}
           <span className="ml-1">({formatContextPercent(contextPercent)})</span>
@@ -84,7 +84,7 @@ export function ContextUsagePanel({
             onClick={() => setShowDetails(true)}
             className={`rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
           >
-            显示更多
+            Show more
           </button>
         </div>
       )}
@@ -113,23 +113,23 @@ export function ContextUsagePanel({
             })}
             {summary.breakdown.length === 0 && (
               <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
-                等待用量数据后显示消息、工具、技能和系统提示词占用。
+                Waiting for usage data to show messages, tools, skills, and system prompt usage.
               </div>
             )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs">
-            <MetricGroup title="本轮">
-              <MetricRow label="输入" value={formatContextTokenCount(requestInputTokens)} />
-              <MetricRow label="输出" value={formatContextTokenCount(requestOutputTokens)} />
-              <MetricRow label="缓存读" value={formatContextTokenCount(requestCacheReadTokens)} />
-              <MetricRow label="缓存写" value={formatContextTokenCount(requestCacheCreationTokens)} />
+            <MetricGroup title="This Turn">
+              <MetricRow label="Input" value={formatContextTokenCount(requestInputTokens)} />
+              <MetricRow label="Output" value={formatContextTokenCount(requestOutputTokens)} />
+              <MetricRow label="Cache Read" value={formatContextTokenCount(requestCacheReadTokens)} />
+              <MetricRow label="Cache Write" value={formatContextTokenCount(requestCacheCreationTokens)} />
             </MetricGroup>
-            <MetricGroup title="会话">
-              <MetricRow label="输入" value={formatContextTokenCount(sessionInputTokens)} />
-              <MetricRow label="输出" value={formatContextTokenCount(sessionOutputTokens)} />
-              <MetricRow label="缓存读" value={formatContextTokenCount(sessionCacheReadTokens)} />
-              <MetricRow label="缓存写" value={formatContextTokenCount(sessionCacheCreationTokens)} />
+            <MetricGroup title="Session">
+              <MetricRow label="Input" value={formatContextTokenCount(sessionInputTokens)} />
+              <MetricRow label="Output" value={formatContextTokenCount(sessionOutputTokens)} />
+              <MetricRow label="Cache Read" value={formatContextTokenCount(sessionCacheReadTokens)} />
+              <MetricRow label="Cache Write" value={formatContextTokenCount(sessionCacheCreationTokens)} />
             </MetricGroup>
           </div>
 
@@ -140,14 +140,14 @@ export function ContextUsagePanel({
               onClick={() => setShowDetails(false)}
               className={`rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-950 ${surface.focus}`}
             >
-              收起
+              Collapse
             </button>
           </div>
         </div>
       )}
 
       <div className="mt-4 border-t border-zinc-200 pt-3 text-xs">
-        <MetricRow label="缓存命中率" value={formatContextPercent(sessionHitRate ?? 0)} />
+        <MetricRow label="Cache Hit Rate" value={formatContextPercent(sessionHitRate ?? 0)} />
       </div>
     </div>
   );

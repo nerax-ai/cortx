@@ -145,11 +145,11 @@ describe('serialization', () => {
         cacheHitRate: 25,
         model: 'claude',
         breakdown: [
-          { key: 'messages', label: '消息', tokens: 700, source: 'runtime_estimate', count: 4 },
-          { key: 'tools', label: '系统工具', tokens: 200, source: 'runtime_estimate', count: 6 },
-          { key: 'skills', label: '技能', tokens: 100, source: 'runtime_estimate', count: 1 },
-          { key: 'system_prompt', label: '系统提示词', tokens: 80, source: 'runtime_estimate' },
-          { key: 'other', label: '其他', tokens: 120, source: 'provider' },
+          { key: 'messages', label: 'Messages', tokens: 700, source: 'runtime_estimate', count: 4 },
+          { key: 'tools', label: 'Tools', tokens: 200, source: 'runtime_estimate', count: 6 },
+          { key: 'skills', label: 'Skills', tokens: 100, source: 'runtime_estimate', count: 1 },
+          { key: 'system_prompt', label: 'System Prompt', tokens: 80, source: 'runtime_estimate' },
+          { key: 'other', label: 'Other', tokens: 120, source: 'provider' },
         ],
       },
     });

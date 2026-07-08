@@ -4,7 +4,7 @@ import { getStorage } from '@nerax-ai/storage';
 import { createLogger } from '@nerax-ai/logger';
 import type { ContextUsageSource } from '@cortx/sdk';
 import { cpSync, existsSync, mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { delimiter, dirname, parse, resolve } from 'path';
 import {
   FileDurableRunStore,
@@ -101,6 +101,15 @@ function resolveMaxSessions(config: CortxConfig): number {
   );
 }
 
+function defaultAgentSpecRoots(defaultWorkingDirectory: string): string[] {
+  return [
+    resolve(homedir(), '.cortx', 'agents'),
+    resolve(homedir(), '.cortx', 'agent-specs'),
+    resolve(defaultWorkingDirectory, '.cortx', 'agents'),
+    resolve(defaultWorkingDirectory, '.cortx', 'agent-specs'),
+  ];
+}
+
 function resolveWorkspaceToolsPluginSource(config: CortxConfig, projectRoot: string): string | undefined {
   if (config.workspaceToolsPlugin === false) return undefined;
   if (typeof config.workspaceToolsPlugin === 'string' && config.workspaceToolsPlugin.trim()) {
@@ -166,7 +175,11 @@ async function main() {
   const allowedWorkspaceRoots = [...new Set([...browseRoots, defaultWorkingDirectory].map((path) => resolve(path)))];
   const configuredAgentSpecRoots = [...readEnvPathList('CORTX_AGENT_SPEC_ROOTS'), ...(config.agentSpecRoots ?? [])];
   const agentSpecRoots = [
-    ...new Set((configuredAgentSpecRoots.length ? configuredAgentSpecRoots : [defaultWorkingDirectory]).map((path) => resolve(path))),
+    ...new Set(
+      (configuredAgentSpecRoots.length ? configuredAgentSpecRoots : defaultAgentSpecRoots(defaultWorkingDirectory)).map((path) =>
+        resolve(path),
+      ),
+    ),
   ];
   const contextWindow = resolveContextWindow(config, synax);
   const maxSessions = resolveMaxSessions(config);
