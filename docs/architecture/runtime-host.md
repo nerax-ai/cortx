@@ -1,5 +1,7 @@
 # Cortx Runtime Host 架构说明
 
+> 阅读提示（2026-07-26）：当前最高层架构入口是 `docs/architecture/cortx-core-runtime-blueprint.md`。本文保留为 runtime host contract 的聚焦说明，用来补充 session/action/event/workspace 边界。
+
 本文档定义 Cortx 后续的核心分层：`core + runtime + thin frontends`。
 目标是让 `@cortx/core` 成为足够稳定、简洁、可复用的单 agent 执行内核，让 `@cortx/runtime` 承担多 session、多目录、多 agent 的运行承载，让 TUI、Web 和未来 Desktop 都只是操控同一套 runtime contract 的前端。
 

@@ -8,6 +8,8 @@ origin: docs/brainstorms/2026-04-19-tui-refactor-requirements.md
 
 # Refactor: Replace readline CLI with Ink-based extensible TUI
 
+> 历史说明（2026-07-26）：本文是早期 TUI 重构计划，仍包含 runtime-host 之前的工具注册和 session 组织方式。当前 TUI 是 local runtime / remote server 的 thin frontend，当前边界以 `docs/architecture/cortx-core-runtime-blueprint.md` 为准。
+
 ## Overview
 
 Replace the 88-line readline CLI with a full Ink (React) TUI. The new TUI has 4 fixed regions (output, tools, status, input), overlay support (command palette, session picker), and a plugin extension system using the existing `@nerax-ai/plugin` registry with new `tui.*` extension types. All built-in features are first-party plugins validating the same API that third-party plugins will use.

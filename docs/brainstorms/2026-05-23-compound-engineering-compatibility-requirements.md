@@ -5,6 +5,8 @@ topic: compound-engineering-compatibility
 
 # Compound Engineering Skill Pack Compatibility
 
+> 历史说明（2026-07-26）：本文是 Compound Engineering 兼容性早期需求，部分包边界和 skill 实现位置已经被 runtime-host 架构取代。当前 core/runtime/skills/official plugin 边界请以 `docs/README.md` 中列出的权威文档为准。
+
 ## Problem Frame
 
 cortx 已经具备基础 skill 系统和通用 sub-agent 能力，但目前还不能完整运行 Compound Engineering 这类大型工程工作流集合。

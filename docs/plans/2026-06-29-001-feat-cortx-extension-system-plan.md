@@ -9,6 +9,9 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 # Cortx Agent Core Extension System - Plan
+
+> 历史说明（2026-07-26）：本文记录扩展系统从 core-centric 走向 runtime capability 的中间设计。当前权威口径是：SDK 定义稳定 extension/capability 契约，core 只执行单 agent loop，runtime 和官方插件决定能力挂载；详见 `docs/architecture/sdk-and-core-extension-guide.md` 与 `docs/architecture/cortx-official-plugins.md`。
+
 ## Goal Capsule
 - **目标：** 先把 Cortx agent 核心扩展系统设计稳定，不再同时设计 TUI/Web/IDE 的展示层扩展。
 - **产品原则：** 核心要足够小、清晰、可组合；一个很小的 prompt-only agent 不需要写插件，一个完整 coding agent 也能通过同一套核心能力扩展出来。

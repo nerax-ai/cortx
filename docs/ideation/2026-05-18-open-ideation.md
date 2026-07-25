@@ -6,6 +6,8 @@ focus: Analyze project holistically, find optimization points across the entire 
 
 # Ideation: Open Project Analysis — Optimization Points
 
+> 历史说明（2026-07-26）：本文是 runtime-host 重组前的开放式想法记录，其中对 `@cortx/code`、包规模和职责的描述不再代表当前实现。当前架构和插件边界请以 `docs/README.md` 中列出的权威文档为准。
+
 ## Codebase Context
 
 **Project shape:** cortx is a TypeScript agent framework (~9K lines, Bun runtime) organized as a monorepo with 4 packages:

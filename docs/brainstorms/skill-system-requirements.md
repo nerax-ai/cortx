@@ -5,6 +5,8 @@ topic: skill-system
 
 # Skill System for Cortx Agent
 
+> 历史说明（2026-07-26）：本文是早期 skill 需求记录。当前项目已采用 runtime-host 分层：core 不内置 skill discovery，workspace tools 不再位于 `@cortx/code`。当前 skill/SkillPack 口径见 `docs/architecture/sdk-and-core-extension-guide.md` 与 `docs/progress/2026-07-05-cortx-remaining-work.md`。
+
 ## Problem Frame
 
 Cortx 目前没有 skill 系统——agent 只能通过 `CortxConfig.system` 注入全局系统提示和通过 `CortxPlugin` 钩子扩展行为。用户无法按任务粒度加载专业化的指令集。

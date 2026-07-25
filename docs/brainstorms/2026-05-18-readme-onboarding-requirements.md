@@ -5,6 +5,8 @@ topic: readme-onboarding-documentation
 
 # README & Onboarding Documentation
 
+> 历史说明（2026-07-26）：本文是早期 onboarding 需求记录，描述的是 runtime-host 重组前的 4 包结构。当前项目入口已改为根目录 `README.md`，当前文档索引见 `docs/README.md`；包边界以 `docs/architecture/cortx-core-runtime-blueprint.md` 为准。
+
 ## Problem Frame
 
 cortx has zero onboarding documentation. There is no README.md, no getting-started guide, no architecture overview, and no AI agent instruction file (AGENTS.md). Every new user — whether evaluating the framework for adoption or joining as a contributor — must read source code to understand what the project is, how it works, or how to use it. This is the single biggest adoption and contribution barrier.

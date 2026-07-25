@@ -6,6 +6,8 @@ focus: 基于代码库深度分析，找出可优化的方向
 
 # 项目优化分析报告
 
+> 历史说明（2026-07-26）：本文记录 2026-04-24 的早期项目状态，包含已过时的 4 包结构和 `@cortx/code` 描述。当前实现已经删除 `packages/code`，workspace tools 位于兄弟项目 `cortx-plugins/workspace-tools`，当前架构以 `docs/architecture/cortx-core-runtime-blueprint.md` 为准。
+
 ## 项目概况
 
 **cortx** 是一个 TypeScript AI Agent 框架，基于 Bun 运行时，采用 monorepo 结构，包含 4 个包：

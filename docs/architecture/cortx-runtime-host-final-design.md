@@ -13,6 +13,8 @@ related_progress: docs/progress/2026-07-04-runtime-host-progress.md
 
 # Cortx Core + Runtime Host 最终设计文档
 
+> 阅读提示（2026-07-26）：本文是 runtime-host 收口时的最终设计记录。当前读者入口和文档导航见 `docs/README.md`，最高层架构口径见 `docs/architecture/cortx-core-runtime-blueprint.md`。
+
 本文档记录 2026-07-04 这一轮讨论后的稳定设计口径。
 
 结论是：Cortx 不应该把所有能力塞进 `@cortx/core`，也不应该让 TUI、Web、Server、未来 Desktop 各自实现一套 agent host。正确方向是：

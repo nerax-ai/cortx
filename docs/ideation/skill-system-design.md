@@ -7,6 +7,8 @@ focus: Comparative analysis of skill systems across claude-code, codex, opencode
 
 # Skill System Comparative Analysis & Cortx Design Recommendation
 
+> 历史说明（2026-07-26）：本文是早期 skill system 设计稿。当前语义是：Skills 是 `SKILL.md` 文件系统资产，不要求作者写 JavaScript plugin code；skill discovery、summary injection、slash expansion 和 `skill` tool 位于 `@cortx/runtime` 的 official skills capability，而不是 `@cortx/core` 或已删除的 `@cortx/code`。
+
 ## 1. Four Projects' Skill Systems
 
 ### 1.1 Claude Code

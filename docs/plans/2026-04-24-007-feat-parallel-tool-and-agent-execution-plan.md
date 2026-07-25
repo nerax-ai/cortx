@@ -8,6 +8,8 @@ origin: docs/ideation/2026-04-18-agent-core-loop-ideation.md (Ideas #3, #5)
 
 # 并行工具执行与多 Agent 并发调度
 
+> 历史说明（2026-07-26）：本文是 runtime-host 重组前的并行执行计划，仍引用已删除的 `packages/code` 和旧 core sub-agent 位置。当前 sub-agent、approval、workspace tool 挂载边界以 `docs/architecture/cortx-core-runtime-blueprint.md` 和 `docs/architecture/cortx-official-plugins.md` 为准。
+
 ## Overview
 
 为 cortx 的 `agentLoop()` 添加并行执行能力。当 LLM 返回多个 tool_calls 时，read-only 工具并行执行；当 LLM 返回多个 agent tool_calls 时，多个子 Agent 并发运行。通过声明式 `sideEffects` 元数据控制调度策略，工具作者声明一次，核心循环自动分组调度。

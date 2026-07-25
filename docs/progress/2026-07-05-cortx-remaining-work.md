@@ -2,7 +2,7 @@
 date: 2026-07-05
 topic: cortx-remaining-work
 baseline_commit: c06a513
-latest_audit_commit: 6301cc5
+latest_audit_commit: cb98c7c
 status: partially-closed
 language: zh-CN
 ---
@@ -41,8 +41,8 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 
 当前参考验证状态：
 
-- 最新架构收口提交：`c06a513 feat(runtime): complete core boundary host`
-- 当前全量测试：`bun test` 通过，`830 pass / 0 fail / 2442 expect`
+- 最近文档核对基线：`cb98c7c feat(web): refine workbench copy and server API docs`
+- 2026-07-26 文档整理后全量测试：`bun test` 通过，`864 pass / 0 fail / 2725 expect`
 - 当前包边界：`core / runtime / sdk / server / store / tui / web`
 - `packages/code` 已删除，workspace tools 已迁入 `cortx-plugins/workspace-tools` 官方插件；runtime 只保留 `toolMode` 到插件 `runtime.toolProfile` 的解析和挂载策略
 - `@cortx/core` 不再默认 discovery skills、不再默认创建 `agent` tool、不再内置 default approval policy
@@ -54,7 +54,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 | Core 架构 | 已基本完成 | `@cortx/core` 已接近通用 agent kernel |
 | Runtime host | 已基本完成 | 多 session、多目录、能力挂载、event envelope、durable resume、durable event replay 已落地 |
 | Server adapter | 较成熟 | HTTP/SSE、token、session action、runtime delegation 已稳定 |
-| SDK | 可用但还不够顺手 | 底层类型清楚，但缺更高层插件作者 helper 和版本策略 |
+| SDK | 可用但仍可继续打磨 | 底层类型、helper、schemaVersion 和 type-test 已有第一版，后续重点是脚手架、更多示例和发布策略 |
 | TUI | 能用但仍需打磨 | local/remote adapter 已通，真实日常体验还不够成熟 |
 | Web | 桌面工作台骨架已成型 | remote-only 方向正确，已有 sidebar/conversation/inspector/composer/session list，但真实长流程体验仍要 dogfood |
 | 产品化完整度 | 未完成 | 还缺端到端验证、TUI/Web polish、插件/asset 生态入口和高阶运维能力 |

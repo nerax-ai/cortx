@@ -8,6 +8,8 @@ origin: docs/brainstorms/skill-system-requirements.md
 
 # feat: Add skill system to cortx agent
 
+> 历史说明（2026-07-26）：本文是早期实现计划，文件列表和包边界不再代表当前代码。当前 core 不内置 skills，skill capability 已迁入 runtime；具体当前状态见 `docs/architecture/sdk-and-core-extension-guide.md` 的 Skills 章节。
+
 ## Overview
 
 Add a skill system to cortx that supports dual activation: programmatic explicit invocation via `/skill-name` message prefix, and runtime auto-matching via a `skill` tool. Skills are SKILL.md files with YAML frontmatter, discovered from `.cortx/skills/` directories. This is a pure `@cortx/core` + `@cortx/sdk` implementation with no TUI dependency.
