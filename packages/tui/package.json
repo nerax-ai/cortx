@@ -32,12 +32,12 @@
     "@nerax-ai/storage": "^0.2.0",
     "@synax-ai/core": "^0.1.0",
     "@synax-ai/sdk": "^0.1.0",
+    "@types/react": "^19.1.0",
     "cli-highlight": "^2.1.11",
     "ink": "^7.1.0",
     "react": "19.2.6"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.1.0"
+    "@types/node": "^22.0.0"
   }
 }
