@@ -58,11 +58,11 @@ async function runSubAgentLoop(input: {
   reportProgress?: (text: string) => void;
   onAgentEvent(event: AgentEvent): void;
 }): Promise<void> {
-  const { loopOpts, session, agentSessions, toolCallId, controller, bridgeAskUser, reportProgress, onAgentEvent } = input;
+  const { loopOpts, session, agentSessions, toolCallId, controller, bridgeAskUser, reportProgress, onAgentEvent } =
+    input;
   const bridgedQuestions = new Set<string>();
   try {
     for await (const event of agentLoop(loopOpts)) {
-      session.events.push(event);
       agentSessions.recordEvent(toolCallId, event);
       if (event.type === 'user_request' || event.type === 'user_question') {
         const requestId = event.type === 'user_request' ? event.request.requestId : event.toolCallId;
@@ -245,7 +245,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
               toolCallCount: session.toolCallCount,
             });
           } catch (error) {
-            ctx.logger.error(`Background agent "${description}" failed: ${error instanceof Error ? error.message : String(error)}`);
+            ctx.logger.error(
+              `Background agent "${description}" failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
             options.agentSessions.finish(toolCallId, childController.isAborted ? 'cancelled' : 'error');
             options.onAgentEvent({
               type: 'agent_completed',
@@ -278,7 +280,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
           onAgentEvent: options.onAgentEvent,
         });
 
-        ctx.reportProgress?.(`done ${description} (${session.iterations} iterations, ${session.toolCallCount} tool calls)`);
+        ctx.reportProgress?.(
+          `done ${description} (${session.iterations} iterations, ${session.toolCallCount} tool calls)`,
+        );
         options.agentSessions.complete(toolCallId, false);
         options.onAgentEvent({
           type: 'agent_completed',

@@ -128,6 +128,30 @@ describe('CortxPluginAdminService', () => {
     ).toMatchObject({ ok: false, error: { code: 'invalid_request' } });
     expect((await domain.registry.snapshot()).desiredRevision).toBe(before.desiredRevision);
   });
+
+  test('decodes every action at the runtime boundary and normalizes malformed input', async () => {
+    const domain = await createDomain(adminPlugin(), true);
+    const service = new CortxPluginAdminService({ projectDomain: domain });
+    const operator = context('operator', ['plugins.manage']);
+    const before = await domain.registry.snapshot();
+
+    for (const [input, action] of [
+      [null, 'unknown'],
+      [{}, 'unknown'],
+      [{ type: 'plugin.enable' }, 'plugin.enable'],
+      [{ type: 'plugin.configure', pluginId: 'test.admin', configuration: null }, 'plugin.configure'],
+      [{ type: 'plugin.disable', pluginId: '../test.admin' }, 'plugin.disable'],
+      [{ type: 'not-a-plugin-action' }, 'unknown'],
+    ] as const) {
+      expect(await service.execute(input as never, operator)).toMatchObject({
+        ok: false,
+        action,
+        error: { code: 'invalid_request' },
+      });
+    }
+
+    expect((await domain.registry.snapshot()).desiredRevision).toBe(before.desiredRevision);
+  });
 });
 
 async function createDomain(plugin: DeclarativePlugin, enabled: boolean): Promise<ProjectDomain> {

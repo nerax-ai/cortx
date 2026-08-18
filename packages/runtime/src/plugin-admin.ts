@@ -1,6 +1,5 @@
 import {
   ManagerAuthorizationError,
-  isValidPluginId,
   normalizeContributionDescriptors,
   type EventSubscription,
   type ManagerEvent,
@@ -8,17 +7,18 @@ import {
   type ManagerOperationResult,
   type ManagerSnapshot,
 } from '@nerax-ai/plugin';
+import { isProjectContributionType } from '@cortx/sdk';
 import {
-  isProjectContributionType,
-} from '@cortx/sdk';
-import {
+  decodePluginAdminAction,
+  normalizePluginAdminError,
+  pluginAdminResultAction,
   pluginAdminDiagnostic,
   redactSecrets,
+  withPluginAdminObservationTimeout,
   type PluginAdminAction,
   type PluginAdminCatalogEntry,
   type PluginAdminContext,
   type PluginAdminDescriptor,
-  type PluginAdminError,
   type PluginAdminEventDelivery,
   type PluginAdminGrant,
   type PluginAdminLock,
@@ -75,14 +75,21 @@ export class CortxPluginAdminService implements PluginAdminService {
 
   async execute(action: PluginAdminAction, context: PluginAdminContext): Promise<PluginAdminResult> {
     try {
-      if (this.#closed) throw Object.assign(new Error('Plugin administration service is closed'), { code: 'not_found' });
-      const input = structuredClone(action);
-      await this.#require(context, requiredGrant(input));
-      validateAdminAction(input);
+      if (this.#closed)
+        throw Object.assign(new Error('Plugin administration service is closed'), { code: 'not_found' });
+      const actionName = pluginAdminResultAction(action);
+      if (actionName !== 'unknown' && actionName !== 'subscription.open') {
+        await this.#require(context, requiredGrant(actionName));
+      }
+      const input = decodePluginAdminAction(action);
       const data = await this.#executeAuthorized(input, context);
       return structuredClone({ ok: true, action: input.type, data });
     } catch (error) {
-      return { ok: false, action: action.type, error: toAdminError(error) };
+      return {
+        ok: false,
+        action: pluginAdminResultAction(action),
+        error: normalizePluginAdminError(error),
+      };
     }
   }
 
@@ -109,7 +116,10 @@ export class CortxPluginAdminService implements PluginAdminService {
     const results = await Promise.allSettled([...this.#activeClosers].map((close) => close()));
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failures.length) {
-      throw new AggregateError(failures.map((result) => result.reason), 'Plugin administration close failed');
+      throw new AggregateError(
+        failures.map((result) => result.reason),
+        'Plugin administration close failed',
+      );
     }
   }
 
@@ -126,9 +136,13 @@ export class CortxPluginAdminService implements PluginAdminService {
           }),
         );
       case 'plugin.enable':
-        return this.#mutation(await registry.enable(action.pluginId, { expectedRevision: action.expectedRevision, context }));
+        return this.#mutation(
+          await registry.enable(action.pluginId, { expectedRevision: action.expectedRevision, context }),
+        );
       case 'plugin.disable':
-        return this.#mutation(await registry.disable(action.pluginId, { expectedRevision: action.expectedRevision, context }));
+        return this.#mutation(
+          await registry.disable(action.pluginId, { expectedRevision: action.expectedRevision, context }),
+        );
       case 'plugin.configure':
         return this.#mutation(
           await registry.configure(action.pluginId, action.configuration, {
@@ -137,11 +151,17 @@ export class CortxPluginAdminService implements PluginAdminService {
           }),
         );
       case 'plugin.refresh':
-        return this.#mutation(await registry.refresh(action.pluginId, { expectedRevision: action.expectedRevision, context }));
+        return this.#mutation(
+          await registry.refresh(action.pluginId, { expectedRevision: action.expectedRevision, context }),
+        );
       case 'plugin.retry':
-        return this.#mutation(await registry.retry(action.pluginId, { expectedRevision: action.expectedRevision, context }));
+        return this.#mutation(
+          await registry.retry(action.pluginId, { expectedRevision: action.expectedRevision, context }),
+        );
       case 'plugin.uninstall':
-        return this.#mutation(await registry.uninstall(action.pluginId, { expectedRevision: action.expectedRevision, context }));
+        return this.#mutation(
+          await registry.uninstall(action.pluginId, { expectedRevision: action.expectedRevision, context }),
+        );
       case 'lock.apply': {
         const result = await registry.applyLock(action.lock as unknown as Parameters<typeof registry.applyLock>[0], {
           expectedRevision: action.expectedRevision,
@@ -156,7 +176,12 @@ export class CortxPluginAdminService implements PluginAdminService {
       case 'operation.query':
         return operationDto(await registry.queryOperation(action.operationId, context));
       case 'operation.wait':
-        return operationDto(await observationTimeout(registry.waitOperation(action.operationId, context), action.timeoutMs));
+        return operationDto(
+          await withPluginAdminObservationTimeout(
+            registry.waitOperation(action.operationId, context),
+            action.timeoutMs,
+          ),
+        );
       case 'operation.cancel': {
         const snapshot = await registry.snapshot(context);
         return {
@@ -342,11 +367,11 @@ export class CortxPluginAdminService implements PluginAdminService {
         }
         try {
           await this.#require(context, 'plugins.observe');
-          const delivery = await source.next().then((result): IteratorResult<PluginAdminEventDelivery> =>
-            result.done
-              ? { done: true, value: undefined }
-              : { done: false, value: eventDeliveryDto(result.value) },
-          );
+          const delivery = await source
+            .next()
+            .then((result): IteratorResult<PluginAdminEventDelivery> =>
+              result.done ? { done: true, value: undefined } : { done: false, value: eventDeliveryDto(result.value) },
+            );
           if (delivery.done) {
             await close();
             return { done: true, value: undefined };
@@ -371,17 +396,11 @@ export class CortxPluginAdminService implements PluginAdminService {
   }
 }
 
-function validateAdminAction(action: PluginAdminAction): void {
-  if ('pluginId' in action && !isValidPluginId(action.pluginId)) {
-    throw invalidRequest(`Cortx plugin id must be canonical: ${action.pluginId}`);
-  }
-}
-
-function requiredGrant(action: PluginAdminAction): PluginAdminGrant {
-  if (action.type === 'source.inspect' || action.type === 'catalog.list' || action.type === 'descriptor.list') {
+function requiredGrant(action: PluginAdminAction['type']): PluginAdminGrant {
+  if (action === 'source.inspect' || action === 'catalog.list' || action === 'descriptor.list') {
     return 'plugins.inspect';
   }
-  if (action.type === 'snapshot.get' || action.type === 'operation.query' || action.type === 'operation.wait') {
+  if (action === 'snapshot.get' || action === 'operation.query' || action === 'operation.wait') {
     return 'plugins.observe';
   }
   return 'plugins.manage';
@@ -440,42 +459,6 @@ function eventDeliveryDto(delivery: import('@nerax-ai/plugin').EventDelivery<Man
 
 function sanitizeLock(lock: unknown): PluginAdminLock {
   return redactSecrets(structuredClone(lock)) as unknown as PluginAdminLock;
-}
-
-async function observationTimeout<T>(work: Promise<T>, timeoutMs?: number): Promise<T> {
-  if (!timeoutMs || timeoutMs <= 0) return work;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(Object.assign(new Error(`Observation timed out after ${timeoutMs}ms`), { code: 'observation_timeout' }));
-    }, timeoutMs);
-  });
-  try {
-    return await Promise.race([work, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function toAdminError(error: unknown): PluginAdminError {
-  const source = error as { code?: string; message?: string };
-  const code: PluginAdminError['code'] =
-    error instanceof ManagerAuthorizationError
-      ? 'forbidden'
-      : source.code === 'observation_timeout'
-        ? 'observation_timeout'
-        : source.code === 'invalid_request'
-          ? 'invalid_request'
-          : source.code === 'subscription_limit'
-            ? 'subscription_limit'
-            : /not installed|unknown manager operation|unavailable/i.test(source.message ?? '')
-              ? 'not_found'
-              : 'internal';
-  return {
-    code,
-    message: String(redactSecrets(source.message ?? 'Plugin administration failed')),
-    retryable: code === 'observation_timeout' || code === 'subscription_limit',
-  };
 }
 
 function validateLimits(limits: PluginAdminSubscriptionLimits): void {

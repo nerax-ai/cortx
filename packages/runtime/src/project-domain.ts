@@ -83,10 +83,16 @@ export class ProjectDomain {
   constructor(options: ProjectDomainOptions) {
     if (options.domain && options.registry) throw new Error('ProjectDomain accepts either domain or registry, not both');
     if (!options.domain && !options.registry) throw new Error('ProjectDomain requires a domain or registry');
-    if (options.registry && !options.runtimeDomainId?.trim()) {
-      throw new Error('ProjectDomain runtimeDomainId is required when adopting a registry');
+    if (
+      options.registry &&
+      options.runtimeDomainId !== undefined &&
+      options.runtimeDomainId !== options.registry.runtimeDomainId
+    ) {
+      throw new Error(
+        `ProjectDomain runtimeDomainId ${options.runtimeDomainId} does not match Registry runtime domain ${options.registry.runtimeDomainId}`,
+      );
     }
-    this.runtimeDomainId = options.domain?.runtimeDomainId ?? options.runtimeDomainId!;
+    this.runtimeDomainId = options.domain?.runtimeDomainId ?? options.registry!.runtimeDomainId;
     this.registry =
       options.registry ??
       new PluginRegistry({
@@ -223,9 +229,9 @@ export class ProjectDomain {
     context: CreateAgentExtensionsContext,
   ): Promise<AgentRuntimeExtensions> {
     const extensions = createEmptyAgentRuntimeExtensions();
+    const descriptors = await this.listContributionDescriptors();
     for (const contribution of contributions) {
       const parsed = this.parseReference(contribution.use);
-      const descriptors = await this.listContributionDescriptors();
       const descriptor = descriptors.find((item) => item.canonicalId === parsed.canonicalId);
       if (!descriptor || !isAgentExtensionType(descriptor.type) || !descriptor.executable) {
         throw new Error(`Cortx executable contribution not found: ${parsed.canonicalId}`);

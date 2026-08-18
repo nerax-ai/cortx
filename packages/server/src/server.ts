@@ -46,7 +46,12 @@ import {
   type AuthPrincipal,
 } from './auth.js';
 import { buildFileEditDetails } from './file-edit-details.js';
-import { mountPluginAdminHttp } from './plugin-admin-http.js';
+import {
+  isPluginAdminHttpPath,
+  mountPluginAdminHttp,
+  pluginAdminErrorResponse,
+  pluginAdminHttpAction,
+} from './plugin-admin-http.js';
 import {
   assertServerRequestSecurity,
   isAllowedOrigin,
@@ -1068,6 +1073,9 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       assertServerRequestSecurity(c, config);
       await next();
     } catch (error) {
+      if (isPluginAdminHttpPath(c.req.path)) {
+        return pluginAdminErrorResponse(c, pluginAdminHttpAction(c.req.path), error);
+      }
       const source = error as { code?: string; message?: string };
       const status = source.code === 'invalid_request' ? 400 : 403;
       return c.json({ error: source.message ?? 'Request transport rejected' }, status);
@@ -1079,7 +1087,23 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       origin: (origin, c) => (isAllowedOrigin(c, config) ? origin : ''),
     }),
   );
-  app.use('*', createAuthMiddleware({ apiKey: config.apiKey, apiKeys: config.apiKeys }));
+  app.use(
+    '*',
+    createAuthMiddleware(
+      { apiKey: config.apiKey, apiKeys: config.apiKeys },
+      {
+        errorResponse: (c, error, status) => {
+          if (isPluginAdminHttpPath(c.req.path)) {
+            return pluginAdminErrorResponse(c, pluginAdminHttpAction(c.req.path), error);
+          }
+          return c.json(
+            { error: error instanceof Error ? error.message : String(error) },
+            status as ContentfulStatusCode,
+          );
+        },
+      },
+    ),
+  );
   mountPluginAdminHttp(app, { service: pluginAdminService, config });
 
   // Health check

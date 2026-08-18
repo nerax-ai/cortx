@@ -1,5 +1,5 @@
 import { resolveRuntimeDomainIdentity, type RuntimeDomainIdentityMode } from '@nerax-ai/plugin';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 export interface ProjectIdentityRecord {
@@ -65,12 +65,38 @@ export class ProjectIdentityStore {
       claimedRuntimeDomainIds: input.claimedRuntimeDomainIds,
       generate: input.generate ?? (() => `cortx:${crypto.randomUUID()}`),
     });
-    this.#persist(identity.runtimeDomainId);
-    this.#audit?.({ action: input.mode, projectRoot: this.projectRoot, runtimeDomainId: identity.runtimeDomainId });
-    return identity;
+    const runtimeDomainId =
+      input.mode === 'create' ? this.#persistCreate(identity.runtimeDomainId) : this.#persist(identity.runtimeDomainId);
+    this.#audit?.({ action: input.mode, projectRoot: this.projectRoot, runtimeDomainId });
+    return { runtimeDomainId };
   }
 
-  #persist(runtimeDomainId: string): void {
+  #persist(runtimeDomainId: string): string {
+    const temporary = this.#writeTemporary(runtimeDomainId);
+    renameSync(temporary, this.metadataPath);
+    return runtimeDomainId;
+  }
+
+  #persistCreate(runtimeDomainId: string): string {
+    const temporary = this.#writeTemporary(runtimeDomainId);
+    try {
+      linkSync(temporary, this.metadataPath);
+      return runtimeDomainId;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const winner = this.read();
+      if (!winner) throw new Error(`Competing Cortx project identity disappeared: ${this.metadataPath}`);
+      return winner.runtimeDomainId;
+    } finally {
+      try {
+        unlinkSync(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+  }
+
+  #writeTemporary(runtimeDomainId: string): string {
     const record: ProjectIdentityRecord = {
       schemaVersion: 1,
       runtimeDomainId,
@@ -79,6 +105,6 @@ export class ProjectIdentityStore {
     mkdirSync(dirname(this.metadataPath), { recursive: true, mode: 0o700 });
     const temporary = `${this.metadataPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, this.metadataPath);
+    return temporary;
   }
 }

@@ -11,7 +11,7 @@ import {
   defineContributionBinding,
   defineCortxContributionDescriptor,
 } from '@cortx/sdk';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CortxHostScope } from '../src/host-scope.js';
@@ -70,7 +70,9 @@ describe('Cortx plugin runtime foundation', () => {
     expect(calls).toBe(1);
   });
 
-  test('ProjectDomain close waits for an in-flight start and retries registry close failures', async () => {
+  test(
+    'ProjectDomain close waits for an in-flight start and retries registry close failures',
+    async () => {
     const runtimeDomainId = `test:${crypto.randomUUID()}`;
     const registry = new PluginRegistry({
       domain: createMemoryPluginRuntimeDomain({
@@ -104,7 +106,25 @@ describe('Cortx plugin runtime foundation', () => {
     await expect(firstClose).rejects.toThrow('close once');
     expect(closeCalls).toBe(1);
     await project.close();
-    expect(closeCalls).toBe(2);
+      expect(closeCalls).toBe(2);
+    },
+    15_000,
+  );
+
+  test('ProjectDomain adopts the Registry runtime domain as authoritative and rejects a mismatch', () => {
+    const runtimeDomainId = `test:${crypto.randomUUID()}`;
+    const registry = new PluginRegistry({
+      domain: createMemoryPluginRuntimeDomain({
+        runtimeDomainId,
+        root: tempRoot('project-domain-adoption'),
+        secretsBackend: new MemoryPluginSecretsBackend('cortx-test'),
+      }),
+    });
+
+    expect(new ProjectDomain({ registry }).runtimeDomainId).toBe(runtimeDomainId);
+    expect(() => new ProjectDomain({ registry, runtimeDomainId: `${runtimeDomainId}:forged` })).toThrow(
+      'does not match Registry runtime domain',
+    );
   });
 
   test('filesystem composition creates one ProjectDomain writer and excludes a second Manager', async () => {
@@ -148,6 +168,7 @@ describe('Cortx plugin runtime foundation', () => {
           contributes: {
             [AGENT_TOOL]: [
               defineCortxContributionDescriptor({ id: 'hello', displayName: 'Hello', executable: true }),
+              defineCortxContributionDescriptor({ id: 'goodbye', displayName: 'Goodbye', executable: true }),
             ],
             [RUNTIME_TOOL_PROFILE]: [
               defineCortxContributionDescriptor({
@@ -169,17 +190,33 @@ describe('Cortx plugin runtime foundation', () => {
               },
             })),
           );
+          ctx.bind(
+            defineContributionBinding(AGENT_TOOL, 'goodbye', () => ({
+              name: 'goodbye',
+              inputSchema: { type: 'object' },
+              async execute() {
+                return { success: true, output: 'goodbye' };
+              },
+            })),
+          );
         },
       }),
     );
 
+    const originalListCatalog = project.registry.listCatalog.bind(project.registry);
+    let catalogCalls = 0;
+    project.registry.listCatalog = (...args) => {
+      catalogCalls++;
+      return originalListCatalog(...args);
+    };
     const scope = new CortxHostScope('session:test', 'session');
     const extensions = await project.createAgentExtensions(
-      [{ use: '@test/cortx-plugin/hello' }],
+      [{ use: '@test/cortx-plugin/hello' }, { use: '@test/cortx-plugin/goodbye' }],
       scope,
       { instanceId: 'session:test', sessionId: 'test', workingDirectory: tempRoot('workspace') },
     );
-    expect(extensions.tools.map((tool) => tool.name)).toEqual(['hello']);
+    expect(extensions.tools.map((tool) => tool.name)).toEqual(['hello', 'goodbye']);
+    expect(catalogCalls).toBe(1);
     expect((await project.listToolProfiles()).map((profile) => profile.canonicalId)).toEqual([
       '@test/cortx-plugin/coding',
     ]);
@@ -207,6 +244,61 @@ describe('Cortx plugin runtime foundation', () => {
       }),
     ).toThrow('collision');
     expect(JSON.parse(readFileSync(store.metadataPath, 'utf8')).runtimeDomainId).toBe('domain-imported');
+  });
+
+  test('project identity create elects one persisted winner across competing processes', async () => {
+    const root = tempRoot('identity-race');
+    const release = join(root, 'release');
+    const ready = [join(root, 'ready-a'), join(root, 'ready-b')];
+    const candidates = ['domain-a', 'domain-b'];
+    const script = `
+      import { existsSync, writeFileSync } from 'node:fs';
+      import { ProjectIdentityStore } from './packages/runtime/src/project-identity.ts';
+      const root = process.env.CORTX_TEST_ROOT;
+      const ready = process.env.CORTX_TEST_READY;
+      const release = process.env.CORTX_TEST_RELEASE;
+      const candidate = process.env.CORTX_TEST_CANDIDATE;
+      if (!root || !ready || !release || !candidate) throw new Error('missing test environment');
+      const store = new ProjectIdentityStore({ projectRoot: root });
+      const result = store.resolve({ mode: 'create', generate: () => {
+        writeFileSync(ready, 'ready');
+        const wait = new Int32Array(new SharedArrayBuffer(4));
+        while (!existsSync(release)) Atomics.wait(wait, 0, 0, 5);
+        return candidate;
+      }});
+      process.stdout.write(JSON.stringify(result));
+    `;
+    const workers = candidates.map((candidate, index) =>
+      Bun.spawn([process.execPath, '-e', script], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CORTX_TEST_ROOT: root,
+          CORTX_TEST_READY: ready[index],
+          CORTX_TEST_RELEASE: release,
+          CORTX_TEST_CANDIDATE: candidate,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    );
+    await waitUntil(() => ready.every(existsSync), 10_000);
+    writeFileSync(release, 'release');
+    const results = await Promise.all(
+      workers.map(async (worker) => {
+        const [exitCode, stdout, stderr] = await Promise.all([
+          worker.exited,
+          new Response(worker.stdout).text(),
+          new Response(worker.stderr).text(),
+        ]);
+        expect(stderr).toBe('');
+        expect(exitCode).toBe(0);
+        return JSON.parse(stdout) as { runtimeDomainId: string };
+      }),
+    );
+
+    expect(results[0]).toEqual(results[1]);
+    expect(new ProjectIdentityStore({ projectRoot: root }).read()).toMatchObject(results[0]!);
   });
 
   test('topologies close only owned resources and aggregate failures without skipping later owners', async () => {

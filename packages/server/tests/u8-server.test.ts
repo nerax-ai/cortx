@@ -5,11 +5,14 @@ import {
   definePluginContract,
 } from '@nerax-ai/plugin';
 import { OFFICIAL_TOOL_PROFILE_ALIASES, CortxRuntime, ProjectDomain } from '@cortx/runtime';
-import type { PluginAdminContext } from '@synax-ai/sdk';
+import type { PluginAdminContext, PluginAdminService, PluginAdminSubscription } from '@synax-ai/sdk';
+import { Hono } from 'hono';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerRuntime } from '../src/server';
+import { createAuthMiddleware } from '../src/auth';
+import { mountPluginAdminHttp } from '../src/plugin-admin-http';
 import type { ServerConfig } from '../src/types';
 
 const roots: string[] = [];
@@ -41,6 +44,104 @@ describe('U8 Server contracts', () => {
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({ ok: false, error: { code: 'forbidden' } });
     await handle.close();
+  });
+
+  test('returns the shared PluginAdminResult envelope for malformed and transport-level failures', async () => {
+    const projectDomain = await createProjectDomain();
+    const handle = createServerRuntime(serverConfig(projectDomain));
+
+    for (const [body, action] of [
+      ['{', 'unknown'],
+      [JSON.stringify({ type: 'plugin.enable' }), 'plugin.enable'],
+      [JSON.stringify({ type: 'unknown.action' }), 'unknown'],
+    ] as const) {
+      const response = await request(handle, '/api/plugins/actions', {
+        method: 'POST',
+        headers: { ...rootHeaders(), 'content-type': 'application/json' },
+        body,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ ok: false, action, error: { code: 'invalid_request' } });
+    }
+
+    const queryCredential = await request(handle, '/api/plugins/snapshot?key=root-key', {
+      headers: rootHeaders(),
+    });
+    expect(queryCredential.status).toBe(400);
+    expect(await queryCredential.json()).toMatchObject({
+      ok: false,
+      action: 'snapshot.get',
+      error: { code: 'invalid_request' },
+    });
+
+    const insecure = await handle.app.request(
+      'http://server.local/api/plugins/snapshot',
+      { headers: rootHeaders() },
+      { remoteAddress: '203.0.113.4' },
+    );
+    expect(insecure.status).toBe(403);
+    expect(await insecure.json()).toMatchObject({
+      ok: false,
+      action: 'snapshot.get',
+      error: { code: 'transport_security' },
+    });
+
+    const unauthenticated = await request(handle, '/api/plugins/snapshot');
+    expect(unauthenticated.status).toBe(403);
+    expect(await unauthenticated.json()).toMatchObject({
+      ok: false,
+      action: 'snapshot.get',
+      error: { code: 'transport_security' },
+    });
+    await handle.close();
+  });
+
+  test('pulls one PluginAdmin SSE delivery per reader demand and cleans up once on cancel', async () => {
+    let nextCalls = 0;
+    let returnCalls = 0;
+    const subscription: PluginAdminSubscription = {
+      async next() {
+        nextCalls++;
+        return { done: false, value: { type: 'gap', afterCursor: 0, watermark: nextCalls } };
+      },
+      async return() {
+        returnCalls++;
+        return { done: true, value: undefined };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+    const service: PluginAdminService = {
+      async execute(action) {
+        return { ok: false, action: action.type, error: { code: 'internal', message: 'unused', retryable: false } };
+      },
+      async subscribe() {
+        return subscription;
+      },
+    };
+    const config = {
+      apiKey: 'root-key',
+      language: mockLanguage(),
+      model: 'test-model',
+    } as ServerConfig;
+    const app = new Hono();
+    app.use('*', createAuthMiddleware(config));
+    mountPluginAdminHttp(app, { service, config });
+
+    const response = await app.request(
+      '/api/plugins/events',
+      { headers: rootHeaders() },
+      { remoteAddress: '127.0.0.1' },
+    );
+    expect(response.status).toBe(200);
+    expect(nextCalls).toBe(0);
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('"watermark":1');
+    expect(nextCalls).toBe(1);
+    await reader.cancel();
+    expect(returnCalls).toBe(1);
   });
 
   test('applies creator-or-admin ACL and rejects every principal ceiling escalation', async () => {

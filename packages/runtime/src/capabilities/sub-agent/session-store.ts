@@ -139,7 +139,11 @@ export class SubAgentSessionStore {
     }
     const results = await Promise.allSettled(pending);
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), 'Sub-agent shutdown failed');
+    if (failures.length)
+      throw new AggregateError(
+        failures.map((result) => result.reason),
+        'Sub-agent shutdown failed',
+      );
   }
 
   complete(toolCallId: string, isError: boolean): void {
@@ -175,7 +179,9 @@ export class SubAgentSessionStore {
     if (session.status !== 'running') return Promise.resolve(cloneSession(session));
     return new Promise<SubAgentSession>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.waiters.get(toolCallId)?.delete(onDone);
+        const waiters = this.waiters.get(toolCallId);
+        waiters?.delete(onDone);
+        if (waiters?.size === 0) this.waiters.delete(toolCallId);
         reject(new Error(`Sub-agent did not settle after ${timeoutMs}ms: ${toolCallId}`));
       }, timeoutMs);
       const onDone = (value: SubAgentSession) => {

@@ -24,6 +24,10 @@ export interface ServerAuthConfig {
   apiKeys?: ServerAuthKey[];
 }
 
+export interface AuthMiddlewareOptions {
+  errorResponse?(c: Context, error: unknown, status: 400 | 401): Response | Promise<Response>;
+}
+
 export interface AuthPrincipal {
   id: string;
   isAdmin: boolean;
@@ -109,12 +113,13 @@ export function configuredAuthPrincipals(config: ServerAuthConfig): AuthPrincipa
   return normalizeAuthConfig(config).map(principalFor);
 }
 
-export function createAuthMiddleware(config: string | ServerAuthConfig) {
+export function createAuthMiddleware(config: string | ServerAuthConfig, options: AuthMiddlewareOptions = {}) {
   const apiKeys = normalizeAuthConfig(config);
   return createMiddleware(async (c: Context, next: Next) => {
     try {
       rejectCredentialQuery(c.req.url);
     } catch (error) {
+      if (options.errorResponse) return options.errorResponse(c, error, 400);
       return c.json(
         { error: error instanceof Error ? error.message : String(error) },
         400 as import('hono/utils/http-status').ContentfulStatusCode,
@@ -127,6 +132,8 @@ export function createAuthMiddleware(config: string | ServerAuthConfig) {
       ? apiKeys.find((entry) => constantTimeEqual(entry.key, providedKey))
       : undefined;
     if (!matched) {
+      const error = Object.assign(new Error('Unauthorized'), { code: 'transport_security' });
+      if (options.errorResponse) return options.errorResponse(c, error, 401);
       return c.json({ error: 'Unauthorized' }, 401 as import('hono/utils/http-status').ContentfulStatusCode);
     }
     setAuthPrincipal(c, principalFor(matched));
