@@ -10,6 +10,43 @@
         "typescript": "^5.9.3",
       },
     },
+    "../nerax/packages/logger": {
+      "name": "@nerax-ai/logger",
+      "version": "0.2.0",
+      "dependencies": {
+        "@nerax-ai/storage": "workspace:*",
+      },
+    },
+    "../nerax/packages/plugin": {
+      "name": "@nerax-ai/plugin",
+      "version": "0.2.0",
+      "dependencies": {
+        "@nerax-ai/logger": "workspace:*",
+        "@nerax-ai/storage": "workspace:*",
+      },
+    },
+    "../nerax/packages/storage": {
+      "name": "@nerax-ai/storage",
+      "version": "0.2.0",
+    },
+    "../synax/packages/core": {
+      "name": "@synax-ai/core",
+      "version": "0.1.0",
+      "dependencies": {
+        "@nerax-ai/logger": "^0.2.0",
+        "@nerax-ai/plugin": "^0.2.0",
+        "@synax-ai/sdk": "workspace:*",
+        "zod": "^4.3.6",
+      },
+    },
+    "../synax/packages/sdk": {
+      "name": "@synax-ai/sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "@nerax-ai/logger": "^0.2.0",
+        "@nerax-ai/plugin": "^0.2.0",
+      },
+    },
     "packages/core": {
       "name": "@cortx/core",
       "version": "0.0.1",
@@ -117,13 +154,6 @@
         "vite": "^6.3.0",
       },
     },
-  },
-  "overrides": {
-    "@nerax-ai/logger": "file:../nerax/packages/logger",
-    "@nerax-ai/plugin": "file:../nerax/packages/plugin",
-    "@nerax-ai/storage": "file:../nerax/packages/storage",
-    "@synax-ai/core": "file:../synax/packages/core",
-    "@synax-ai/sdk": "file:../synax/packages/sdk",
   },
   "packages": {
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.3.0", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-p+CMKJ93HFmLkjXKlXiVGlMQEuRb6H0MokBSwUsX+S6BRX8eV5naFZpQJFfJHjRZY0Hmnqy1/r6UWl3x+19zYA=="],
@@ -272,6 +302,12 @@
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.3", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1 || ^2.0.0-alpha.4", "@emnapi/runtime": "^1.7.1 || ^2.0.0-alpha.4" } }, "sha512-UMduMbqO5s5zF2NkNacMT/yK5Y5QiKvWr2+50bzIIxFDwVJ2h49b+oyjaCGPhJxd2/gC2x39EHv/gHVuu36x2Q=="],
 
+    "@nerax-ai/logger": ["@nerax-ai/logger@workspace:../nerax/packages/logger"],
+
+    "@nerax-ai/plugin": ["@nerax-ai/plugin@workspace:../nerax/packages/plugin"],
+
+    "@nerax-ai/storage": ["@nerax-ai/storage@workspace:../nerax/packages/storage"],
+
     "@oxc-parser/binding-android-arm-eabi": ["@oxc-parser/binding-android-arm-eabi@0.131.0", "", { "os": "android", "cpu": "arm" }, "sha512-t2xicr9pfzkSRYx5aPqZqlLaayIwJTqgQ81Jor31Xep2nGyL2Aq3d0K5wOfeR7VevaSdxaS9dzSQP9xDwn8fDg=="],
 
     "@oxc-parser/binding-android-arm64": ["@oxc-parser/binding-android-arm64@0.131.0", "", { "os": "android", "cpu": "arm64" }, "sha512-nlGIod6gw75x1aEDgLS+srj+JRGY0HHm9MI9YgzE/B64l6d6+H3MSP9NOgp0+HTg8tp4vV9rVfgQGgd+TfVZcA=="],
@@ -369,6 +405,10 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.62.4", "", { "os": "win32", "cpu": "x64" }, "sha512-qPzHqdj9rfUD+w79dtE07zi/kFwKyCJqplp5K5ygeLTp7jLpAoc16OAH39HSmRC9UpozaecsleI8uAdEj6v2yw=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.62.4", "", { "os": "win32", "cpu": "x64" }, "sha512-zD6NdeWEByGE9QF9vCrlJ5YQB4oq9q91kPZS37Jwj5hOkvR1lTBSpsKhKDw4IJtbQ35LsTS1HD9DZYGKIshU1Q=="],
+
+    "@synax-ai/core": ["@synax-ai/core@workspace:../synax/packages/core"],
+
+    "@synax-ai/sdk": ["@synax-ai/sdk@workspace:../synax/packages/sdk"],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg=="],
 
@@ -710,44 +750,6 @@
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
-    "@cortx/core/@synax-ai/core": ["@synax-ai/core@file:../synax/packages/core", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0", "@synax-ai/sdk": "workspace:*", "zod": "^4.3.6" } }],
-
-    "@cortx/core/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0" } }],
-
-    "@cortx/runtime/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", { "dependencies": { "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/runtime/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", { "dependencies": { "@nerax-ai/logger": "workspace:*", "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/runtime/@synax-ai/core": ["@synax-ai/core@file:../synax/packages/core", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0", "@synax-ai/sdk": "workspace:*", "zod": "^4.3.6" } }],
-
-    "@cortx/runtime/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0" } }],
-
-    "@cortx/sdk/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", { "dependencies": { "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/sdk/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", { "dependencies": { "@nerax-ai/logger": "workspace:*", "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/sdk/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0" } }],
-
-    "@cortx/server/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", { "dependencies": { "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/server/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", { "dependencies": { "@nerax-ai/logger": "workspace:*", "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/server/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/server/@synax-ai/core": ["@synax-ai/core@file:../synax/packages/core", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0", "@synax-ai/sdk": "workspace:*", "zod": "^4.3.6" } }],
-
-    "@cortx/server/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0" } }],
-
-    "@cortx/tui/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", { "dependencies": { "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/tui/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", { "dependencies": { "@nerax-ai/logger": "workspace:*", "@nerax-ai/storage": "workspace:*" } }],
-
-    "@cortx/tui/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/tui/@synax-ai/core": ["@synax-ai/core@file:../synax/packages/core", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0", "@synax-ai/sdk": "workspace:*", "zod": "^4.3.6" } }],
-
-    "@cortx/tui/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", { "dependencies": { "@nerax-ai/logger": "^0.2.0", "@nerax-ai/plugin": "^0.2.0" } }],
-
     "chalk/ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
 
     "cliui/string-width": ["string-width@4.2.3", "", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=="],
@@ -761,74 +763,6 @@
     "parse5-htmlparser2-tree-adapter/parse5": ["parse5@6.0.1", "", {}, "sha512-Ofn/CTFzRGTTxwpNEs9PP93gXShHcTq255nzRYSKe8AkVpZY7e1fpmTfOyoIvjP5HG7Z2ZM7VS9PPhQGW2pOpw=="],
 
     "yargs/string-width": ["string-width@4.2.3", "", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=="],
-
-    "@cortx/core/@synax-ai/core/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/core/@synax-ai/core/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/core/@synax-ai/core/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", {}],
-
-    "@cortx/core/@synax-ai/sdk/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/core/@synax-ai/sdk/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/runtime/@nerax-ai/logger/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/runtime/@nerax-ai/plugin/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/runtime/@nerax-ai/plugin/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/runtime/@synax-ai/core/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/runtime/@synax-ai/core/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/runtime/@synax-ai/core/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", {}],
-
-    "@cortx/runtime/@synax-ai/sdk/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/runtime/@synax-ai/sdk/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/sdk/@nerax-ai/logger/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/sdk/@nerax-ai/plugin/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/sdk/@nerax-ai/plugin/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/sdk/@synax-ai/sdk/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/sdk/@synax-ai/sdk/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/server/@nerax-ai/logger/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/server/@nerax-ai/plugin/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/server/@nerax-ai/plugin/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/server/@synax-ai/core/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/server/@synax-ai/core/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/server/@synax-ai/core/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", {}],
-
-    "@cortx/server/@synax-ai/sdk/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/server/@synax-ai/sdk/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/tui/@nerax-ai/logger/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/tui/@nerax-ai/plugin/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/tui/@nerax-ai/plugin/@nerax-ai/storage": ["@nerax-ai/storage@file:../nerax/packages/storage", {}],
-
-    "@cortx/tui/@synax-ai/core/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/tui/@synax-ai/core/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
-
-    "@cortx/tui/@synax-ai/core/@synax-ai/sdk": ["@synax-ai/sdk@file:../synax/packages/sdk", {}],
-
-    "@cortx/tui/@synax-ai/sdk/@nerax-ai/logger": ["@nerax-ai/logger@file:../nerax/packages/logger", {}],
-
-    "@cortx/tui/@synax-ai/sdk/@nerax-ai/plugin": ["@nerax-ai/plugin@file:../nerax/packages/plugin", {}],
 
     "cliui/string-width/is-fullwidth-code-point": ["is-fullwidth-code-point@3.0.0", "", {}, "sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg=="],
 
