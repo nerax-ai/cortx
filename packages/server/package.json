@@ -1,6 +1,6 @@
 {
   "name": "@cortx/server",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,8 +27,8 @@
     "@nerax-ai/logger": "^0.2.0",
     "@nerax-ai/plugin": "^0.2.0",
     "@nerax-ai/storage": "^0.2.0",
-    "@synax-ai/core": "^0.1.0",
-    "@synax-ai/sdk": "^0.1.0",
+    "@synax-ai/core": "^0.2.0",
+    "@synax-ai/sdk": "^0.2.0",
     "hono": "^4.7.0"
   },
   "devDependencies": {

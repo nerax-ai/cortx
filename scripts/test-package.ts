@@ -39,7 +39,7 @@ try {
     const stagingManifest = {
       ...manifest,
       dependencies: Object.fromEntries(
-        Object.entries(manifest.dependencies ?? {}).map(([name, range]) => [name, range === 'workspace:*' ? '0.0.1' : range]),
+        Object.entries(manifest.dependencies ?? {}).map(([name, range]) => [name, range === 'workspace:*' ? '0.2.0' : range]),
       ),
     };
     writeFileSync(join(staging, 'package.json'), `${JSON.stringify(stagingManifest, null, 2)}\n`);

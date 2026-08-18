@@ -31,7 +31,7 @@
     },
     "../synax/packages/core": {
       "name": "@synax-ai/core",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@nerax-ai/logger": "^0.2.0",
         "@nerax-ai/plugin": "^0.2.0",
@@ -41,7 +41,7 @@
     },
     "../synax/packages/sdk": {
       "name": "@synax-ai/sdk",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@nerax-ai/logger": "^0.2.0",
         "@nerax-ai/plugin": "^0.2.0",
@@ -49,11 +49,11 @@
     },
     "packages/core": {
       "name": "@cortx/core",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "dependencies": {
         "@cortx/sdk": "workspace:*",
-        "@synax-ai/core": "^0.1.0",
-        "@synax-ai/sdk": "^0.1.0",
+        "@synax-ai/core": "^0.2.0",
+        "@synax-ai/sdk": "^0.2.0",
       },
       "devDependencies": {
         "bun-types": "^1.3.9",
@@ -61,14 +61,14 @@
     },
     "packages/runtime": {
       "name": "@cortx/runtime",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "dependencies": {
         "@cortx/core": "workspace:*",
         "@cortx/sdk": "workspace:*",
         "@nerax-ai/logger": "^0.2.0",
         "@nerax-ai/plugin": "^0.2.0",
-        "@synax-ai/core": "^0.1.0",
-        "@synax-ai/sdk": "^0.1.0",
+        "@synax-ai/core": "^0.2.0",
+        "@synax-ai/sdk": "^0.2.0",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -77,16 +77,16 @@
     },
     "packages/sdk": {
       "name": "@cortx/sdk",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "dependencies": {
         "@nerax-ai/logger": "^0.2.0",
         "@nerax-ai/plugin": "^0.2.0",
-        "@synax-ai/sdk": "^0.1.0",
+        "@synax-ai/sdk": "^0.2.0",
       },
     },
     "packages/server": {
       "name": "@cortx/server",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "dependencies": {
         "@cortx/runtime": "workspace:*",
         "@cortx/sdk": "workspace:*",
@@ -94,8 +94,8 @@
         "@nerax-ai/logger": "^0.2.0",
         "@nerax-ai/plugin": "^0.2.0",
         "@nerax-ai/storage": "^0.2.0",
-        "@synax-ai/core": "^0.1.0",
-        "@synax-ai/sdk": "^0.1.0",
+        "@synax-ai/core": "^0.2.0",
+        "@synax-ai/sdk": "^0.2.0",
         "hono": "^4.7.0",
       },
       "devDependencies": {
@@ -104,7 +104,7 @@
     },
     "packages/store": {
       "name": "@cortx/store",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "dependencies": {
         "@cortx/sdk": "workspace:*",
       },
@@ -114,7 +114,7 @@
     },
     "packages/tui": {
       "name": "@cortx/tui",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "bin": {
         "cortx": "./dist/cli.js",
       },
@@ -125,8 +125,8 @@
         "@nerax-ai/logger": "^0.2.0",
         "@nerax-ai/plugin": "^0.2.0",
         "@nerax-ai/storage": "^0.2.0",
-        "@synax-ai/core": "^0.1.0",
-        "@synax-ai/sdk": "^0.1.0",
+        "@synax-ai/core": "^0.2.0",
+        "@synax-ai/sdk": "^0.2.0",
         "@types/react": "^19.1.0",
         "cli-highlight": "^2.1.11",
         "ink": "^7.1.0",
@@ -138,7 +138,7 @@
     },
     "packages/web": {
       "name": "@cortx/web",
-      "version": "0.0.1",
+      "version": "0.2.0",
       "dependencies": {
         "@base-ui-components/react": "^1.0.0-beta.1",
         "@cortx/sdk": "workspace:*",
