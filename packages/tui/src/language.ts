@@ -1,30 +1,34 @@
-import { Synax, type SynaxRegistry } from '@synax-ai/core';
-import { PluginRegistry } from '@nerax-ai/plugin';
+import { Synax } from '@synax-ai/core';
 import type { Logger } from '@nerax-ai/logger';
+import type { ProjectDomain } from '@cortx/runtime';
 import type { CortxConfig } from './config.js';
-import type { CortxFactoryMap, CortxExtensionType, CortxRegistry } from '@cortx/runtime';
 
-export type ProjectPluginRegistry = CortxRegistry & SynaxRegistry;
+export interface TuiLanguageHost {
+  readonly synax: Synax;
+  readonly language: Synax['language'];
+  close(): Promise<void>;
+}
 
-export async function createLanguageClient(config: CortxConfig, logger?: Logger, registry?: ProjectPluginRegistry) {
-  const projectRegistry = registry ?? PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({
-    appName: 'cortx',
-    logger,
-  }) as ProjectPluginRegistry;
-  for (const source of config.plugins ?? []) {
-    await projectRegistry.load(source);
-  }
-
+export async function createLanguageHost(
+  config: CortxConfig,
+  projectDomain?: ProjectDomain,
+  logger?: Logger,
+): Promise<TuiLanguageHost> {
   const synax = new Synax({
-    appName: 'cortx',
-    registry: projectRegistry,
+    registry: projectDomain?.registry,
     providers: [],
     groups: config.groups ?? [],
     logger,
   });
-  for (const p of config.providers ?? []) {
-    await synax.addProvider(p);
+  try {
+    for (const provider of config.providers ?? []) await synax.addProvider(provider);
+  } catch (error) {
+    await synax.close().catch(() => undefined);
+    throw error;
   }
-
-  return synax.language;
+  return {
+    synax,
+    language: synax.language,
+    close: () => synax.close(),
+  };
 }

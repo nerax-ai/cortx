@@ -9,6 +9,10 @@
     "dev": "bun run --filter '*' dev",
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
+    "typecheck:tui-tests": "bun run --cwd packages/tui tsc --project tsconfig.test.json --noEmit",
+    "test:plugin": "bun test packages/runtime/tests/plugin-foundation.test.ts packages/runtime/tests/plugin-admin.test.ts packages/server/tests/security.test.ts packages/server/tests/u8-server.test.ts packages/tui/src/__tests__/tui-host.test.ts packages/tui/src/__tests__/remote-sse.test.ts",
+    "test:product-dogfood": "bun test tests/product-dogfood-smoke.test.ts",
+    "test:package": "bun run build && bun scripts/test-package.ts",
     "clean": "bun run --filter '*' clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
   },
@@ -20,6 +24,8 @@
   "overrides": {
     "@nerax-ai/logger": "file:../nerax/packages/logger",
     "@nerax-ai/plugin": "file:../nerax/packages/plugin",
-    "@nerax-ai/storage": "file:../nerax/packages/storage"
+    "@nerax-ai/storage": "file:../nerax/packages/storage",
+    "@synax-ai/core": "file:../synax/packages/core",
+    "@synax-ai/sdk": "file:../synax/packages/sdk"
   }
 }

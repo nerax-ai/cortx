@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { RemoteRuntimeClient, RemoteRuntimeError, type EventSourceLike } from '../remote-client.js';
+import { RemoteRuntimeClient, RemoteRuntimeError } from '../remote-client.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -256,80 +256,4 @@ describe('RemoteRuntimeClient', () => {
     });
   });
 
-  test('connects SSE with a short-lived token and dispatches parsed events', async () => {
-    let eventSource: EventSourceLike | undefined;
-    const client = new RemoteRuntimeClient({
-      baseUrl: 'http://localhost:3000',
-      apiKey: 'test-key',
-      fetch: async (url) => {
-        expect(String(url)).toBe('http://localhost:3000/auth/token');
-        return jsonResponse({ token: 'short-token', expiresAt: Date.now() + 60_000 });
-      },
-      eventSourceFactory: (url) => {
-        expect(url).toBe('http://localhost:3000/sessions/sess_remote/events?format=envelope&token=short-token');
-        eventSource = {
-          onmessage: null,
-          onerror: null,
-          close() {},
-        };
-        return eventSource;
-      },
-    });
-
-    const events: string[] = [];
-    const unsubscribe = await client.connectEvents('sess_remote', (event) => events.push(event.type));
-    eventSource?.onmessage?.({
-      data: JSON.stringify({
-        sequence: 1,
-        timestamp: 100,
-        sessionId: 'sess_remote',
-        runId: 1,
-        event: { type: 'text_delta', delta: 'hi' },
-      }),
-    });
-    eventSource?.onmessage?.({
-      data: JSON.stringify({
-        sequence: 1,
-        timestamp: 100,
-        sessionId: 'sess_remote',
-        runId: 1,
-        event: { type: 'text_delta', delta: 'duplicate' },
-      }),
-    });
-    eventSource?.onmessage?.({ data: '{}' });
-    unsubscribe();
-
-    expect(events).toEqual(['text_delta']);
-  });
-
-  test('refreshes a near-expiry short-lived token before reconnecting SSE', async () => {
-    const tokens = [
-      { token: 'near-expiry-token', expiresAt: Date.now() + 1_000 },
-      { token: 'fresh-token', expiresAt: Date.now() + 60_000 },
-    ];
-    const eventUrls: string[] = [];
-    const client = new RemoteRuntimeClient({
-      baseUrl: 'http://localhost:3000',
-      apiKey: 'test-key',
-      fetch: async () => jsonResponse(tokens.shift()),
-      eventSourceFactory: (url) => {
-        eventUrls.push(url);
-        return {
-          onmessage: null,
-          onerror: null,
-          close() {},
-        };
-      },
-    });
-
-    const unsubscribeFirst = await client.connectEvents('sess_remote', () => {});
-    unsubscribeFirst();
-    const unsubscribeSecond = await client.connectEvents('sess_remote', () => {});
-    unsubscribeSecond();
-
-    expect(eventUrls).toEqual([
-      'http://localhost:3000/sessions/sess_remote/events?format=envelope&token=near-expiry-token',
-      'http://localhost:3000/sessions/sess_remote/events?format=envelope&token=fresh-token',
-    ]);
-  });
 });

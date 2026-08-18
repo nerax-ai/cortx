@@ -1,6 +1,23 @@
 import type { Logger } from '@nerax-ai/logger';
-import type { ExtensionOptions, InlinePlugin, PluginContext, PluginStorage } from '@nerax-ai/plugin';
-import type { LanguageMessage, LanguageToolCallContent } from '@synax-ai/sdk';
+import {
+  isValidPluginId,
+  type ContributionBinding,
+  type ContributionFactory,
+  type ContributionHostContext,
+  type ContributionLease,
+  type DeclarativePlugin,
+  type DeclarativePluginContext,
+  type EffectDisposer,
+  type JsonObject,
+  type ManifestContributionDescriptor,
+  type PluginStorage,
+} from '@nerax-ai/plugin';
+import type {
+  LanguageMessage,
+  LanguageToolCallContent,
+  SynaxContributionMap,
+  SynaxContributionType,
+} from '@synax-ai/sdk';
 import type { AgentEvent, ErrorCode } from './events.js';
 import type { AgentSessionPolicyContribution } from './policy.js';
 import type { Tool, ToolContext, ToolResult } from './tools.js';
@@ -14,7 +31,7 @@ export const AGENT_ERROR_RECOVER = 'agent.errorRecover' as const;
 export const AGENT_CONTEXT_OVERFLOW = 'agent.contextOverflow' as const;
 export const AGENT_EVENT_OBSERVER = 'agent.eventObserver' as const;
 export const AGENT_SESSION_POLICY = 'agent.sessionPolicy' as const;
-export const CORTX_EXTENSION_SCHEMA_VERSION = 1;
+export const RUNTIME_TOOL_PROFILE = 'runtime.toolProfile' as const;
 
 export const AGENT_EXTENSION_TYPES = [
   AGENT_TOOL,
@@ -28,18 +45,20 @@ export const AGENT_EXTENSION_TYPES = [
   AGENT_SESSION_POLICY,
 ] as const;
 
-export const CORTX_EXTENSION_TYPES = [...AGENT_EXTENSION_TYPES] as const;
+export const CORTX_EXECUTABLE_CONTRIBUTION_TYPES = [...AGENT_EXTENSION_TYPES] as const;
+export const CORTX_CONTRIBUTION_TYPES = [...AGENT_EXTENSION_TYPES, RUNTIME_TOOL_PROFILE] as const;
+export const PROJECT_CONTRIBUTION_TYPES = [
+  ...CORTX_CONTRIBUTION_TYPES,
+  'provider',
+  'dispatcher',
+  'endpoint',
+  'api',
+] as const;
 
 export type AgentExtensionType = (typeof AGENT_EXTENSION_TYPES)[number];
-export type CortxExtensionType = (typeof CORTX_EXTENSION_TYPES)[number];
-export type CortxExtensionSchemaVersion = 0 | typeof CORTX_EXTENSION_SCHEMA_VERSION;
-
-export interface CortxFactoryContext {
-  instanceId: string;
-  options: Record<string, unknown>;
-  logger: Logger;
-  storage: PluginStorage;
-}
+export type CortxContributionType = (typeof CORTX_CONTRIBUTION_TYPES)[number];
+export type CortxExecutableContributionType = (typeof CORTX_EXECUTABLE_CONTRIBUTION_TYPES)[number];
+export type ProjectContributionType = (typeof PROJECT_CONTRIBUTION_TYPES)[number];
 
 export interface AgentSystemTransformInput {
   system: string;
@@ -159,6 +178,109 @@ export const AGENT_EXTENSION_BUCKETS = {
 export type AgentRuntimeExtensionValue<T extends AgentExtensionType> =
   AgentRuntimeExtensions[(typeof AGENT_EXTENSION_BUCKETS)[T]][number];
 
+export interface CortxContributionMap {
+  [AGENT_TOOL]: Tool;
+  [AGENT_SYSTEM_TRANSFORM]: AgentSystemTransformContribution;
+  [AGENT_MESSAGES_TRANSFORM]: AgentMessagesTransformContribution;
+  [AGENT_TOOL_BEFORE]: AgentToolBeforeContribution;
+  [AGENT_TOOL_AFTER]: AgentToolAfterContribution;
+  [AGENT_ERROR_RECOVER]: AgentErrorRecoverContribution;
+  [AGENT_CONTEXT_OVERFLOW]: AgentContextOverflowContribution;
+  [AGENT_EVENT_OBSERVER]: AgentEventObserverContribution;
+  [AGENT_SESSION_POLICY]: AgentSessionPolicyContribution;
+  [RUNTIME_TOOL_PROFILE]: never;
+}
+
+export type ProjectContributionMap = CortxContributionMap & SynaxContributionMap;
+
+export type CortxHostScopeKind =
+  | 'application'
+  | 'session'
+  | 'run'
+  | 'foreground-child'
+  | 'background-child'
+  | 'tui';
+
+export interface CortxContributionHostContext<TValue = unknown> extends ContributionHostContext<TValue> {
+  readonly instanceId: string;
+  readonly scopeKind: CortxHostScopeKind;
+  readonly sessionId?: string;
+  readonly runId?: number;
+  readonly workingDirectory?: string;
+  readonly logger: Logger;
+  readonly storage?: PluginStorage;
+  defer(disposer: EffectDisposer, label?: string): void;
+  acquire<T>(
+    acquire: (signal: AbortSignal) => T | Promise<T>,
+    dispose: (resource: T) => void | Promise<void>,
+    label?: string,
+  ): Promise<T>;
+}
+
+export type CortxContributionFactory<TType extends CortxExecutableContributionType> = ContributionFactory<
+  CortxContributionMap[TType],
+  CortxContributionHostContext<CortxContributionMap[TType]>
+>;
+
+export type CortxContributionBinding<TType extends CortxExecutableContributionType> = ContributionBinding<
+  TType,
+  CortxContributionMap[TType],
+  CortxContributionHostContext<CortxContributionMap[TType]>
+>;
+
+export type CortxContributionLease<TType extends CortxExecutableContributionType> = ContributionLease<
+  CortxContributionMap[TType],
+  CortxContributionHostContext<CortxContributionMap[TType]>
+>;
+
+export type CortxPluginContext = Omit<DeclarativePluginContext, 'bind'> & {
+  bind<TType extends CortxExecutableContributionType>(binding: CortxContributionBinding<TType>): void;
+};
+
+export interface CortxPlugin extends Omit<DeclarativePlugin, 'setup' | 'teardown'> {
+  setup(ctx: CortxPluginContext): void | Promise<void>;
+  teardown?(ctx: CortxPluginContext): void | Promise<void>;
+}
+
+export interface CortxContributionReference {
+  pluginId: string;
+  contributionId: string;
+  canonicalId: string;
+}
+
+export interface CortxContributionConfig {
+  use: string;
+  options?: JsonObject;
+}
+
+export function parseCortxContributionReference(reference: string): CortxContributionReference {
+  const separator = reference.lastIndexOf('/');
+  if (separator <= 0 || separator === reference.length - 1) {
+    throw new Error(`Cortx contribution reference must be canonical: ${reference}`);
+  }
+  const pluginId = reference.slice(0, separator);
+  const contributionId = reference.slice(separator + 1);
+  if (
+    pluginId !== pluginId.trim() ||
+    pluginId.includes('..') ||
+    pluginId.includes('\\') ||
+    pluginId.includes(':') ||
+    !isValidPluginId(pluginId) ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(contributionId)
+  ) {
+    throw new Error(`Cortx contribution reference must be canonical: ${reference}`);
+  }
+  return { pluginId, contributionId, canonicalId: reference };
+}
+
+export function isAgentExtensionType(value: string): value is AgentExtensionType {
+  return (AGENT_EXTENSION_TYPES as readonly string[]).includes(value);
+}
+
+export function isProjectContributionType(value: string): value is ProjectContributionType {
+  return (PROJECT_CONTRIBUTION_TYPES as readonly string[]).includes(value);
+}
+
 export function createEmptyAgentRuntimeExtensions(): AgentRuntimeExtensions {
   return {
     tools: [],
@@ -200,185 +322,38 @@ export function mergeAgentRuntimeExtensions(
   return merged;
 }
 
-export interface CortxFactoryMap {
-  [AGENT_TOOL]: (ctx: CortxFactoryContext) => Tool | Promise<Tool>;
-  [AGENT_SYSTEM_TRANSFORM]: (
-    ctx: CortxFactoryContext,
-  ) => AgentSystemTransformContribution | Promise<AgentSystemTransformContribution>;
-  [AGENT_MESSAGES_TRANSFORM]: (
-    ctx: CortxFactoryContext,
-  ) => AgentMessagesTransformContribution | Promise<AgentMessagesTransformContribution>;
-  [AGENT_TOOL_BEFORE]: (ctx: CortxFactoryContext) => AgentToolBeforeContribution | Promise<AgentToolBeforeContribution>;
-  [AGENT_TOOL_AFTER]: (ctx: CortxFactoryContext) => AgentToolAfterContribution | Promise<AgentToolAfterContribution>;
-  [AGENT_ERROR_RECOVER]: (
-    ctx: CortxFactoryContext,
-  ) => AgentErrorRecoverContribution | Promise<AgentErrorRecoverContribution>;
-  [AGENT_CONTEXT_OVERFLOW]: (
-    ctx: CortxFactoryContext,
-  ) => AgentContextOverflowContribution | Promise<AgentContextOverflowContribution>;
-  [AGENT_EVENT_OBSERVER]: (
-    ctx: CortxFactoryContext,
-  ) => AgentEventObserverContribution | Promise<AgentEventObserverContribution>;
-  [AGENT_SESSION_POLICY]: (
-    ctx: CortxFactoryContext,
-  ) => AgentSessionPolicyContribution | Promise<AgentSessionPolicyContribution>;
+export function defineCortxPlugin<T extends CortxPlugin>(plugin: T): T & DeclarativePlugin {
+  return plugin as T & DeclarativePlugin;
 }
 
-export function defineCortxPlugin<T extends InlinePlugin<CortxExtensionType, CortxFactoryMap>>(plugin: T): T {
-  return plugin;
+export function defineCortxContributionDescriptor<T extends ManifestContributionDescriptor>(descriptor: T): T {
+  return descriptor;
 }
 
-export type CortxContributionFactory<T extends CortxExtensionType> = CortxFactoryMap[T];
-
-export function defineContributionFactory<T extends CortxExtensionType>(
-  _type: T,
-  factory: CortxContributionFactory<T>,
-): CortxContributionFactory<T> {
+export function defineContributionFactory<TType extends CortxExecutableContributionType>(
+  _type: TType,
+  factory: CortxContributionFactory<TType>,
+): CortxContributionFactory<TType> {
   return factory;
 }
 
-export interface CortxCapabilityContribution<T extends CortxExtensionType> {
-  schemaVersion?: CortxExtensionSchemaVersion;
-  type: T;
-  id: string;
-  factory: CortxContributionFactory<T>;
-  options?: ExtensionOptions;
-}
-
-export type AnyCortxCapabilityContribution = {
-  [T in CortxExtensionType]: CortxCapabilityContribution<T>;
-}[CortxExtensionType];
-
-export type NormalizedCortxCapabilityContribution<T extends CortxExtensionType> = Omit<
-  CortxCapabilityContribution<T>,
-  'schemaVersion'
-> & {
-  schemaVersion: typeof CORTX_EXTENSION_SCHEMA_VERSION;
-};
-
-export type AnyNormalizedCortxCapabilityContribution = {
-  [T in CortxExtensionType]: NormalizedCortxCapabilityContribution<T>;
-}[CortxExtensionType];
-
-type NormalizeCapabilityContributions<TContributions extends readonly AnyCortxCapabilityContribution[]> = {
-  readonly [K in keyof TContributions]: TContributions[K] extends CortxCapabilityContribution<infer T>
-    ? NormalizedCortxCapabilityContribution<T>
-    : never;
-};
-
-export interface RuntimeCapabilityDefinition<
-  TContributions extends readonly AnyCortxCapabilityContribution[] = readonly AnyCortxCapabilityContribution[],
-> {
-  schemaVersion?: CortxExtensionSchemaVersion;
-  id: string;
-  displayName?: string;
-  description?: string;
-  contributions: TContributions;
-  metadata?: Record<string, unknown>;
-}
-
-export type NormalizedRuntimeCapabilityDefinition<
-  TContributions extends readonly AnyCortxCapabilityContribution[] = readonly AnyCortxCapabilityContribution[],
-> = Omit<RuntimeCapabilityDefinition<TContributions>, 'schemaVersion' | 'contributions'> & {
-  schemaVersion: typeof CORTX_EXTENSION_SCHEMA_VERSION;
-  contributions: NormalizeCapabilityContributions<TContributions>;
-};
-
-export type CortxPluginContext = PluginContext<CortxExtensionType, CortxFactoryMap>;
-
-export function defineCapabilityContribution<TContribution extends AnyCortxCapabilityContribution>(
-  contribution: TContribution,
-): TContribution extends CortxCapabilityContribution<infer T> ? NormalizedCortxCapabilityContribution<T> : never;
-export function defineCapabilityContribution<T extends CortxExtensionType>(
-  type: T,
+export function defineContributionBinding<TType extends CortxExecutableContributionType>(
+  type: TType,
   id: string,
-  factory: CortxContributionFactory<T>,
-  options?: ExtensionOptions,
-): NormalizedCortxCapabilityContribution<T>;
-export function defineCapabilityContribution(
-  typeOrContribution: CortxExtensionType | AnyCortxCapabilityContribution,
-  id?: string,
-  factory?: CortxContributionFactory<CortxExtensionType>,
-  options?: ExtensionOptions,
-): AnyNormalizedCortxCapabilityContribution {
-  if (isCapabilityContribution(typeOrContribution)) {
-    return normalizeCortxCapabilityContribution(typeOrContribution) as AnyNormalizedCortxCapabilityContribution;
-  }
-  if (id === undefined || factory === undefined) {
-    throw new Error('Cortx capability contribution requires type, id, and factory');
-  }
-  return normalizeCortxCapabilityContribution(
-    options === undefined
-      ? { type: typeOrContribution, id, factory }
-      : { type: typeOrContribution, id, factory, options },
-  ) as AnyNormalizedCortxCapabilityContribution;
+  factory: CortxContributionFactory<TType>,
+): CortxContributionBinding<TType> {
+  return { type, id, factory };
 }
 
-export function defineRuntimeCapability<const TContributions extends readonly AnyCortxCapabilityContribution[]>(
-  definition: RuntimeCapabilityDefinition<TContributions>,
-): NormalizedRuntimeCapabilityDefinition<TContributions> {
-  return normalizeRuntimeCapabilityDefinition(definition);
-}
-
-export function registerRuntimeCapability(
-  ctx: CortxPluginContext,
-  capability: RuntimeCapabilityDefinition,
-): void {
-  for (const contribution of normalizeRuntimeCapabilityDefinition(capability).contributions) {
-    registerCapabilityContribution(ctx, contribution);
-  }
-}
-
-export function normalizeRuntimeCapabilityDefinition<
-  const TContributions extends readonly AnyCortxCapabilityContribution[],
->(definition: RuntimeCapabilityDefinition<TContributions>): NormalizedRuntimeCapabilityDefinition<TContributions> {
-  assertSupportedSchemaVersion(definition.schemaVersion, 'RuntimeCapability');
-  return {
-    ...definition,
-    schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-    contributions: definition.contributions.map((contribution) =>
-      normalizeCortxCapabilityContribution(contribution),
-    ) as NormalizeCapabilityContributions<TContributions>,
-  };
-}
-
-export function normalizeCortxCapabilityContribution<T extends CortxExtensionType>(
-  contribution: CortxCapabilityContribution<T>,
-): NormalizedCortxCapabilityContribution<T> {
-  assertSupportedSchemaVersion(contribution.schemaVersion, 'CortxCapabilityContribution');
-  return {
-    ...contribution,
-    schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-  };
-}
-
-function registerCapabilityContribution<T extends CortxExtensionType>(
-  ctx: CortxPluginContext,
-  contribution: NormalizedCortxCapabilityContribution<T>,
-): void {
-  ctx.register(contribution.type, contribution.id, contribution.factory, contribution.options);
-}
-
-function assertSupportedSchemaVersion(value: unknown, label: string): void {
-  if (value === undefined || value === 0 || value === CORTX_EXTENSION_SCHEMA_VERSION) return;
-  throw new Error(`${label}.schemaVersion must be ${CORTX_EXTENSION_SCHEMA_VERSION}`);
-}
-
-function isCapabilityContribution(
-  value: CortxExtensionType | AnyCortxCapabilityContribution,
-): value is AnyCortxCapabilityContribution {
-  return typeof value === 'object' && value !== null;
-}
-
-export function defineToolFactory<T extends CortxFactoryMap[typeof AGENT_TOOL]>(factory: T): T {
+export function defineToolFactory<T extends CortxContributionFactory<typeof AGENT_TOOL>>(factory: T): T {
   return factory;
 }
 
-export function defineSessionPolicyFactory<T extends CortxFactoryMap[typeof AGENT_SESSION_POLICY]>(factory: T): T {
+export function defineSessionPolicyFactory<T extends CortxContributionFactory<typeof AGENT_SESSION_POLICY>>(factory: T): T {
   return factory;
 }
 
-export function defineEventObserverFactory<T extends CortxFactoryMap[typeof AGENT_EVENT_OBSERVER]>(factory: T): T {
+export function defineEventObserverFactory<T extends CortxContributionFactory<typeof AGENT_EVENT_OBSERVER>>(factory: T): T {
   return factory;
 }
 
@@ -413,3 +388,6 @@ export function defineEventObserver<T extends AgentEventObserverContribution>(co
 export function defineSessionPolicy<T extends AgentSessionPolicyContribution>(contribution: T): T {
   return contribution;
 }
+
+export type { SynaxContributionType };
+export type CortxContributionOptions = JsonObject;

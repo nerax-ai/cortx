@@ -1,16 +1,10 @@
 import type { AgentDoneUsage, AgentEvent, ContextUsageSource, RuntimeAgentEventEnvelope } from '@cortx/sdk';
 import type { AgentStore, AgentStoreEventInput } from '@cortx/store';
-import { createAuthClient, getAuthToken, apiFetch, type AuthClient } from './auth';
+import { apiFetch, createAuthClient, type AuthClient } from './auth';
 
 export type WebWorkspaceToolMode = string;
 export type WebApprovalMode = 'deny' | 'interactive' | 'full-access';
-export type WebEventConnectionPhase =
-  | 'connecting'
-  | 'replaying'
-  | 'live'
-  | 'reconnecting'
-  | 'disconnected'
-  | 'closed';
+export type WebEventConnectionPhase = 'connecting' | 'replaying' | 'live' | 'reconnecting' | 'disconnected' | 'closed';
 
 export interface WebEventConnectionState {
   phase: WebEventConnectionPhase;
@@ -24,6 +18,7 @@ export interface WebEventConnectionState {
 export interface EventBridgeOptions {
   onConnectionState?: (state: WebEventConnectionState) => void;
   onHistoryState?: (state: WebEventHistoryState) => void;
+  reconnectDelayMs?: number;
 }
 
 export interface WebEventHistoryState {
@@ -171,6 +166,7 @@ interface WebEventHistoryResponse {
 }
 
 const EVENT_HISTORY_PAGE_SIZE = 800;
+const DEFAULT_RECONNECT_DELAY_MS = 1_000;
 
 export class EventBridgeError extends Error {
   constructor(
@@ -232,7 +228,10 @@ function mergeEnvelopes(...groups: RuntimeAgentEventEnvelope[][]): RuntimeAgentE
 export class EventBridge {
   readonly store: AgentStore;
   private client: AuthClient;
-  private eventSource: EventSource | null = null;
+  private streamAbortController: AbortController | null = null;
+  private streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  private streamTask: Promise<void> | null = null;
+  private disconnectResult: Promise<void> | null = null;
   private activeSessionId: string | null = null;
   private connectionState: WebEventConnectionState = { phase: 'closed', updatedAt: Date.now() };
   private replaying = false;
@@ -297,7 +296,7 @@ export class EventBridge {
   async deleteSession(sessionId: string): Promise<void> {
     const res = await apiFetch(this.client, `/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
     await throwIfError(res, 'Delete session failed');
-    if (this.activeSessionId === sessionId) this.disconnect();
+    if (this.activeSessionId === sessionId) await this.disconnect();
   }
 
   async listModels(): Promise<WebModelInfo[]> {
@@ -356,7 +355,7 @@ export class EventBridge {
   }
 
   async connect(sessionId: string): Promise<void> {
-    this.disconnect();
+    await this.disconnect();
     this.activeSessionId = sessionId;
     this.replaying = true;
     this.replayBuffer = [];
@@ -373,36 +372,97 @@ export class EventBridge {
       await this.loadEventHistory(sessionId);
       if (this.activeSessionId !== sessionId) return;
 
-      const token = await getAuthToken(this.client);
-      const params = new URLSearchParams({
-        format: 'envelope',
-        replay: 'false',
-        token,
-      });
-      if (this.replayLastSequence !== undefined) {
-        params.set('after', String(this.replayLastSequence));
+      const controller = new AbortController();
+      this.streamAbortController = controller;
+      const reader = await this.openEventStream(sessionId, controller.signal);
+      if (this.activeSessionId !== sessionId || controller.signal.aborted) {
+        await reader.cancel().catch(() => undefined);
+        return;
       }
-      const url = `${this.client.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`;
-      const source = new EventSource(url);
-      this.eventSource = source;
-      source.onopen = () => {
-        if (this.eventSource === source) {
-          this.emitConnection({ phase: 'replaying', sessionId, message: 'Syncing live tail' });
-        }
-      };
-      source.onmessage = (e) => this.handleSseMessage(source, sessionId, e.data);
-      source.onerror = () => {
-        if (this.eventSource === source) {
-          this.emitConnection({ phase: 'reconnecting', sessionId, message: 'Event stream interrupted' });
-        }
-      };
-    } catch (error) {
-      this.emitConnection({
-        phase: 'disconnected',
-        sessionId,
-        message: error instanceof Error ? error.message : String(error),
+      this.streamReader = reader;
+      this.emitConnection({ phase: 'replaying', sessionId, message: 'Syncing live tail' });
+      const task = this.runEventStream(sessionId, controller, reader);
+      this.streamTask = task;
+      void task.finally(() => {
+        if (this.streamTask === task) this.streamTask = null;
+        if (this.streamAbortController === controller) this.streamAbortController = null;
       });
+    } catch (error) {
+      await this.stopEventStream();
+      if (this.activeSessionId !== sessionId) return;
+      this.emitConnection({ phase: 'disconnected', sessionId, message: errorMessage(error) });
       throw error;
+    }
+  }
+
+  private async openEventStream(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+    const params = new URLSearchParams({ format: 'envelope', replay: 'false' });
+    if (this.replayLastSequence !== undefined) params.set('after', String(this.replayLastSequence));
+    const response = await apiFetch(
+      this.client,
+      `/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`,
+      { method: 'GET', headers: { Accept: 'text/event-stream' }, signal },
+    );
+    await throwIfError(response, 'Open event stream failed');
+    if (!response.body) throw new EventBridgeError('Event stream response has no body', response.status);
+    return response.body.getReader();
+  }
+
+  private async runEventStream(
+    sessionId: string,
+    controller: AbortController,
+    initialReader: ReadableStreamDefaultReader<Uint8Array>,
+  ): Promise<void> {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = initialReader;
+    let reconnectReason: unknown;
+    while (!controller.signal.aborted && this.activeSessionId === sessionId) {
+      let interruption = reconnectReason;
+      reconnectReason = undefined;
+      if (reader) {
+        try {
+          await pumpSse(reader, (data) => this.handleSseMessage(controller, sessionId, data), controller.signal);
+        } catch (error) {
+          if (!controller.signal.aborted && !isAbortError(error)) interruption = error;
+        } finally {
+          if (this.streamReader === reader) this.streamReader = null;
+          try {
+            reader.releaseLock();
+          } catch {
+            /* the reader may already be cancelled or errored */
+          }
+          reader = null;
+        }
+      }
+
+      if (controller.signal.aborted || this.activeSessionId !== sessionId) break;
+      if (!this.replaying) {
+        this.replaying = true;
+        this.replayBuffer = [];
+      }
+      this.emitConnection({
+        phase: 'reconnecting',
+        sessionId,
+        message: interruption ? errorMessage(interruption) : 'Event stream interrupted',
+      });
+      await waitForReconnect(this.options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS, controller.signal);
+      if (controller.signal.aborted || this.activeSessionId !== sessionId) break;
+
+      try {
+        reader = await this.openEventStream(sessionId, controller.signal);
+        if (controller.signal.aborted || this.activeSessionId !== sessionId) {
+          await reader.cancel().catch(() => undefined);
+          break;
+        }
+        this.streamReader = reader;
+        this.emitConnection({ phase: 'replaying', sessionId, message: 'Syncing live tail' });
+      } catch (error) {
+        reader = null;
+        if (controller.signal.aborted || this.activeSessionId !== sessionId || isAbortError(error)) break;
+        reconnectReason = error;
+      }
     }
   }
 
@@ -458,7 +518,10 @@ export class EventBridge {
     return (await res.json()) as WebEventHistoryResponse;
   }
 
-  private normalizeHistoryEnvelopes(sessionId: string, items: RuntimeAgentEventEnvelope[]): RuntimeAgentEventEnvelope[] {
+  private normalizeHistoryEnvelopes(
+    sessionId: string,
+    items: RuntimeAgentEventEnvelope[],
+  ): RuntimeAgentEventEnvelope[] {
     const envelopes: RuntimeAgentEventEnvelope[] = [];
     for (const item of items) {
       if (!isEnvelope(item)) continue;
@@ -479,8 +542,8 @@ export class EventBridge {
     this.store.dispatchMany(history);
   }
 
-  private handleSseMessage(source: EventSource, sessionId: string, data: string): void {
-    if (this.eventSource !== source) return;
+  private handleSseMessage(controller: AbortController, sessionId: string, data: string): void {
+    if (this.streamAbortController !== controller || this.activeSessionId !== sessionId) return;
     try {
       if (!data || data === '{}') {
         this.flushReplayBuffer();
@@ -497,6 +560,7 @@ export class EventBridge {
       }
       const parsed = JSON.parse(data) as AgentEvent | RuntimeAgentEventEnvelope;
       const envelope = isEnvelope(parsed) ? parsed : null;
+      if (envelope && envelope.sessionId !== sessionId) return;
       const event = envelope ? normalizeEvent(envelope.event) : normalizeEvent(parsed as AgentEvent);
       if (event.type) {
         if (envelope?.sequence !== undefined && this.replayLastSequence !== undefined) {
@@ -625,10 +689,9 @@ export class EventBridge {
     await throwIfError(res, 'Answer failed');
   }
 
-  disconnect(): void {
+  disconnect(): Promise<void> {
+    if (this.disconnectResult) return this.disconnectResult;
     const sessionId = this.activeSessionId ?? undefined;
-    this.eventSource?.close();
-    this.eventSource = null;
     this.activeSessionId = null;
     this.replaying = false;
     this.replayBuffer = [];
@@ -638,8 +701,104 @@ export class EventBridge {
     this.historyHasMoreBefore = false;
     this.loadingOlderHistory = false;
     this.emitHistoryState(undefined);
-    if (sessionId) {
-      this.emitConnection({ phase: 'closed', sessionId, message: 'Event stream closed' });
-    }
+    const result = (async () => {
+      await this.stopEventStream();
+      if (sessionId) this.emitConnection({ phase: 'closed', sessionId, message: 'Event stream closed' });
+    })();
+    this.disconnectResult = result;
+    void result.finally(() => {
+      if (this.disconnectResult === result) this.disconnectResult = null;
+    });
+    return result;
   }
+
+  private async stopEventStream(): Promise<void> {
+    const controller = this.streamAbortController;
+    const reader = this.streamReader;
+    const task = this.streamTask;
+    this.streamAbortController = null;
+    this.streamReader = null;
+    this.streamTask = null;
+    controller?.abort(new Error('Web event stream closed'));
+    await reader?.cancel().catch(() => undefined);
+    await task?.catch(() => undefined);
+  }
+}
+
+async function pumpSse(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onData: (data: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let dataLines: string[] = [];
+
+  const processLine = (line: string): void => {
+    if (!line) {
+      if (dataLines.length > 0) onData(dataLines.join('\n'));
+      dataLines = [];
+      return;
+    }
+    if (line.startsWith(':')) return;
+    const colon = line.indexOf(':');
+    const field = colon < 0 ? line : line.slice(0, colon);
+    let value = colon < 0 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (field === 'data') dataLines.push(value);
+  };
+
+  const processBuffer = (final: boolean): void => {
+    while (buffer) {
+      const ending = findLineEnding(buffer, final);
+      if (!ending) break;
+      processLine(buffer.slice(0, ending.index));
+      buffer = buffer.slice(ending.index + ending.length);
+    }
+    if (final && buffer) {
+      processLine(buffer);
+      buffer = '';
+    }
+  };
+
+  while (!signal.aborted) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    processBuffer(false);
+  }
+  buffer += decoder.decode();
+  processBuffer(true);
+}
+
+function findLineEnding(buffer: string, final: boolean): { index: number; length: number } | undefined {
+  for (let index = 0; index < buffer.length; index++) {
+    const char = buffer[index];
+    if (char === '\n') return { index, length: 1 };
+    if (char !== '\r') continue;
+    if (index + 1 >= buffer.length && !final) return undefined;
+    return { index, length: buffer[index + 1] === '\n' ? 2 : 1 };
+  }
+  return undefined;
+}
+
+function waitForReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(finish, delayMs);
+    signal.addEventListener('abort', finish, { once: true });
+    function finish(): void {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    }
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

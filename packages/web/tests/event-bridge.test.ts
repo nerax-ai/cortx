@@ -5,22 +5,51 @@ import { AgentStore } from '@cortx/store';
 import { EventBridge, EventBridgeError, type WebEventConnectionState } from '../src/bridge/event-bridge';
 
 const originalFetch = globalThis.fetch;
-const originalEventSource = (globalThis as unknown as { EventSource?: unknown }).EventSource;
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
-  onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
+  readonly response: Response;
+  readonly onopen = (_event: unknown): void => {};
+  readonly onmessage = ({ data }: { data: string }): void => {
+    this.controller.enqueue(this.encoder.encode(`data: ${data}\n\n`));
+  };
+  readonly onerror = (_event: unknown): void => {
+    this.closed = true;
+    this.controller.error(new Error('Event stream interrupted'));
+  };
   closed = false;
+  private readonly encoder = new TextEncoder();
+  private controller!: ReadableStreamDefaultController<Uint8Array>;
 
   constructor(readonly url: string) {
     FakeEventSource.instances.push(this);
+    this.response = new Response(
+      new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          this.controller = controller;
+        },
+        cancel: () => {
+          this.closed = true;
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    );
   }
 
   close(): void {
     this.closed = true;
+    this.controller.close();
   }
+
+  raw(chunk: string): void {
+    this.controller.enqueue(this.encoder.encode(chunk));
+  }
+}
+
+function eventStreamResponse(input: string | URL | Request): Response | undefined {
+  const url = new URL(String(input), 'http://web');
+  if (!url.pathname.endsWith('/events')) return undefined;
+  return new FakeEventSource(String(input)).response;
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -62,7 +91,6 @@ async function waitForCondition(condition: () => boolean, timeoutMs = 200): Prom
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  (globalThis as unknown as { EventSource?: unknown }).EventSource = originalEventSource;
   FakeEventSource.instances = [];
 });
 
@@ -77,7 +105,8 @@ describe('EventBridge', () => {
         auth: new Headers(init?.headers).get('Authorization'),
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions' && init?.method === 'POST') return jsonResponse(sessionBody());
       if (url.pathname === '/sessions/sess_web' && init?.method === 'PATCH') {
         return jsonResponse({
@@ -92,7 +121,6 @@ describe('EventBridge', () => {
       if (url.pathname === '/sessions/sess_web') return jsonResponse(sessionBody(true));
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     const bridge = new EventBridge(store, 'api-key');
@@ -116,6 +144,7 @@ describe('EventBridge', () => {
       }),
     });
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+    await waitForCondition(() => bridge.getConnectionState().phase === 'live');
 
     await bridge.prompt(session.id, 'hello');
     await bridge.followUp(session.id, 'more');
@@ -135,11 +164,11 @@ describe('EventBridge', () => {
     expect(refreshed.promptHistory).toEqual(['previous prompt']);
     expect(store.getState().sessionId).toBe('sess_web');
     expect(store.getState().messages.currentText).toBe('hi');
-    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_web/events?format=envelope&replay=false&token=short-token');
+    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_web/events?format=envelope&replay=false');
     expect(calls.map((call) => call.path)).toEqual([
-      '/auth/token',
       '/sessions',
       '/sessions/sess_web/events/history',
+      '/sessions/sess_web/events',
       '/sessions/sess_web',
       '/sessions/sess_web/prompt',
       '/sessions/sess_web/follow-up',
@@ -150,27 +179,34 @@ describe('EventBridge', () => {
       '/sessions/sess_web',
       '/sessions/sess_web',
     ]);
-    expect(calls[1].body).toEqual({ workingDirectory: '/repo/cortx', metadata: { source: 'web' } });
+    expect(calls[0].body).toEqual({ workingDirectory: '/repo/cortx', metadata: { source: 'web' } });
     expect(calls.find((call) => call.method === 'PATCH')).toMatchObject({
       method: 'PATCH',
       body: { toolMode: 'read-only', approvalMode: 'deny', skillPacks: ['review-pack'] },
     });
-    expect(calls[0].auth).toBe('Bearer api-key');
-    expect(calls.slice(1).every((call) => call.auth === 'Bearer short-token')).toBe(true);
+    expect(calls.every((call) => call.auth === 'Bearer api-key')).toBe(true);
   });
 
   test('emits event stream lifecycle state while replaying and reconnecting', async () => {
     const states: WebEventConnectionState[] = [];
-    globalThis.fetch = (async (input) => {
+    const eventCalls: Array<{ url: string; auth: string | null }> = [];
+    globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      if (url.pathname.endsWith('/events')) {
+        eventCalls.push({
+          url: String(input),
+          auth: new Headers(init?.headers).get('Authorization'),
+        });
+      }
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     const bridge = new EventBridge(store, 'api-key', '', {
       onConnectionState: (state) => states.push(state),
+      reconnectDelayMs: 0,
     });
 
     await bridge.connect('sess_events');
@@ -185,8 +221,10 @@ describe('EventBridge', () => {
       }),
     });
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+    await waitForCondition(() => bridge.getConnectionState().phase === 'live');
     FakeEventSource.instances[0].onerror?.({});
-    bridge.disconnect();
+    await waitForCondition(() => FakeEventSource.instances.length === 2);
+    await bridge.disconnect();
 
     expect(states.map((state) => state.phase)).toEqual([
       'connecting',
@@ -194,6 +232,7 @@ describe('EventBridge', () => {
       'replaying',
       'live',
       'reconnecting',
+      'replaying',
       'closed',
     ]);
     expect(states[3]).toMatchObject({
@@ -203,6 +242,17 @@ describe('EventBridge', () => {
     });
     expect(store.getState().messages.currentText).toBe('restored');
     expect(FakeEventSource.instances[0].closed).toBe(true);
+    expect(FakeEventSource.instances[1].closed).toBe(true);
+    expect(eventCalls).toEqual([
+      {
+        url: '/sessions/sess_events/events?format=envelope&replay=false',
+        auth: 'Bearer api-key',
+      },
+      {
+        url: '/sessions/sess_events/events?format=envelope&replay=false&after=4',
+        auth: 'Bearer api-key',
+      },
+    ]);
   });
 
   test('deletes sessions and closes the active event stream', async () => {
@@ -210,20 +260,20 @@ describe('EventBridge', () => {
     globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input), 'http://web');
       calls.push({ path: url.pathname, method: init?.method ?? 'GET' });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_delete/events/history') return jsonResponse({ events: [], page: {} });
       if (url.pathname === '/sessions/sess_delete' && init?.method === 'DELETE') return jsonResponse({ ok: true });
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const bridge = new EventBridge(new AgentStore(), 'api-key');
     await bridge.connect('sess_delete');
     await bridge.deleteSession('sess_delete');
 
     expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
-      'POST /auth/token',
       'GET /sessions/sess_delete/events/history',
+      'GET /sessions/sess_delete/events',
       'DELETE /sessions/sess_delete',
     ]);
     expect(FakeEventSource.instances[0].closed).toBe(true);
@@ -233,24 +283,65 @@ describe('EventBridge', () => {
     const phases: string[] = [];
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const bridge = new EventBridge(new AgentStore(), 'api-key', '', {
       onConnectionState: (state) => phases.push(state.phase),
     });
     await bridge.connect('sess_empty');
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
+    await waitForCondition(() => bridge.getConnectionState().phase === 'live');
 
-    expect(phases).toEqual(['connecting', 'replaying', 'live']);
+    expect(phases).toEqual(['connecting', 'replaying', 'replaying', 'live']);
+  });
+
+  test('parses fragmented CRLF and multiline SSE frames before settling cancellation', async () => {
+    const eventCalls: Array<{ url: string; auth: string | null; signal?: AbortSignal | null }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input), 'http://web');
+      if (url.pathname.endsWith('/events')) {
+        eventCalls.push({
+          url: String(input),
+          auth: new Headers(init?.headers).get('Authorization'),
+          signal: init?.signal,
+        });
+      }
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
+      return jsonResponse({ events: [] });
+    }) as typeof fetch;
+
+    const store = new AgentStore();
+    const bridge = new EventBridge(store, 'api-key');
+    await bridge.connect('sess_chunks');
+    const stream = FakeEventSource.instances[0];
+
+    stream.raw(': ignored\r');
+    stream.raw('\nevent: message\r\nid: 7\r\ndata: {"sequence":7,"timestamp":1700,\r');
+    stream.raw('\ndata: "sessionId":"sess_chunks","runId":1,"event":{"type":"text_delta","delta":"chunked"}}\r\n\r');
+    stream.raw('\ndata: {}\r\n\r');
+    stream.raw('\n');
+
+    await waitForCondition(() => bridge.getConnectionState().phase === 'live');
+    expect(store.getState().messages.currentText).toBe('chunked');
+    expect(eventCalls).toHaveLength(1);
+    expect(eventCalls[0].url).toBe('/sessions/sess_chunks/events?format=envelope&replay=false');
+    expect(eventCalls[0].url).not.toContain('api-key');
+    expect(eventCalls[0].auth).toBe('Bearer api-key');
+
+    await bridge.disconnect();
+    expect(eventCalls[0].signal?.aborted).toBe(true);
+    expect(stream.closed).toBe(true);
   });
 
   test('loads event history once and applies it with a single store notification', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_replay/events/history') {
         return jsonResponse({
           events: [
@@ -289,7 +380,6 @@ describe('EventBridge', () => {
       }
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     let changes = 0;
@@ -308,16 +398,15 @@ describe('EventBridge', () => {
       },
     ]);
     expect(changes).toBe(2);
-    expect(FakeEventSource.instances[0].url).toBe(
-      '/sessions/sess_replay/events?format=envelope&replay=false&token=short-token&after=3',
-    );
+    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_replay/events?format=envelope&replay=false&after=3');
   });
 
   test('loads older history pages and replays them before the current window', async () => {
     const historyQueries: string[] = [];
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_replay/events/history') {
         historyQueries.push(url.search);
         if (url.searchParams.get('before') === '10') {
@@ -359,16 +448,16 @@ describe('EventBridge', () => {
       }
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     const historyStates: Array<{ hasMoreBefore: boolean; loadedEvents: number; firstSequence?: number }> = [];
     const bridge = new EventBridge(store, 'api-key', '', {
-      onHistoryState: (state) => historyStates.push({
-        hasMoreBefore: state.hasMoreBefore,
-        loadedEvents: state.loadedEvents,
-        firstSequence: state.firstSequence,
-      }),
+      onHistoryState: (state) =>
+        historyStates.push({
+          hasMoreBefore: state.hasMoreBefore,
+          loadedEvents: state.loadedEvents,
+          firstSequence: state.firstSequence,
+        }),
     });
     await bridge.connect('sess_replay');
 
@@ -391,7 +480,8 @@ describe('EventBridge', () => {
 
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_slow/events/history') {
         slowHistoryRequested = true;
         return slowHistory;
@@ -409,10 +499,10 @@ describe('EventBridge', () => {
           ],
         });
       }
-      if (url.pathname === '/sessions/sess_fast') return jsonResponse({ session: { ...sessionBody(false).session, id: 'sess_fast' } });
+      if (url.pathname === '/sessions/sess_fast')
+        return jsonResponse({ session: { ...sessionBody(false).session, id: 'sess_fast' } });
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     const bridge = new EventBridge(store, 'api-key');
@@ -438,15 +528,14 @@ describe('EventBridge', () => {
     expect(store.getState().sessionId).toBe('sess_fast');
     expect(store.getState().messages.currentText).toBe('fast session');
     expect(FakeEventSource.instances).toHaveLength(1);
-    expect(FakeEventSource.instances[0].url).toBe(
-      '/sessions/sess_fast/events?format=envelope&replay=false&token=short-token&after=3',
-    );
+    expect(FakeEventSource.instances[0].url).toBe('/sessions/sess_fast/events?format=envelope&replay=false&after=3');
   });
 
   test('buffers SSE catch-up events and applies them once on replay-complete heartbeat', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_replay/events/history') {
         return jsonResponse({ events: [] });
       }
@@ -461,7 +550,6 @@ describe('EventBridge', () => {
       }
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     let changes = 0;
@@ -503,7 +591,8 @@ describe('EventBridge', () => {
   test('syncs runtime cumulative usage on heartbeat even when the replay is already idle', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_usage') {
         return jsonResponse({
           session: {
@@ -530,7 +619,6 @@ describe('EventBridge', () => {
       }
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     const bridge = new EventBridge(store, 'api-key');
@@ -556,7 +644,8 @@ describe('EventBridge', () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
       calls.push(url.pathname);
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_stale') {
         return jsonResponse({
           session: {
@@ -568,7 +657,6 @@ describe('EventBridge', () => {
       }
       return jsonResponse({ ok: true });
     }) as typeof fetch;
-    (globalThis as unknown as { EventSource?: typeof FakeEventSource }).EventSource = FakeEventSource;
 
     const store = new AgentStore();
     const bridge = new EventBridge(store, 'api-key');
@@ -595,7 +683,7 @@ describe('EventBridge', () => {
     expect(store.getState().messages.currentText).toBe('');
 
     FakeEventSource.instances[0].onmessage?.({ data: '{}' });
-    await waitForCondition(() => store.getState().status === 'idle');
+    await waitForCondition(() => calls.includes('/sessions/sess_stale'));
 
     expect(calls).toContain('/sessions/sess_stale');
     expect(store.getState().status).toBe('idle');
@@ -615,7 +703,8 @@ describe('EventBridge', () => {
         auth: new Headers(init?.headers).get('Authorization'),
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/agent-specs/launch') {
         return jsonResponse({
           session: {
@@ -642,9 +731,9 @@ describe('EventBridge', () => {
       id: 'sess_spec',
       metadata: { agentSpec: 'reviewer' },
     });
-    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/agent-specs/launch']);
-    expect(calls[1].auth).toBe('Bearer short-token');
-    expect(calls[1].body).toEqual({ path: 'examples/skill-packs/basic/agents/reviewer.json' });
+    expect(calls.map((call) => call.path)).toEqual(['/agent-specs/launch']);
+    expect(calls[0].auth).toBe('Bearer api-key');
+    expect(calls[0].body).toEqual({ path: 'examples/skill-packs/basic/agents/reviewer.json' });
   });
 
   test('lists discovered AgentSpec assets through the server bridge', async () => {
@@ -655,7 +744,8 @@ describe('EventBridge', () => {
         path: url.pathname,
         auth: new Headers(init?.headers).get('Authorization'),
       });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/agent-specs') {
         return jsonResponse({
           agentSpecs: [
@@ -684,8 +774,8 @@ describe('EventBridge', () => {
         promptPreview: 'Review the current diff',
       }),
     ]);
-    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/agent-specs']);
-    expect(calls[1].auth).toBe('Bearer short-token');
+    expect(calls.map((call) => call.path)).toEqual(['/agent-specs']);
+    expect(calls[0].auth).toBe('Bearer api-key');
   });
 
   test('lists current session skills through the server bridge', async () => {
@@ -696,7 +786,8 @@ describe('EventBridge', () => {
         path: url.pathname,
         auth: new Headers(init?.headers).get('Authorization'),
       });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/sessions/sess_web/skills') {
         return jsonResponse({
           skills: [
@@ -721,8 +812,8 @@ describe('EventBridge', () => {
         description: 'Review code changes',
       }),
     ]);
-    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/sessions/sess_web/skills']);
-    expect(calls[1].auth).toBe('Bearer short-token');
+    expect(calls.map((call) => call.path)).toEqual(['/sessions/sess_web/skills']);
+    expect(calls[0].auth).toBe('Bearer api-key');
   });
 
   test('lists and installs SkillPacks through the server bridge', async () => {
@@ -734,7 +825,8 @@ describe('EventBridge', () => {
         auth: new Headers(init?.headers).get('Authorization'),
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/skill-packs') {
         return jsonResponse({
           skillPacks: [
@@ -778,13 +870,9 @@ describe('EventBridge', () => {
       }),
     ]);
     expect(installed).toMatchObject({ id: 'review-pack', installedAt: 43 });
-    expect(calls.map((call) => call.path)).toEqual([
-      '/auth/token',
-      '/skill-packs',
-      '/skill-packs/install',
-    ]);
-    expect(calls[1].auth).toBe('Bearer short-token');
-    expect(calls[2].body).toEqual({ path: 'examples/review-pack', id: 'review-pack' });
+    expect(calls.map((call) => call.path)).toEqual(['/skill-packs', '/skill-packs/install']);
+    expect(calls[0].auth).toBe('Bearer api-key');
+    expect(calls[1].body).toEqual({ path: 'examples/review-pack', id: 'review-pack' });
   });
 
   test('lists workspace directories through the server bridge', async () => {
@@ -796,7 +884,8 @@ describe('EventBridge', () => {
         search: url.search,
         auth: new Headers(init?.headers).get('Authorization'),
       });
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       if (url.pathname === '/workspaces/directories') {
         return jsonResponse({
           roots: ['/repo'],
@@ -816,15 +905,16 @@ describe('EventBridge', () => {
       current: '/repo/cortx',
       entries: [{ name: 'cortx', path: '/repo/cortx' }],
     });
-    expect(calls.map((call) => call.path)).toEqual(['/auth/token', '/workspaces/directories']);
-    expect(calls[1].search).toBe('?path=%2Frepo%2Fcortx');
-    expect(calls[1].auth).toBe('Bearer short-token');
+    expect(calls.map((call) => call.path)).toEqual(['/workspaces/directories']);
+    expect(calls[0].search).toBe('?path=%2Frepo%2Fcortx');
+    expect(calls[0].auth).toBe('Bearer api-key');
   });
 
   test('surfaces typed server errors', async () => {
     globalThis.fetch = (async (input) => {
       const url = new URL(String(input), 'http://web');
-      if (url.pathname === '/auth/token') return jsonResponse({ token: 'short-token' });
+      const stream = eventStreamResponse(input);
+      if (stream) return stream;
       return jsonResponse({ error: 'outside root', kind: 'invalid_workspace' }, { status: 400 });
     }) as typeof fetch;
 

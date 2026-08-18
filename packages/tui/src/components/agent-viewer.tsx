@@ -19,6 +19,8 @@ function statusLabel(status: SubAgentSession['status']): { text: string; color: 
     case 'running': return { text: 'working', color: colors.toolPending };
     case 'completed': return { text: 'done', color: colors.toolSuccess };
     case 'error': return { text: 'error', color: colors.toolError };
+    case 'interrupted': return { text: 'interrupted', color: colors.toolError };
+    case 'cancelled': return { text: 'cancelled', color: colors.muted };
   }
 }
 

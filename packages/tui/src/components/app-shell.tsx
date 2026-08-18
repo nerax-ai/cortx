@@ -5,12 +5,10 @@ import { InputArea } from './input-area.js';
 import { ToolRegion, firstViewableAgentToolCallId } from './tool-region.js';
 import { AgentViewer } from './agent-viewer.js';
 import { CommandPalette, buildItems, filterItems, moveSelection } from './command-palette.js';
-import { SessionPicker } from './session-picker.js';
 import { AgentSpecPicker } from './agent-spec-picker.js';
 import type { TuiStore } from '../store.js';
 import type { TuiState } from '../types/tui-state.js';
 import type { TuiRegistry } from '../tui-registry.js';
-import type { SessionSummary } from '../plugins/session-plugin.js';
 import type { SkillItem } from '../plugins/skill-plugin.js';
 import type { TuiAgentSpecInfo } from '../runtime-session.js';
 import type { SubAgentSessionStore } from '@cortx/runtime';
@@ -31,10 +29,6 @@ export interface AppShellProps {
   onSteer?: (value: string) => void;
   onAbort?: () => void;
   onForceExit?: () => void;
-  sessionPickerOpen?: boolean;
-  sessionList?: SessionSummary[];
-  onSessionSelect?: (session: SessionSummary) => void;
-  onSessionPickerClose?: () => void;
   agentSpecPickerOpen?: boolean;
   agentSpecs?: TuiAgentSpecInfo[];
   agentSpecPickerLoading?: boolean;
@@ -56,10 +50,6 @@ export function AppShell({
   onSteer,
   onAbort,
   onForceExit,
-  sessionPickerOpen = false,
-  sessionList = [],
-  onSessionSelect,
-  onSessionPickerClose,
   agentSpecPickerOpen = false,
   agentSpecs = [],
   agentSpecPickerLoading = false,
@@ -82,7 +72,7 @@ export function AppShell({
   const [paletteFilter, setPaletteFilter] = useState('');
   const [injectedValue, setInjectedValue] = useState<string | undefined>(undefined);
   const [toolExpanded, setToolExpanded] = useState(false);
-  const anyOverlayActive = paletteOpen || sessionPickerOpen || agentSpecPickerOpen;
+  const anyOverlayActive = paletteOpen || agentSpecPickerOpen;
 
   const paletteItems = useMemo(() => buildItems(registry.getCommands(), skills), [registry, registryReady, skills]);
 
@@ -139,11 +129,6 @@ export function AppShell({
       if (id) store.setActiveAgentView(id);
     }
   });
-
-  // Session picker overlay
-  if (sessionPickerOpen && onSessionSelect && onSessionPickerClose) {
-    return <SessionPicker sessions={sessionList} onSelect={onSessionSelect} onClose={onSessionPickerClose} />;
-  }
 
   if (agentSpecPickerOpen && onAgentSpecSelect && onAgentSpecPickerClose) {
     return (

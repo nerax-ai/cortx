@@ -1,8 +1,18 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentDurableRunStore, ContextUsageSource, Logger } from '@cortx/sdk';
-import type { CortxRegistry, PluginConfig } from '@cortx/runtime';
-import type { WorkspaceToolMode } from '@cortx/runtime';
-import type { RuntimeApprovalMode } from '@cortx/runtime';
+import type {
+  AgentDurableRunStore,
+  ContextUsageSource,
+  CortxContributionConfig,
+  Logger,
+} from '@cortx/sdk';
+import type {
+  CortxRuntime,
+  PluginAdminSubscriptionLimits,
+  ProjectDomain,
+  RuntimeApprovalMode,
+  RuntimeDefaultCapabilities,
+  WorkspaceToolMode,
+} from '@cortx/runtime';
 import type { ServerAuthKey } from './auth.js';
 
 export interface ServerConfig {
@@ -11,6 +21,14 @@ export interface ServerConfig {
   port?: number;
   host?: string;
   corsOrigin?: string;
+  security?: {
+    allowedOrigins?: string[];
+    trustedProxy?: {
+      addresses: string[];
+      forwardedProtoHeader?: string;
+    };
+  };
+  pluginSubscriptions?: Partial<PluginAdminSubscriptionLimits>;
   /** Maximum sessions allowed to run concurrently. Idle loaded sessions do not count toward this limit. */
   maxSessions?: number;
   maxEventsPerSession?: number;
@@ -23,13 +41,15 @@ export interface ServerConfig {
   maxIterations?: number;
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
+  projectDomain: ProjectDomain;
+  contributions?: CortxContributionConfig[];
+  runtime?: { value: CortxRuntime; ownership: 'owned' | 'borrowed' };
   defaultWorkingDirectory?: string;
   allowedWorkspaceRoots?: string[];
   agentSpecRoots?: string[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
+  capabilities?: RuntimeDefaultCapabilities;
   logger?: Logger;
   durableStore?: AgentDurableRunStore;
   skillPackRegistryPath?: string;
@@ -37,6 +57,7 @@ export interface ServerConfig {
 
 export interface SessionInfo {
   id: string;
+  creatorPrincipalId?: string;
   createdAt: number;
   lastActivityAt: number;
   workingDirectory: string;

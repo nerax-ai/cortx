@@ -4,6 +4,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "bin": {
     "cortx": "./dist/cli.js"
   },
@@ -27,8 +30,8 @@
     "@nerax-ai/logger": "^0.2.0",
     "@nerax-ai/plugin": "^0.2.0",
     "@nerax-ai/storage": "^0.2.0",
-    "@synax-ai/core": "link:@synax-ai/core",
-    "@synax-ai/sdk": "link:@synax-ai/sdk",
+    "@synax-ai/core": "^0.1.0",
+    "@synax-ai/sdk": "^0.1.0",
     "cli-highlight": "^2.1.11",
     "ink": "^7.1.0",
     "react": "19.2.6"

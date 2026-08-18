@@ -1,4 +1,4 @@
-import type { AgentDoneUsage, AgentDurableRunStore, ContextUsageSource, RuntimeAgentEventEnvelope, Tool } from '@cortx/sdk';
+import type { AgentDoneUsage, AgentDurableRunStore, ContextUsageSource, CortxContributionConfig, RuntimeAgentEventEnvelope, Tool } from '@cortx/sdk';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
 import type { RuntimeApprovalMode, RuntimeSessionMetadata } from '../session.js';
 import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
@@ -10,6 +10,7 @@ export const RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 export interface RuntimeSessionSnapshot {
   schemaVersion: typeof RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION;
   id: string;
+  creatorPrincipalId?: string;
   createdAt: number;
   lastActivityAt: number;
   workingDirectory: string;
@@ -20,12 +21,14 @@ export interface RuntimeSessionSnapshot {
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
+  toolProfile?: string;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   skillPacks?: string[];
   promptHistory?: string[];
   requestTools?: Tool[];
+  contributions?: CortxContributionConfig[];
   usage?: AgentDoneUsage;
   runId: number;
   nextEventSequence: number;
@@ -40,7 +43,7 @@ export interface RuntimeSubAgentSessionSnapshot {
   toolCallId: string;
   description: string;
   isBackground: boolean;
-  status: 'running' | 'completed' | 'error';
+  status: 'running' | 'completed' | 'error' | 'interrupted' | 'cancelled';
   output: string;
   iterations: number;
   toolCallCount: number;

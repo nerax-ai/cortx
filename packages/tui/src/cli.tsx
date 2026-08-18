@@ -1,14 +1,23 @@
 import { render } from 'ink';
 import { createLogger } from '@nerax-ai/logger';
-import { PluginRegistry } from '@nerax-ai/plugin';
-import { cpSync, existsSync, mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, resolve } from 'path';
-import type { CortxFactoryMap, CortxExtensionType } from '@cortx/runtime';
+import {
+  createFilesystemPluginRegistry,
+  createFilesystemPluginSecretsBackend,
+} from '@nerax-ai/plugin';
+import {
+  CortxRuntime,
+  ProjectDomain,
+  ProjectIdentityStore,
+  createRemoteCortxTopology,
+  createStandaloneCortxTopology,
+  type AsyncCloseable,
+} from '@cortx/runtime';
+import { join } from 'node:path';
 import { ensureConfig, type CortxConfig } from './config.js';
-import { createLanguageClient, type ProjectPluginRegistry } from './language.js';
+import { createLanguageHost } from './language.js';
 import { RemoteRuntimeClient } from './remote-client.js';
 import { createLocalRuntimeSession, createRemoteRuntimeSession, type TuiRuntimeMode } from './runtime-session.js';
+import { createTuiHost } from './tui-host.js';
 import App from './app.js';
 
 const log = createLogger({
@@ -23,110 +32,144 @@ function runtimeMode(config: CortxConfig): TuiRuntimeMode {
   throw new Error(`Unsupported CORTX_TUI_MODE: ${value}`);
 }
 
-function findProjectRoot(start: string): string {
-  let current = resolve(start);
-  while (true) {
-    if (existsSync(resolve(current, '.git')) || existsSync(resolve(current, 'bun.lock')) || existsSync(resolve(current, 'package.json'))) {
-      if (existsSync(resolve(current, 'packages')) || existsSync(resolve(current, '.git'))) return current;
-    }
-    const parent = dirname(current);
-    if (parent === current) return resolve(start);
-    current = parent;
-  }
-}
-
-function resolveWorkspaceToolsPluginSource(config: CortxConfig, cwd: string): string | undefined {
-  if (config.workspaceToolsPlugin === false) return undefined;
-  if (typeof config.workspaceToolsPlugin === 'string' && config.workspaceToolsPlugin.trim()) {
-    return config.workspaceToolsPlugin.trim();
-  }
-  const envSource = process.env.CORTX_WORKSPACE_TOOLS_PLUGIN;
-  if (envSource?.trim()) return envSource.trim();
-  const candidate = resolve(findProjectRoot(cwd), '..', 'cortx-plugins', 'workspace-tools');
-  return existsSync(resolve(candidate, 'manifest.json')) ? candidate : undefined;
-}
-
-function cleanLocalPluginSource(source: string, prefix: string): string {
-  const localSource = source.startsWith('file:') ? source.slice(5) : source;
-  if (/^[a-z][a-z\d+.-]*:/i.test(localSource) && !localSource.startsWith('/')) return source;
-  const dir = resolve(localSource);
-  if (!existsSync(resolve(dir, 'manifest.json')) || !existsSync(resolve(dir, 'src'))) return source;
-  const cleanDir = mkdtempSync(resolve(tmpdir(), prefix));
-  cpSync(resolve(dir, 'manifest.json'), resolve(cleanDir, 'manifest.json'));
-  cpSync(resolve(dir, 'src'), resolve(cleanDir, 'src'), { recursive: true });
-  return cleanDir;
-}
-
-function remoteOption(
-  config: CortxConfig,
-  key: 'baseUrl' | 'apiKey' | 'sessionId' | 'workingDirectory',
-): string | undefined {
-  const env: Record<typeof key, string | undefined> = {
+function remoteOption(config: CortxConfig, key: 'baseUrl' | 'apiKey' | 'sessionId' | 'workingDirectory'): string | undefined {
+  const environment: Record<typeof key, string | undefined> = {
     baseUrl: process.env.CORTX_SERVER_URL,
     apiKey: process.env.CORTX_API_KEY,
     sessionId: process.env.CORTX_SESSION_ID,
     workingDirectory: process.env.CORTX_WORKING_DIRECTORY,
   };
-  return env[key] ?? config.runtime?.server?.[key];
+  return environment[key] ?? config.runtime?.server?.[key];
 }
 
-async function main() {
+async function createRemoteComposition(config: CortxConfig, cwd: string) {
+  const baseUrl = remoteOption(config, 'baseUrl') ?? 'http://127.0.0.1:3000';
+  const apiKey = remoteOption(config, 'apiKey');
+  if (!apiKey) throw new Error('Remote TUI requires CORTX_API_KEY or runtime.server.apiKey');
+  const client = new RemoteRuntimeClient({ baseUrl, apiKey });
+  try {
+    const session = await createRemoteRuntimeSession({
+      client,
+      sessionId: remoteOption(config, 'sessionId'),
+      create: {
+        workingDirectory: remoteOption(config, 'workingDirectory') ?? cwd,
+        model: config.model,
+        system: config.system,
+        maxIterations: config.maxIterations,
+        contributions: config.contributions,
+      },
+    });
+    return { session, topology: createRemoteCortxTopology({ runtimeClient: client }) };
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function createLocalComposition(config: CortxConfig, cwd: string) {
+  const identity = new ProjectIdentityStore({ projectRoot: cwd });
+  const runtimeDomainId = identity.resolve({ mode: identity.read() ? 'retain' : 'create' }).runtimeDomainId;
+  const registry = createFilesystemPluginRegistry({
+    appName: 'cortx',
+    runtimeDomainId,
+    secretsBackend: createFilesystemPluginSecretsBackend({ appName: 'cortx', runtimeDomainId }),
+    logger: log.scope('plugins'),
+  });
+  const projectDomain = new ProjectDomain({
+    registry,
+    runtimeDomainId,
+    logger: log.scope('project-domain'),
+  });
+  let languageHost: Awaited<ReturnType<typeof createLanguageHost>> | undefined;
+  let runtime: CortxRuntime | undefined;
+  try {
+    await projectDomain.start();
+    for (const source of config.plugins ?? []) await submitPluginSource(projectDomain, source);
+    languageHost = await createLanguageHost(config, projectDomain, log);
+    runtime = new CortxRuntime({
+      language: languageHost.language,
+      model: config.model,
+      system: config.system,
+      maxIterations: config.maxIterations,
+      projectDomain,
+      contributions: config.contributions,
+      defaultWorkingDirectory: cwd,
+      allowedWorkspaceRoots: [cwd],
+      toolMode: 'none',
+      approvalMode: 'interactive',
+      logger: log,
+      skillPackRegistryPath: join(cwd, '.cortx', 'skill-packs', 'registry.json'),
+    });
+    const session = await createLocalRuntimeSession({
+      runtime,
+      create: {
+        workingDirectory: cwd,
+        model: config.model,
+        system: config.system,
+        maxIterations: config.maxIterations,
+        contributions: config.contributions,
+        toolMode: 'none',
+        approvalMode: 'interactive',
+      },
+    });
+    return {
+      session,
+      topology: createStandaloneCortxTopology({ projectDomain, synax: languageHost, runtime }),
+    };
+  } catch (error) {
+    await closeAll('Local TUI startup', [runtime, languageHost, projectDomain]).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function submitPluginSource(projectDomain: ProjectDomain, source: string): Promise<void> {
+  try {
+    const mutation = await projectDomain.registry.install(source, { enabled: true });
+    if (!mutation.accepted) {
+      log.warn(`[tui] Plugin desired revision conflict while submitting ${source}`);
+      return;
+    }
+    const result = await mutation.operation.wait();
+    if (result.status !== 'succeeded') {
+      log.warn(`[tui] Plugin ${source} is ${result.status}; administration remains available for recovery`);
+    }
+  } catch (error) {
+    log.warn(`[tui] Plugin ${source} could not be submitted: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function main(): Promise<void> {
   const config = await ensureConfig();
   const cwd = config.workingDirectory ?? process.cwd();
-  const mode = runtimeMode(config);
-  const session =
-    mode === 'remote'
-      ? await createRemoteRuntimeSession({
-          client: new RemoteRuntimeClient({
-            baseUrl: remoteOption(config, 'baseUrl') ?? 'http://localhost:3000',
-            apiKey: remoteOption(config, 'apiKey') ?? 'cortx-dev-key',
-          }),
-          sessionId: remoteOption(config, 'sessionId'),
-          create: {
-            workingDirectory: remoteOption(config, 'workingDirectory') ?? cwd,
-            model: config.model,
-            system: config.system,
-            maxIterations: config.maxIterations,
-            plugins: config.agentPlugins,
-          },
-        })
-      : await (async () => {
-          const registry = PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({
-            appName: 'cortx',
-            logger: log,
-          }) as ProjectPluginRegistry;
-          const configuredWorkspaceToolsPluginSource = resolveWorkspaceToolsPluginSource(config, cwd);
-          const workspaceToolsPluginSource = configuredWorkspaceToolsPluginSource
-            ? cleanLocalPluginSource(configuredWorkspaceToolsPluginSource, 'cortx-workspace-tools-plugin-')
-            : undefined;
-          if (workspaceToolsPluginSource) await registry.load(workspaceToolsPluginSource);
-          const language = await createLanguageClient(config, log, registry);
-          return createLocalRuntimeSession({
-            language,
-            model: config.model,
-            system: config.system,
-            maxIterations: config.maxIterations,
-            workingDirectory: cwd,
-            registry,
-            plugins: config.agentPlugins,
-            toolMode: workspaceToolsPluginSource ? 'all' : 'none',
-            logger: log,
-          });
-        })();
-
-  // Render the whole conversation inside Ink so output stays between the header and composer.
-  const { waitUntilExit } = render(<App session={session} logger={log.scope('tui')} />, {
-    exitOnCtrlC: false,
-    patchConsole: true,
-  });
-
-  await waitUntilExit();
-  await log.close();
+  const composition = runtimeMode(config) === 'remote'
+    ? await createRemoteComposition(config, cwd)
+    : await createLocalComposition(config, cwd);
+  let host: Awaited<ReturnType<typeof createTuiHost>> | undefined;
+  try {
+    host = await createTuiHost({ session: composition.session, logger: log.scope('tui') });
+    const { waitUntilExit } = render(<App host={host} />, {
+      exitOnCtrlC: false,
+      patchConsole: true,
+    });
+    await waitUntilExit();
+  } finally {
+    await closeAll('TUI shutdown', [host, composition.topology, { close: async () => { await log.close(); } }]);
+  }
 }
 
-main().catch(async (e) => {
-  log.error(e);
-  await log.close();
-  console.error(e);
-  process.exit(1);
+async function closeAll(label: string, owners: Array<AsyncCloseable | undefined>): Promise<void> {
+  const failures: unknown[] = [];
+  for (const owner of owners) {
+    if (!owner) continue;
+    try { await owner.close(); }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length > 0) throw new AggregateError(failures, `${label} failed`);
+}
+
+main().catch(async (error) => {
+  log.error(error);
+  await log.close().catch(() => undefined);
+  console.error(error);
+  process.exitCode = 1;
 });

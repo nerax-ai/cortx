@@ -3,8 +3,7 @@ export { CortxSession } from './session.js';
 export type { CortxState } from './session.js';
 export { agentLoop } from './loop.js';
 export { AgentLoopController } from './types.js';
-export { getRegistry, resolveExtensions } from './plugin-resolver.js';
-export type { CortxConfig, AgentEvent, AgentController, DeliveryMode, PluginConfig, CortxRegistry, CortxExtensionType, CortxFactoryMap } from './types.js';
+export type { CortxConfig, AgentEvent, AgentController, DeliveryMode } from './types.js';
 export type {
   AgentRuntimeExtensions,
   AgentContextOverflowContribution,
@@ -30,7 +29,7 @@ export {
   AGENT_TOOL,
   AGENT_TOOL_AFTER,
   AGENT_TOOL_BEFORE,
-  CORTX_EXTENSION_TYPES,
+  CORTX_CONTRIBUTION_TYPES,
   createEmptyAgentRuntimeExtensions,
   defineCortxPlugin,
   mergeAgentRuntimeExtensions,

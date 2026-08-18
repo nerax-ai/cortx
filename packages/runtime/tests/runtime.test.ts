@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
 import { mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
-import { PluginRegistry } from '../../../../nerax/packages/plugin/src/index.ts';
+import { join } from 'path';
 import {
   DEFAULT_RUNTIME_CAPABILITIES,
   CortxRuntime,
   RuntimeError,
-  type CortxExtensionType,
-  type CortxFactoryMap,
-  type CortxRegistry,
+  type ProjectDomain,
 } from '../src/index';
+import { createWorkspaceToolProjectDomain } from './helpers/project-domain.js';
 import type {
   AgentEvent,
   AgentRunCheckpoint,
@@ -28,12 +26,14 @@ import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 
 let tmpDir: string;
+const projectDomains: ProjectDomain[] = [];
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'cortx-runtime-test-'));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const project of projectDomains.splice(0)) await project.close();
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -89,16 +89,10 @@ async function waitForEnvelope(
   throw new Error(`Timed out waiting for ${type}`);
 }
 
-async function createWorkspaceToolRegistry(): Promise<CortxRegistry> {
-  const source = resolve(import.meta.dir, '../../../../cortx-plugins/workspace-tools');
-  const cleanSource = mkdtempSync(join(tmpdir(), 'cortx-runtime-workspace-tools-plugin-'));
-  cpSync(resolve(source, 'manifest.json'), resolve(cleanSource, 'manifest.json'));
-  cpSync(resolve(source, 'src'), resolve(cleanSource, 'src'), { recursive: true });
-  const registry = new PluginRegistry<CortxExtensionType, CortxFactoryMap>({
-    appName: `cortx-runtime-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  }) as CortxRegistry;
-  await registry.load(cleanSource);
-  return registry;
+async function createWorkspaceToolRegistry(): Promise<ProjectDomain> {
+  const project = await createWorkspaceToolProjectDomain();
+  projectDomains.push(project);
+  return project;
 }
 
 class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
@@ -238,7 +232,7 @@ describe('CortxRuntime sessions', () => {
     expect(typeof content === 'string' ? content : content?.find((part) => part.type === 'text')?.text).toBe(
       '/commit fix',
     );
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('lists skills available to a hosted session', async () => {
@@ -267,7 +261,7 @@ describe('CortxRuntime sessions', () => {
       }),
     ]);
     await expect(runtime.listSessionSkills(disabled.id)).resolves.toEqual([]);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('stores per-session maxIterations in runtime session metadata', async () => {
@@ -287,7 +281,7 @@ describe('CortxRuntime sessions', () => {
     await waitForEvent(events, 'done');
 
     expect(runtime.getSession(session.id).maxIterations).toBe(7);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('enriches done events with runtime context usage facts', async () => {
@@ -357,7 +351,7 @@ describe('CortxRuntime sessions', () => {
     ]);
     expect(done.usage?.context?.breakdown.find((row) => row.key === 'skills')?.count).toBe(1);
     expect(runtime.getSession(session.id).contextWindowTokens).toBe(2000);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('counts provider cache-read input toward context window usage', async () => {
@@ -400,7 +394,7 @@ describe('CortxRuntime sessions', () => {
       cacheHitRate: 78.71657754010695,
     });
     expect(done.usage?.context?.percentUsed).toBeCloseTo(1.4609375);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('updates the current session model and reasoning effort before the next run', async () => {
@@ -446,7 +440,7 @@ describe('CortxRuntime sessions', () => {
       model: 'large',
       reasoning: { enabled: true, effort: 'high' },
     });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('does not report context usage below runtime-known context breakdown', async () => {
@@ -486,7 +480,7 @@ describe('CortxRuntime sessions', () => {
     expect(context?.usedTokens).toBeGreaterThanOrEqual(breakdownTotal);
     expect(context?.usedTokens).toBeGreaterThan(10);
     expect(context?.cacheHitRate).toBe(90);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('creates independent sessions and replays bounded event history', async () => {
@@ -507,6 +501,10 @@ describe('CortxRuntime sessions', () => {
     await runtime.prompt(a.id, 'hello a');
     await runtime.prompt(b.id, 'hello b');
     await waitForEvent(liveA, 'done');
+    const settleDeadline = Date.now() + 1_000;
+    while ((runtime.getSession(a.id).isRunning || runtime.getSession(b.id).isRunning) && Date.now() < settleDeadline) {
+      await Bun.sleep(5);
+    }
 
     expect(runtime.getEventHistory(a.id).length).toBeLessThanOrEqual(2);
     expect(runtime.getEventHistory(b.id).length).toBeLessThanOrEqual(2);
@@ -516,7 +514,7 @@ describe('CortxRuntime sessions', () => {
     const replayed: AgentEvent[] = [];
     runtime.subscribe(a.id, (event) => replayed.push(event));
     expect(replayed.map((event) => event.type)).toEqual(runtime.getEventHistory(a.id).map((event) => event.type));
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('isolates replay subscriber errors for event and envelope subscriptions', async () => {
@@ -563,7 +561,7 @@ describe('CortxRuntime sessions', () => {
     await runtime.prompt(session.id, 'again');
     await waitForEvent(liveAfterReplay, 'done');
 
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('records runtime event envelopes with stable identity and bounded history', async () => {
@@ -598,7 +596,7 @@ describe('CortxRuntime sessions', () => {
     const replayed: RuntimeAgentEventEnvelope[] = [];
     runtime.subscribeEnvelopes(session.id, (event) => replayed.push(event));
     expect(replayed.map((event) => event.sequence)).toEqual(history.map((event) => event.sequence));
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('enforces max sessions only for currently running sessions', async () => {
@@ -627,7 +625,7 @@ describe('CortxRuntime sessions', () => {
     await waitForEvent(oneEvents, 'done');
     await runtime.prompt(two.id, 'second');
     await waitForEvent(twoEvents, 'done');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('abort waits for the active run before clearing the running gate', async () => {
@@ -647,7 +645,7 @@ describe('CortxRuntime sessions', () => {
     await abortPromise;
     expect(runtime.getSession(session.id).isRunning).toBe(false);
     await runtime.prompt(session.id, 'second');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('runtime owns the active run promise until the session finishes', async () => {
@@ -671,7 +669,7 @@ describe('CortxRuntime sessions', () => {
 
     expect(internal?.runPromise).toBeUndefined();
     expect(runtime.getSession(session.id).isRunning).toBe(false);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('deleteSession prevents delayed durable writes from resurrecting deleted sessions', async () => {
@@ -697,7 +695,7 @@ describe('CortxRuntime sessions', () => {
     await durableStore.waitForRuntimeSavesToDrain();
     expect(durableStore.listRuntimeSessions()).toEqual([]);
     await expect(runtime.restoreDurableSessions()).resolves.toEqual([]);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('routes steer, follow-up and resume through the hosted controller', async () => {
@@ -731,7 +729,7 @@ describe('CortxRuntime sessions', () => {
     expect(events.map((event) => event.type)).not.toContain('user_response');
     await runtime.abort(session.id);
     await runtime.resume(session.id);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('updates current session controls without replacing the session or history', async () => {
@@ -752,7 +750,7 @@ describe('CortxRuntime sessions', () => {
       model: 'test-model',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
-      registry: await createWorkspaceToolRegistry(),
+      projectDomain: await createWorkspaceToolRegistry(),
       toolMode: 'none',
       approvalMode: 'interactive',
       capabilities: { skills: false, subAgents: false, approval: true },
@@ -789,7 +787,7 @@ describe('CortxRuntime sessions', () => {
     expect(seenToolNames[1]).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']));
     expect(seenToolNames[1]).not.toContain('write');
     expect(JSON.stringify(seenMessages[1])).toContain('first');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('restores session request tools from durable snapshots when the store preserves tool functions', async () => {
@@ -832,8 +830,51 @@ describe('CortxRuntime sessions', () => {
     await waitForEvent(events, 'done');
 
     expect(seenToolNames[0]).toContain('custom_tool');
-    firstRuntime.dispose();
-    restoredRuntime.dispose();
+    await firstRuntime.close();
+    await restoredRuntime.close();
+  });
+
+  test('persists canonical contributions and the resolved tool profile across restore', async () => {
+    const durableStore = new DelayedRuntimeSessionStore();
+    const projectDomain = await createWorkspaceToolRegistry();
+    const firstRuntime = new CortxRuntime({
+      language: mockLanguage([textParts('first')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      projectDomain,
+      durableStore,
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await firstRuntime.createSession({
+      id: 'durable-plugin-session',
+      toolMode: 'read-only',
+      contributions: [{ use: '@cortx-ai/workspace-tools/grep', options: { workingDirectory: tmpDir } }],
+    });
+    const snapshot = durableStore.loadRuntimeSession(session.id);
+    expect(snapshot).toMatchObject({
+      toolProfile: '@cortx-ai/workspace-tools/read-only',
+      contributions: [{ use: '@cortx-ai/workspace-tools/grep', options: { workingDirectory: tmpDir } }],
+    });
+
+    const restoredRuntime = new CortxRuntime({
+      language: mockLanguage([textParts('restored')]),
+      model: 'fallback',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      projectDomain,
+      durableStore,
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    await restoredRuntime.restoreDurableSessions();
+    expect(restoredRuntime.getSession(session.id)).toMatchObject({
+      toolMode: 'read-only',
+      toolProfile: '@cortx-ai/workspace-tools/read-only',
+    });
+    expect(durableStore.loadRuntimeSession(session.id)?.contributions).toEqual(snapshot?.contributions);
+
+    await firstRuntime.close();
+    await restoredRuntime.close();
   });
 
   test('allows session control updates during an active run and applies them on the next turn', async () => {
@@ -853,7 +894,7 @@ describe('CortxRuntime sessions', () => {
       model: 'test-model',
       defaultWorkingDirectory: tmpDir,
       allowedWorkspaceRoots: [tmpDir],
-      registry: await createWorkspaceToolRegistry(),
+      projectDomain: await createWorkspaceToolRegistry(),
       toolMode: 'none',
       approvalMode: 'interactive',
       capabilities: { skills: false, subAgents: false, approval: true },
@@ -882,7 +923,7 @@ describe('CortxRuntime sessions', () => {
     await waitForEvent(events, 'done');
 
     expect(seenToolNames[1]).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']));
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('throws typed errors for missing sessions and invalid requests', async () => {
@@ -896,7 +937,7 @@ describe('CortxRuntime sessions', () => {
     expect(() => runtime.getSession('missing')).toThrow(RuntimeError);
     const session = await runtime.createSession();
     await expect(runtime.prompt(session.id, '')).rejects.toMatchObject({ kind: 'invalid_request' });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('rejects invalid session tool and approval modes before mounting capabilities', async () => {
@@ -925,6 +966,32 @@ describe('CortxRuntime sessions', () => {
       kind: 'invalid_request',
       details: { approvalMode: 'ask' },
     });
-    runtime.dispose();
+    await runtime.close();
+  });
+
+  test('keeps the current session host and configuration when a replacement candidate fails', async () => {
+    const projectDomain = await createWorkspaceToolRegistry();
+    const runtime = new CortxRuntime({
+      language: mockLanguage([textParts('ok')]),
+      model: 'stable-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      projectDomain,
+      toolMode: 'none',
+    });
+    const created = await runtime.createSession({ id: 'candidate-failure' });
+    const current = (runtime as unknown as { sessions: Map<string, { cortx: unknown; scope: unknown }> })
+      .sessions.get(created.id)!;
+    const previousCortx = current.cortx;
+    const previousScope = current.scope;
+
+    await expect(
+      runtime.updateSession(created.id, { toolMode: '@missing/workspace-profile/not-found' }),
+    ).rejects.toMatchObject({ kind: 'invalid_request' });
+
+    expect(runtime.getSession(created.id)).toMatchObject({ model: 'stable-model', toolMode: 'none' });
+    expect(current.cortx).toBe(previousCortx);
+    expect(current.scope).toBe(previousScope);
+    await runtime.close();
   });
 });

@@ -74,7 +74,9 @@ export function App() {
   const [toolMode, setToolMode] = useState<WebWorkspaceToolMode>('all');
   const [approvalMode, setApprovalMode] = useState<WebApprovalMode>('interactive');
   const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, QueuedPrompt[]>>({});
-  const activeQueuedPrompts = session ? queuedPromptsBySession[session.id] ?? EMPTY_QUEUED_PROMPTS : EMPTY_QUEUED_PROMPTS;
+  const activeQueuedPrompts = session
+    ? (queuedPromptsBySession[session.id] ?? EMPTY_QUEUED_PROMPTS)
+    : EMPTY_QUEUED_PROMPTS;
 
   useEffect(() => {
     if (didAutoConnectRef.current) return;
@@ -82,7 +84,7 @@ export function App() {
     void connect();
 
     return () => {
-      bridgeRef.current?.disconnect();
+      void bridgeRef.current?.disconnect();
     };
   }, []);
 
@@ -130,7 +132,7 @@ export function App() {
       setToolProfiles(availableToolProfiles);
       const target =
         [...existing].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0] ??
-        await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' });
+        (await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' }));
       await bridge.connect(target.id);
       const nextSessions = await bridge.listSessions();
       activateSession(target);
@@ -150,13 +152,15 @@ export function App() {
         .then((installedSkillPacks) => {
           if (bridgeRef.current !== bridge) return;
           setSkillPacks(installedSkillPacks);
-          setSelectedSkillPackIds((current) => current.filter((id) => installedSkillPacks.some((pack) => pack.id === id)));
+          setSelectedSkillPackIds((current) =>
+            current.filter((id) => installedSkillPacks.some((pack) => pack.id === id)),
+          );
         })
         .catch((err) => {
           if (bridgeRef.current === bridge) setConnectionError(err instanceof Error ? err.message : String(err));
         });
     } catch (err) {
-      bridge.disconnect();
+      void bridge.disconnect();
       bridgeRef.current = null;
       setConnected(false);
       setConnectionError(err instanceof Error ? err.message : String(err));
@@ -248,14 +252,12 @@ export function App() {
     return selectedSkillPackIds.length ? selectedSkillPackIds : undefined;
   }
 
-  async function createWorkspaceSession(request: {
-    workingDirectory: string;
-    skillPacks?: string[];
-  }) {
+  async function createWorkspaceSession(request: { workingDirectory: string; skillPacks?: string[] }) {
     if (!bridgeRef.current) return;
     const workingDirectory = request.workingDirectory.trim();
     const skillPacks =
-      request.skillPacks ?? (sameWorkspace(workingDirectory, session?.workingDirectory) ? selectedSkillPacksForRequest() : undefined);
+      request.skillPacks ??
+      (sameWorkspace(workingDirectory, session?.workingDirectory) ? selectedSkillPacksForRequest() : undefined);
     const created = await bridgeRef.current.createSession({
       workingDirectory,
       model: session?.model,

@@ -93,7 +93,7 @@ describe('runtime approval capability', () => {
       toolCallId: 'write-call',
       isError: true,
     });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('deny mode does not trust custom tool sideEffects metadata', async () => {
@@ -120,7 +120,7 @@ describe('runtime approval capability', () => {
       toolCallId: 'custom-call',
       isError: true,
     });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('interactive approval proceeds after an allow answer', async () => {
@@ -158,7 +158,7 @@ describe('runtime approval capability', () => {
       result: 'written',
       isError: false,
     });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('full-access mode executes write tools without asking for approval', async () => {
@@ -188,7 +188,7 @@ describe('runtime approval capability', () => {
       result: 'written',
       isError: false,
     });
-    runtime.dispose();
+    await runtime.close();
   });
 });
 

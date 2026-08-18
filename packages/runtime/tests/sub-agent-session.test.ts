@@ -12,7 +12,7 @@ describe('SubAgentSessionStore', () => {
     expect(session.description).toBe('test agent');
     expect(session.status).toBe('running');
     expect(session.events).toHaveLength(0);
-    expect(store.get('tc1')).toBe(session);
+    expect(store.get('tc1')).toEqual(session);
   });
 
   test('complete marks session as completed', () => {
@@ -99,17 +99,17 @@ describe('SubAgentSessionStore', () => {
     expect(store.get('tc4')).toBeDefined();
   });
 
-  test('evicts by completedAt rather than creation order', () => {
+  test('evicts by completedAt rather than creation order', async () => {
     const store = new SubAgentSessionStore(2);
-    const slow = store.create('slow', 'created first, completed later', false);
-    const oldOne = store.create('old-1', 'old completed session', false);
+    store.create('slow', 'created first, completed later', false);
+    store.create('old-1', 'old completed session', false);
     store.complete('old-1', false);
-    oldOne.completedAt = 10;
-    const oldTwo = store.create('old-2', 'older completed session', false);
+    await Bun.sleep(2);
+    store.create('old-2', 'older completed session', false);
     store.complete('old-2', false);
-    oldTwo.completedAt = 20;
-    slow.status = 'completed';
-    slow.completedAt = 30;
+    await Bun.sleep(2);
+    store.complete('slow', false);
+    await Bun.sleep(2);
 
     store.create('trigger', 'new terminal session', false);
     store.complete('trigger', false);
@@ -135,10 +135,21 @@ describe('SubAgentSessionStore', () => {
 
   test('snapshots and hydrates persisted child sessions', () => {
     const store = new SubAgentSessionStore();
-    const session = store.create('call-1', 'child task', true, 'parent-session', 7);
-    session.output = 'partial';
-    session.iterations = 2;
-    session.toolCallCount = 3;
+    store.create('call-1', 'child task', true, 'parent-session', 7);
+    store.recordEvent('call-1', { type: 'turn_start', iteration: 2 });
+    store.recordEvent('call-1', {
+      type: 'tool_use',
+      toolCall: { type: 'tool-call', toolCallId: 'nested', toolName: 'read', input: '{}' },
+    });
+    store.recordEvent('call-1', {
+      type: 'tool_use',
+      toolCall: { type: 'tool-call', toolCallId: 'nested-2', toolName: 'read', input: '{}' },
+    });
+    store.recordEvent('call-1', {
+      type: 'tool_use',
+      toolCall: { type: 'tool-call', toolCallId: 'nested-3', toolName: 'read', input: '{}' },
+    });
+    store.recordEvent('call-1', { type: 'text', content: 'partial' });
     store.complete('call-1', false);
 
     const snapshot = store.snapshot('call-1');
@@ -162,26 +173,84 @@ describe('SubAgentSessionStore', () => {
     });
   });
 
-  test('abortRunning invokes registered aborters for running sessions', () => {
+  test('hydrates an unrecoverable running child as interrupted', () => {
+    const source = new SubAgentSessionStore();
+    source.create('running', 'orphaned child', true, 'parent', 2);
+    const snapshot = source.snapshot('running');
+    const restored = new SubAgentSessionStore();
+    restored.hydrate(snapshot ? [snapshot] : []);
+    expect(restored.get('running')).toMatchObject({ status: 'interrupted', parentRunId: 2 });
+  });
+
+  test('query, abort, and wait share one terminal child result', async () => {
+    const store = new SubAgentSessionStore();
+    store.create('running', 'queryable child', true, 'parent');
+    store.registerAbort('running', () => store.finish('running', 'cancelled'));
+    const waiter = store.wait('running');
+    const aborted = await store.abort('running', 'explicit child abort');
+    expect(aborted.status).toBe('cancelled');
+    expect(await waiter).toEqual(aborted);
+    expect(store.get('running')).toEqual(aborted);
+  });
+
+  test('abortRunning invokes registered aborters for running sessions and waits for terminal state', async () => {
     const store = new SubAgentSessionStore();
     store.create('running', 'running child', true, 'parent');
     store.create('completed', 'completed child', true, 'parent');
     store.complete('completed', false);
     const aborted: string[] = [];
-    store.registerAbort('running', (reason) => aborted.push(`running:${reason}`));
+    store.registerAbort('running', (reason) => {
+      aborted.push(`running:${reason}`);
+      store.finish('running', 'cancelled');
+    });
     store.registerAbort('completed', (reason) => aborted.push(`completed:${reason}`));
 
-    store.abortRunning('stop');
+    await store.abortRunning('stop');
 
     expect(aborted).toEqual(['running:stop']);
   });
 
-  test('terminal child sessions clear abort handlers while completed history stays bounded', () => {
+  test('an abort requested before aborter registration is delivered after registration', async () => {
+    const store = new SubAgentSessionStore();
+    store.create('racing', 'racing child', true, 'parent');
+    const abort = store.abort('racing', 'stop before register', 100);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    store.registerAbort('racing', () => store.finish('racing', 'cancelled'));
+    await expect(abort).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+  test('abortRunning includes running sessions whose aborter has not registered yet', async () => {
+    const store = new SubAgentSessionStore();
+    store.create('late', 'late child', true, 'parent');
+    const aborting = store.abortRunning('stop all', 100);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    store.registerAbort('late', () => store.finish('late', 'cancelled'));
+    await aborting;
+    expect(store.get('late')).toMatchObject({ status: 'cancelled' });
+  });
+
+  test('query results are detached from mutable store state', () => {
+    const store = new SubAgentSessionStore();
+    store.create('detached', 'detached child', true, 'parent');
+    const queried = store.get('detached')!;
+    queried.status = 'completed';
+    queried.events.push({ type: 'text', content: 'external mutation' });
+    expect(store.get('detached')).toMatchObject({ status: 'running', events: [] });
+
+    const listed = store.getAll().get('detached')!;
+    listed.output = 'external mutation';
+    expect(store.get('detached')?.output).toBe('');
+  });
+
+  test('terminal child sessions clear abort handlers while completed history stays bounded', async () => {
     const store = new SubAgentSessionStore(2);
     const aborted: string[] = [];
 
     store.create('running', 'running child', true, 'parent');
-    store.registerAbort('running', (reason) => aborted.push(`running:${reason}`));
+    store.registerAbort('running', (reason) => {
+      aborted.push(`running:${reason}`);
+      store.finish('running', 'cancelled');
+    });
 
     for (let index = 1; index <= 4; index++) {
       const id = `done-${index}`;
@@ -190,10 +259,10 @@ describe('SubAgentSessionStore', () => {
       store.complete(id, index === 4);
     }
 
-    store.abortRunning('stop');
+    await store.abortRunning('stop');
 
     expect(aborted).toEqual(['running:stop']);
-    expect(store.get('running')).toBeDefined();
+    expect(store.get('running')).toBeUndefined();
     expect(store.get('done-1')).toBeUndefined();
     expect(store.get('done-2')).toBeUndefined();
     expect(store.get('done-3')).toMatchObject({ status: 'completed' });

@@ -5,23 +5,23 @@ import {
   AGENT_EVENT_OBSERVER,
   AGENT_SESSION_POLICY,
   AGENT_TOOL,
-  CORTX_EXTENSION_SCHEMA_VERSION,
+  PROJECT_CONTRIBUTION_TYPES,
+  RUNTIME_TOOL_PROFILE,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
-  defineCapabilityContribution,
+  defineContributionBinding,
   defineContributionFactory,
+  defineCortxContributionDescriptor,
   defineEventObserver,
   defineEventObserverFactory,
-  defineRuntimeCapability,
   defineSessionPolicy,
   defineSessionPolicyFactory,
   defineTool,
   defineToolFactory,
-  normalizeRuntimeCapabilityDefinition,
-  registerRuntimeCapability,
+  parseCortxContributionReference,
   type AgentModelRequestPolicyDecision,
   type AgentToolPolicyDecision,
-  type CortxPluginContext,
+  type CortxContributionHostContext,
   type Tool,
 } from '../src/index';
 
@@ -35,6 +35,21 @@ function testLogger() {
     withContext: () => logger,
   };
   return logger;
+}
+
+function testHostContext<T>(): CortxContributionHostContext<T> {
+  const controller = new AbortController();
+  return {
+    instanceId: 'test-instance',
+    scopeKind: 'session',
+    sessionId: 's',
+    signal: controller.signal,
+    logger: testLogger(),
+    abort: (reason) => controller.abort(reason),
+    dispose: async () => undefined,
+    defer: () => undefined,
+    acquire: async (acquire) => acquire(controller.signal),
+  };
 }
 
 describe('sdk exports', () => {
@@ -52,7 +67,7 @@ describe('sdk exports', () => {
     expect(extensions.tools).toEqual([tool]);
   });
 
-  test('policy decisions are hook-specific exported types', () => {
+  test('policy decisions remain hook-specific exported types', () => {
     const modelDecision: AgentModelRequestPolicyDecision = { action: 'rewriteTools', tools: [] };
     const toolDecision: AgentToolPolicyDecision = { action: 'shortCircuitTool', result: 'cached' };
 
@@ -61,62 +76,48 @@ describe('sdk exports', () => {
     expect(toolDecision.action).toBe('shortCircuitTool');
   });
 
-  test('helper factories preserve narrow plugin author types', async () => {
-    const tool = defineTool({
-      name: 'echo',
-      inputSchema: {},
-      execute: async (_input, ctx) => ({ success: true, output: ctx.signal instanceof AbortSignal }),
+  test('declarative descriptors and executable bindings do not redeclare metadata', async () => {
+    const descriptor = defineCortxContributionDescriptor({
+      id: 'factory-echo',
+      displayName: 'Factory echo',
+      executable: true,
+      schema: { fields: [{ name: 'prefix', type: 'string', default: '>' }] },
     });
-    const policy = defineSessionPolicy({
-      beforeToolCall({ tool }) {
-        return tool?.sideEffects === 'destructive'
-          ? { action: 'deny', reason: 'no destructive tools' }
-          : { action: 'allow' };
-      },
-    });
-    const observer = defineEventObserver({
-      onAgentEvent(event) {
-        expect(event.type).toBe('done');
-      },
-    });
-
-    await expect(
-      tool.execute(
-        {},
-        {
-          sessionId: 's',
-          toolCallId: 't',
-          workingDirectory: '/',
-          logger: testLogger(),
-        },
-      ),
-    ).resolves.toEqual({ success: true, output: false });
-    expect(
-      await policy.beforeToolCall?.({
-        sessionId: 's',
-        toolCall: { type: 'tool-call', toolCallId: 't', toolName: 'rm', input: '{}' },
-        tool: { name: 'rm', inputSchema: {}, sideEffects: 'destructive', execute: async () => ({ success: true }) },
-        input: {},
-        toolContext: {
-          sessionId: 's',
-          toolCallId: 't',
-          workingDirectory: '/',
-          logger: testLogger(),
-        },
-      }),
-    ).toMatchObject({ action: 'deny' });
-    await observer.onAgentEvent({ type: 'done' });
-    expect(AGENT_RUN_CHECKPOINT_SCHEMA_VERSION).toBe(1);
-  });
-
-  test('contribution factory helpers preserve registry factory shapes', async () => {
-    const toolFactory = defineToolFactory(() =>
-      defineTool({
+    const toolFactory = defineToolFactory((_options, host) => {
+      host.defer(() => undefined, 'echo');
+      return defineTool({
         name: 'factoryEcho',
         inputSchema: {},
         execute: async () => ({ success: true, output: 'factory' }),
-      }),
-    );
+      });
+    });
+    const binding = defineContributionBinding(AGENT_TOOL, descriptor.id, toolFactory);
+    const genericFactory = defineContributionFactory(AGENT_TOOL, toolFactory);
+
+    expect(Object.keys(binding).sort()).toEqual(['factory', 'id', 'type']);
+    expect((await genericFactory({}, testHostContext())).name).toBe('factoryEcho');
+  });
+
+  test('project types include Cortx, metadata-only profile, and Synax contributions', () => {
+    expect(PROJECT_CONTRIBUTION_TYPES).toContain(AGENT_TOOL);
+    expect(PROJECT_CONTRIBUTION_TYPES).toContain(RUNTIME_TOOL_PROFILE);
+    expect(PROJECT_CONTRIBUTION_TYPES).toContain('provider');
+    expect(PROJECT_CONTRIBUTION_TYPES).toContain('dispatcher');
+    expect(PROJECT_CONTRIBUTION_TYPES).toContain('endpoint');
+    expect(PROJECT_CONTRIBUTION_TYPES).toContain('api');
+  });
+
+  test('canonical references reject short and malformed names', () => {
+    expect(parseCortxContributionReference('@cortx-ai/workspace-tools/read')).toEqual({
+      pluginId: '@cortx-ai/workspace-tools',
+      contributionId: 'read',
+      canonicalId: '@cortx-ai/workspace-tools/read',
+    });
+    expect(() => parseCortxContributionReference('read')).toThrow('must be canonical');
+    expect(() => parseCortxContributionReference('../workspace-tools/read')).toThrow('must be canonical');
+  });
+
+  test('factory helpers preserve narrowed host contexts and value types', async () => {
     const policyFactory = defineSessionPolicyFactory(() =>
       defineSessionPolicy({
         beforeModelRequest() {
@@ -129,145 +130,17 @@ describe('sdk exports', () => {
         onAgentEvent() {},
       }),
     );
-    const genericFactory = defineContributionFactory(AGENT_TOOL, toolFactory);
 
-    expect((await genericFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })).name).toBe(
-      'factoryEcho',
-    );
     expect(
-      await (
-        await policyFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })
-      ).beforeModelRequest?.({ sessionId: 's', iteration: 1, messages: [], tools: [] }),
+      await (await policyFactory({}, testHostContext())).beforeModelRequest?.({
+        sessionId: 's',
+        iteration: 1,
+        messages: [],
+        tools: [],
+      }),
     ).toMatchObject({ action: 'rewriteTools', tools: [] });
-    expect(
-      typeof (
-        await observerFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })
-      ).onAgentEvent,
-    ).toBe('function');
+    expect(typeof (await observerFactory({}, testHostContext())).onAgentEvent).toBe('function');
     expect(AGENT_EVENT_OBSERVER).toBe('agent.eventObserver');
-  });
-
-  test('runtime capability helpers register grouped typed contributions', async () => {
-    const registered: Array<{ type: string; id: string; factory: unknown; options?: unknown }> = [];
-    const ctx: CortxPluginContext = {
-      packageName: '@example/capability',
-      manifest: {
-        manifestVersion: 1,
-        id: 'example-capability',
-        name: 'Example capability',
-        version: '0.1.0',
-        runtime: { main: 'dist/index.js' },
-      },
-      logger: testLogger(),
-      storage: {} as never,
-      register(type, id, factory, options) {
-        registered.push({ type, id, factory, options });
-      },
-    };
-    const toolFactory = defineToolFactory(() =>
-      defineTool({
-        name: 'capability_echo',
-        inputSchema: {},
-        execute: async () => ({ success: true, output: 'capability' }),
-      }),
-    );
-    const policyFactory = defineSessionPolicyFactory(() =>
-      defineSessionPolicy({
-        beforeToolCall() {
-          return { action: 'allow' };
-        },
-      }),
-    );
-    const observerFactory = defineEventObserverFactory(() =>
-      defineEventObserver({
-        onAgentEvent() {},
-      }),
-    );
-    const capability = defineRuntimeCapability({
-      id: 'workspace-helper',
-      displayName: 'Workspace helper',
-      contributions: [
-        defineCapabilityContribution(AGENT_TOOL, 'echo', toolFactory, { displayName: 'Echo tool' }),
-        defineCapabilityContribution(AGENT_SESSION_POLICY, 'policy', policyFactory),
-        defineCapabilityContribution(AGENT_EVENT_OBSERVER, 'observer', observerFactory),
-      ],
-    });
-
-    expect(capability.schemaVersion).toBe(CORTX_EXTENSION_SCHEMA_VERSION);
-    expect(capability.contributions.map((entry) => entry.schemaVersion)).toEqual([
-      CORTX_EXTENSION_SCHEMA_VERSION,
-      CORTX_EXTENSION_SCHEMA_VERSION,
-      CORTX_EXTENSION_SCHEMA_VERSION,
-    ]);
-
-    registerRuntimeCapability(ctx, capability);
-
-    expect(registered.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
-      'agent.tool:echo',
-      'agent.sessionPolicy:policy',
-      'agent.eventObserver:observer',
-    ]);
-    expect(registered[0].options).toEqual({ displayName: 'Echo tool' });
-    expect((await toolFactory({ instanceId: 'i', options: {}, logger: testLogger(), storage: {} as never })).name).toBe(
-      'capability_echo',
-    );
-  });
-
-  test('runtime capability schema helpers migrate legacy declarations and reject future schemas', () => {
-    const toolFactory = defineToolFactory(() =>
-      defineTool({
-        name: 'versioned_echo',
-        inputSchema: {},
-        execute: async () => ({ success: true, output: 'versioned' }),
-      }),
-    );
-    const currentContribution = defineCapabilityContribution({
-      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-      type: AGENT_TOOL,
-      id: 'versioned-echo',
-      factory: toolFactory,
-      options: { displayName: 'Versioned echo' },
-    });
-    const legacyContribution = defineCapabilityContribution({
-      schemaVersion: 0,
-      type: AGENT_TOOL,
-      id: 'legacy-echo',
-      factory: toolFactory,
-    });
-    const normalized = normalizeRuntimeCapabilityDefinition({
-      schemaVersion: 0,
-      id: 'legacy-capability',
-      contributions: [currentContribution, legacyContribution],
-    });
-
-    expect(currentContribution).toMatchObject({
-      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-      id: 'versioned-echo',
-      options: { displayName: 'Versioned echo' },
-    });
-    expect(legacyContribution.schemaVersion).toBe(CORTX_EXTENSION_SCHEMA_VERSION);
-    expect(normalized).toMatchObject({
-      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-      id: 'legacy-capability',
-    });
-    expect(normalized.contributions.map((entry) => entry.schemaVersion)).toEqual([
-      CORTX_EXTENSION_SCHEMA_VERSION,
-      CORTX_EXTENSION_SCHEMA_VERSION,
-    ]);
-    expect(() =>
-      defineRuntimeCapability({
-        schemaVersion: 999 as never,
-        id: 'future-capability',
-        contributions: [],
-      }),
-    ).toThrow('RuntimeCapability.schemaVersion');
-    expect(() =>
-      defineCapabilityContribution({
-        schemaVersion: 999 as never,
-        type: AGENT_TOOL,
-        id: 'future-echo',
-        factory: toolFactory,
-      }),
-    ).toThrow('CortxCapabilityContribution.schemaVersion');
+    expect(AGENT_RUN_CHECKPOINT_SCHEMA_VERSION).toBe(1);
   });
 });

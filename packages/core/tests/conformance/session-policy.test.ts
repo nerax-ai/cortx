@@ -1,11 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { PluginRegistry } from '@nerax-ai/plugin';
-import { AGENT_SESSION_POLICY, Cortx, defineCortxPlugin, type AgentEvent, type CortxFactoryMap, type CortxExtensionType, type CortxRegistry } from '../../src/index.js';
+import { describe, expect, test } from 'bun:test';
+import { Cortx, type AgentEvent } from '../../src/index.js';
 import { collectEvents, mockLanguage, runtimeExtensions, textResponse, toolResponse } from './helpers.js';
-
-function createRegistry(appName: string): CortxRegistry {
-  return PluginRegistry.getInstance<CortxExtensionType, CortxFactoryMap>({ appName });
-}
 
 async function collectCortx(cortx: Cortx, message = 'hello'): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
@@ -14,33 +9,17 @@ async function collectCortx(cortx: Cortx, message = 'hello'): Promise<AgentEvent
 }
 
 describe('conformance: session policy', () => {
-  beforeEach(() => {
-    PluginRegistry.reset();
-  });
-
-  afterEach(() => {
-    PluginRegistry.reset();
-  });
-
-  test('configured agent.sessionPolicy can hide tools before the model request', async () => {
-    const registry = createRegistry('conformance-session-policy-tools');
+  test('Host-assembled agent.sessionPolicy can hide tools before the model request', async () => {
     const capturedTools: unknown[][] = [];
-    await registry.register(defineCortxPlugin({
-      manifest: { manifestVersion: 1, id: 'policy-plugin', name: 'policy-plugin', version: '0.0.0', runtime: { main: 'inline' } },
-      setup(ctx) {
-        ctx.register(AGENT_SESSION_POLICY, 'read-only', () => ({
+    const cortx = new Cortx(mockLanguage([textResponse('ok')], (opts) => capturedTools.push(opts.tools ?? [])), {
+      model: 'test',
+      extensions: runtimeExtensions({
+        sessionPolicies: [{
           beforeModelRequest({ tools }) {
             return { action: 'rewriteTools', tools: tools.filter((tool) => tool.sideEffects === 'read') };
           },
-        }));
-      },
-    }));
-
-    const cortx = new Cortx(mockLanguage([textResponse('ok')], (opts) => capturedTools.push(opts.tools ?? [])), {
-      appName: 'conformance-session-policy-tools',
-      model: 'test',
-      registry,
-      plugins: [{ use: 'read-only' }],
+        }],
+      }),
       tools: [
         { name: 'readFile', sideEffects: 'read', inputSchema: {}, execute: async () => ({ success: true, output: 'read' }) },
         { name: 'writeFile', sideEffects: 'write', inputSchema: {}, execute: async () => ({ success: true, output: 'write' }) },

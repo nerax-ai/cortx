@@ -1,25 +1,29 @@
-import type { PluginContext } from '@nerax-ai/plugin';
 import {
   AGENT_SESSION_POLICY,
   AGENT_TOOL,
-  CORTX_EXTENSION_SCHEMA_VERSION,
-  defineCapabilityContribution,
-  defineRuntimeCapability,
+  RUNTIME_TOOL_PROFILE,
+  defineContributionBinding,
+  defineCortxPlugin,
+  defineCortxContributionDescriptor,
   defineSessionPolicy,
   defineSessionPolicyFactory,
   defineTool,
   defineToolFactory,
-  registerRuntimeCapability,
+  parseCortxContributionReference,
   type CortxPluginContext,
+  type ProjectContributionMap,
+  type ProjectContributionType,
 } from '../src/index';
 
-const toolFactory = defineToolFactory(() =>
-  defineTool({
+const toolFactory = defineToolFactory((_options, host) => {
+  host.defer(() => undefined, 'typed-tool');
+  return defineTool({
     name: 'typed_tool',
     inputSchema: {},
     execute: async () => ({ success: true }),
-  }),
-);
+  });
+});
+
 const policyFactory = defineSessionPolicyFactory(() =>
   defineSessionPolicy({
     beforeToolCall() {
@@ -27,59 +31,55 @@ const policyFactory = defineSessionPolicyFactory(() =>
     },
   }),
 );
-const capability = defineRuntimeCapability({
-  id: 'typed-capability',
-  contributions: [
-    defineCapabilityContribution(AGENT_TOOL, 'typed-tool', toolFactory),
-    defineCapabilityContribution(AGENT_SESSION_POLICY, 'typed-policy', policyFactory),
-  ],
-});
+
+const toolBinding = defineContributionBinding(AGENT_TOOL, 'typed-tool', toolFactory);
+const policyBinding = defineContributionBinding(AGENT_SESSION_POLICY, 'typed-policy', policyFactory);
 
 declare const ctx: CortxPluginContext;
-registerRuntimeCapability(ctx, capability);
+ctx.bind(toolBinding);
+ctx.bind(policyBinding);
 
-defineRuntimeCapability({
-  schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-  id: 'versioned-capability',
-  contributions: [
-    defineCapabilityContribution({
-      schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION,
-      type: AGENT_TOOL,
-      id: 'versioned-tool',
-      factory: toolFactory,
-    }),
-    { schemaVersion: 0, type: AGENT_SESSION_POLICY, id: 'legacy-policy', factory: policyFactory },
-  ],
+defineCortxContributionDescriptor({
+  id: 'typed-tool',
+  displayName: 'Typed tool',
+  executable: true,
+  schema: { fields: [{ name: 'label', type: 'string' }] },
 });
 
-// @ts-expect-error policy factories cannot be registered as agent.tool contributions.
-defineCapabilityContribution(AGENT_TOOL, 'wrong-policy', policyFactory);
-
-// @ts-expect-error object-form contributions must also keep type/factory pairs aligned.
-defineCapabilityContribution({ type: AGENT_TOOL, id: 'wrong-object-policy', factory: policyFactory });
-
-// @ts-expect-error future schema versions are not accepted by the SDK declaration type.
-defineRuntimeCapability({ schemaVersion: 999, id: 'future-capability', contributions: [] });
-
-defineRuntimeCapability({
-  id: 'bad-capability',
-  contributions: [
-    // @ts-expect-error direct contribution entries must keep type/factory pairs aligned.
-    { type: AGENT_TOOL, id: 'bad-tool', factory: policyFactory },
-  ],
+defineCortxContributionDescriptor({
+  id: 'read-only',
+  displayName: 'Read only',
+  executable: false,
+  tools: ['@cortx-ai/workspace-tools/read'],
 });
 
-defineRuntimeCapability({
-  id: 'bad-versioned-capability',
-  contributions: [
-    // @ts-expect-error versioned direct contribution entries must keep type/factory pairs aligned.
-    { schemaVersion: CORTX_EXTENSION_SCHEMA_VERSION, type: AGENT_TOOL, id: 'bad-versioned-tool', factory: policyFactory },
-  ],
+parseCortxContributionReference('@cortx-ai/workspace-tools/read');
+
+type ProjectProvider = ProjectContributionMap['provider'];
+type ProjectTool = ProjectContributionMap[typeof AGENT_TOOL];
+const projectTypes: ProjectContributionType[] = [AGENT_TOOL, RUNTIME_TOOL_PROFILE, 'provider'];
+void (null as unknown as ProjectProvider);
+void (null as unknown as ProjectTool);
+void projectTypes;
+
+// @ts-expect-error policy factories cannot be bound as agent.tool contributions.
+defineContributionBinding(AGENT_TOOL, 'wrong-policy', policyFactory);
+
+defineCortxPlugin({
+  manifest: {
+    manifestVersion: 1,
+    id: '@test/typed-context',
+    name: 'Typed context',
+    version: '1.0.0',
+    runtime: { main: 'dist/index.js' },
+    contributes: {
+      [AGENT_TOOL]: [{ id: 'wrong-policy', executable: true }],
+    },
+  },
+  setup(ctx) {
+    const exactContext: CortxPluginContext = ctx;
+    void exactContext;
+    // @ts-expect-error setup ctx rejects a session-policy factory bound as agent.tool.
+    ctx.bind({ type: AGENT_TOOL, id: 'wrong-policy', factory: policyFactory });
+  },
 });
-
-// @ts-expect-error tools require an execute function.
-defineTool({ name: 'missing_execute', inputSchema: {} });
-
-declare const genericPluginContext: PluginContext<string, Record<string, unknown>>;
-// @ts-expect-error capability registration requires a Cortx plugin context.
-registerRuntimeCapability(genericPluginContext, capability);

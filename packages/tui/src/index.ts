@@ -1,3 +1,10 @@
 export { loadConfig, saveConfig, ensureConfig, getConfigDir } from './config.js';
 export type { CortxConfig } from './config.js';
-export { createLanguageClient } from './language.js';
+export { createLanguageHost } from './language.js';
+export type { TuiLanguageHost } from './language.js';
+export { createTuiHost, TuiSessionAuthority } from './tui-host.js';
+export type { CreateTuiHostOptions, TuiHost, TuiHostActions } from './tui-host.js';
+export { RemoteRuntimeClient, RemoteRuntimeError } from './remote-client.js';
+export type { RemoteEventSubscription, RemoteRuntimeClientOptions } from './remote-client.js';
+export { createLocalRuntimeSession, createRemoteRuntimeSession } from './runtime-session.js';
+export type { TuiEventSubscription, TuiSessionAdapter, TuiRuntimeMode } from './runtime-session.js';

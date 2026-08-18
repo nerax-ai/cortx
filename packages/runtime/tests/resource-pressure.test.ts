@@ -150,7 +150,7 @@ describe('runtime resource pressure guardrails', () => {
       [...envelopes].map((event) => event.sequence).sort((a, b) => a - b),
     );
     expect(envelopes.at(-1)?.event.type).toBe('done');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('keeps multi-session histories isolated while pruning each session independently', async () => {
@@ -183,7 +183,7 @@ describe('runtime resource pressure guardrails', () => {
     expect(betaEnvelopes.every((event) => event.sessionId === beta.id)).toBe(true);
     expect(alphaEnvelopes.map((event) => event.event.type)).toContain('done');
     expect(betaEnvelopes.map((event) => event.event.type)).toContain('done');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('restores only retained durable envelopes and reapplies the runtime memory bound', async () => {
@@ -226,7 +226,7 @@ describe('runtime resource pressure guardrails', () => {
     expect(restored.map((session) => session.id)).toEqual(['durable-session']);
     expect(runtime.getEventEnvelopeHistory('durable-session').map((event) => event.sequence)).toEqual([9, 10, 12]);
     expect(runtime.getEventHistory('durable-session').map((event) => event.type)).toEqual(['text', 'text', 'error']);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('abort and dispose clear observable running state and cancel the provider signal', async () => {
@@ -253,7 +253,7 @@ describe('runtime resource pressure guardrails', () => {
     await runtime.deleteSession(session.id);
     expectSessionNotFound(() => runtime.getSession(session.id));
     expectSessionNotFound(() => runtime.subscribe(session.id, () => {}));
-    runtime.dispose();
+    await runtime.close();
     expect(runtime.listSessions()).toEqual([]);
   });
 
@@ -272,7 +272,7 @@ describe('runtime resource pressure guardrails', () => {
     await runtime.prompt(session.id, 'wait forever');
     expect(runtime.getSession(session.id).isRunning).toBe(true);
     await waitFor(() => provider.started);
-    runtime.dispose();
+    await runtime.close();
 
     await waitFor(() => provider.aborted);
     await waitFor(() => runtime.listSessions().length === 0);

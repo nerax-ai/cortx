@@ -9,12 +9,9 @@ import type {
   AgentDoneUsage,
   Tool,
   ErrorCode,
-  CortxExtensionType,
-  CortxFactoryMap,
 } from '@cortx/sdk';
-import type { PluginRegistry } from '@nerax-ai/plugin';
 
-export type { AgentDoneUsage, AgentEvent, ErrorCode, CortxExtensionType, CortxFactoryMap };
+export type { AgentDoneUsage, AgentEvent, ErrorCode };
 
 export type DeliveryMode = 'all' | 'one-at-a-time';
 
@@ -146,13 +143,6 @@ export class AgentLoopController implements AgentController {
   }
 }
 
-export interface PluginConfig {
-  use: string;
-  options?: Record<string, unknown>;
-}
-
-export type CortxRegistry = PluginRegistry<CortxExtensionType, CortxFactoryMap>;
-
 export interface CortxConfig {
   model: string;
   reasoning?: {
@@ -162,9 +152,6 @@ export interface CortxConfig {
   };
   system?: string;
   tools?: Tool[];
-  appName?: string;
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
   logger?: Logger;
   askUser?: (question: string) => Promise<string>;
   maxIterations?: number;

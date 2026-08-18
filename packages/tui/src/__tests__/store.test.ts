@@ -314,7 +314,7 @@ describe('TuiStore', () => {
     const store = new TuiStore();
     store.dispatch({ type: 'turn_start', iteration: 1 });
     store.setInterrupting();
-    expect(store.getState().status).toBe('interrupting');
+    expect(store.getState().status as string).toBe('interrupting');
   });
 
   // --- text event finalizes buffer ---

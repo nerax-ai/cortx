@@ -1,14 +1,8 @@
-import type { LanguageClient } from '@synax-ai/core';
-import type { LanguageMessage, Logger } from '@cortx/sdk';
+import type { LanguageMessage } from '@cortx/sdk';
 import { join } from 'node:path';
 import type {
-  CortxFactoryMap,
-  CortxExtensionType,
-  CortxRegistry,
   DiscoveredAgentSpec,
   InstalledSkillPack,
-  PluginConfig,
-  WorkspaceToolMode,
 } from '@cortx/runtime';
 import {
   CortxRuntime,
@@ -20,19 +14,22 @@ import {
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
 } from '@cortx/runtime';
-import type { ProjectPluginRegistry } from './language.js';
 import { RemoteRuntimeClient } from './remote-client.js';
 
 export type TuiRuntimeMode = 'local' | 'remote';
 export type TuiAgentSpecInfo = DiscoveredAgentSpec;
 export type TuiSkillPackInfo = InstalledSkillPack;
 
+export interface TuiEventSubscription {
+  close(): Promise<void>;
+}
+
 export interface TuiSessionAdapter {
   readonly mode: TuiRuntimeMode;
   readonly agentSessions: SubAgentSessionStore;
   readonly supportsMessageRestore: boolean;
   getInfo(): RuntimeSessionInfo;
-  subscribe(listener: (event: import('@cortx/sdk').AgentEvent) => void): () => void;
+  subscribe(listener: (event: import('@cortx/sdk').AgentEvent) => void): TuiEventSubscription;
   prompt(message: string): Promise<void>;
   listSessions(): Promise<RuntimeSessionInfo[]>;
   switchSession(sessionId: string): Promise<TuiSessionAdapter>;
@@ -49,19 +46,13 @@ export interface TuiSessionAdapter {
   abort(reason?: string): void | Promise<void>;
   getAgentMessages(): LanguageMessage[];
   replaceAgentMessages(messages: LanguageMessage[]): void;
-  dispose(): void;
+  close(): Promise<void>;
 }
 
 export interface LocalRuntimeSessionOptions {
-  language: LanguageClient;
-  model: string;
-  system?: string;
-  maxIterations?: number;
-  workingDirectory: string;
-  registry?: ProjectPluginRegistry | CortxRegistry;
-  plugins?: PluginConfig[];
-  toolMode?: WorkspaceToolMode;
-  logger?: Logger;
+  runtime: CortxRuntime;
+  sessionId?: string;
+  create?: RuntimeSessionCreateRequest;
   skillPackRegistryPath?: string;
 }
 
@@ -76,15 +67,14 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
   readonly agentSessions: SubAgentSessionStore;
   readonly supportsMessageRestore = true;
   private readonly localState: ReturnType<CortxRuntime['getLocalState']>;
-  private ownsRuntime = true;
+  private readonly subscriptions = new Set<TuiEventSubscription>();
+  private closed = false;
 
   constructor(
     private readonly runtime: CortxRuntime,
     private readonly sessionId: string,
     private readonly skillPackRegistryPath: string,
-    ownsRuntime = true,
   ) {
-    this.ownsRuntime = ownsRuntime;
     this.localState = runtime.getLocalState(sessionId);
     this.agentSessions = this.localState.agentSessions;
   }
@@ -93,8 +83,15 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
     return this.runtime.getSession(this.sessionId);
   }
 
-  subscribe(listener: Parameters<TuiSessionAdapter['subscribe']>[0]): () => void {
-    return this.runtime.subscribe(this.sessionId, listener);
+  subscribe(listener: Parameters<TuiSessionAdapter['subscribe']>[0]): TuiEventSubscription {
+    if (this.closed) throw new Error('Local TUI session adapter is closed');
+    const unsubscribe = this.runtime.subscribe(this.sessionId, listener);
+    const subscription = onceSubscription(async () => {
+      unsubscribe();
+      this.subscriptions.delete(subscription);
+    });
+    this.subscriptions.add(subscription);
+    return subscription;
   }
 
   listAgentSpecs(): Promise<TuiAgentSpecInfo[]> {
@@ -110,8 +107,7 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
 
   async switchSession(sessionId: string): Promise<TuiSessionAdapter> {
     const info = this.runtime.getSession(sessionId);
-    this.ownsRuntime = false;
-    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath, true);
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath);
   }
 
   createSessionForWorkspace(workingDirectory: string): Promise<TuiSessionAdapter> {
@@ -121,8 +117,7 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
   async launchAgentSpec(identifier: string): Promise<TuiSessionAdapter> {
     const spec = await resolveAgentSpecIdentifier(await this.listAgentSpecs(), identifier);
     const info = await this.runtime.launchAgentSpecFile(spec.path);
-    this.ownsRuntime = false;
-    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath, true);
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath);
   }
 
   listSkillPacks(): Promise<TuiSkillPackInfo[]> {
@@ -155,8 +150,7 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
       ...request,
       metadata: { ...request.metadata, tuiMode: 'local' },
     });
-    this.ownsRuntime = false;
-    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath, true);
+    return new LocalRuntimeSessionAdapter(this.runtime, info.id, this.skillPackRegistryPath);
   }
 
   prompt(message: string): Promise<void> {
@@ -191,8 +185,10 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
     this.localState.replaceMessages(messages);
   }
 
-  dispose(): void {
-    if (this.ownsRuntime) this.runtime.dispose();
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await closeSubscriptions('Local TUI session adapter', this.subscriptions);
   }
 }
 
@@ -200,7 +196,8 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
   readonly mode = 'remote' as const;
   readonly agentSessions = new SubAgentSessionStore();
   readonly supportsMessageRestore = false;
-  private unsubscribe: (() => void) | undefined;
+  private readonly subscriptions = new Set<TuiEventSubscription>();
+  private closed = false;
 
   constructor(
     private readonly client: RemoteRuntimeClient,
@@ -211,25 +208,22 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
     return this.info;
   }
 
-  subscribe(listener: Parameters<TuiSessionAdapter['subscribe']>[0]): () => void {
-    let closed = false;
-    this.client
-      .connectEvents(this.info.id, listener)
-      .then((unsubscribe) => {
-        if (closed) {
-          unsubscribe();
-        } else {
-          this.unsubscribe = unsubscribe;
-        }
-      })
-      .catch((error) => {
-        if (!closed) listener({ type: 'error', error: error instanceof Error ? error : new Error(String(error)) });
-      });
-    return () => {
-      closed = true;
-      this.unsubscribe?.();
-      this.unsubscribe = undefined;
-    };
+  subscribe(listener: Parameters<TuiSessionAdapter['subscribe']>[0]): TuiEventSubscription {
+    if (this.closed) throw new Error('Remote TUI session adapter is closed');
+    let source: Awaited<ReturnType<RemoteRuntimeClient['connectEvents']>> | undefined;
+    const pending = this.client.connectEvents(this.info.id, listener).then(async (subscription) => {
+      source = subscription;
+      if (this.closed) await source.close();
+    }).catch((error) => {
+      if (!this.closed) listener({ type: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+    });
+    const subscription = onceSubscription(async () => {
+      await pending;
+      await source?.close();
+      this.subscriptions.delete(subscription);
+    });
+    this.subscriptions.add(subscription);
+    return subscription;
   }
 
   async prompt(message: string): Promise<void> {
@@ -243,7 +237,6 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
 
   async switchSession(sessionId: string): Promise<TuiSessionAdapter> {
     const info = await this.client.getSession(sessionId);
-    this.dispose();
     return new RemoteRuntimeSessionAdapter(this.client, info);
   }
 
@@ -258,7 +251,6 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
   async launchAgentSpec(identifier: string): Promise<TuiSessionAdapter> {
     const spec = await resolveAgentSpecIdentifier(await this.listAgentSpecs(), identifier);
     const info = await this.client.launchAgentSpec({ path: spec.path });
-    this.dispose();
     return new RemoteRuntimeSessionAdapter(this.client, info);
   }
 
@@ -283,7 +275,6 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
       ...request,
       metadata: { ...request.metadata, tuiMode: 'remote' },
     });
-    this.dispose();
     return new RemoteRuntimeSessionAdapter(this.client, info);
   }
 
@@ -317,9 +308,10 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
     // Remote sessions own their model history on the server side.
   }
 
-  dispose(): void {
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await closeSubscriptions('Remote TUI session adapter', this.subscriptions);
   }
 
   private async refresh(): Promise<void> {
@@ -332,33 +324,15 @@ class RemoteRuntimeSessionAdapter implements TuiSessionAdapter {
 }
 
 export async function createLocalRuntimeSession(options: LocalRuntimeSessionOptions): Promise<TuiSessionAdapter> {
-  const skillPackRegistryPath = options.skillPackRegistryPath ?? join(options.workingDirectory, '.cortx', 'skill-packs', 'registry.json');
-  const runtime = new CortxRuntime({
-    appName: 'cortx',
-    language: options.language,
-    model: options.model,
-    system: options.system,
-    maxIterations: options.maxIterations,
-    registry: options.registry as CortxRegistry | undefined,
-    plugins: options.plugins,
-    defaultWorkingDirectory: options.workingDirectory,
-    allowedWorkspaceRoots: [options.workingDirectory],
-    toolMode: options.toolMode ?? 'none',
-    approvalMode: 'interactive',
-    logger: options.logger,
-    skillPackRegistryPath,
-  });
-  const info = await runtime.createSession({
-    workingDirectory: options.workingDirectory,
-    model: options.model,
-    system: options.system,
-    maxIterations: options.maxIterations,
-    registry: options.registry as CortxRegistry | undefined,
-    plugins: options.plugins,
-    toolMode: options.toolMode,
-    metadata: { tuiMode: 'local' },
-  });
-  return new LocalRuntimeSessionAdapter(runtime, info.id, skillPackRegistryPath);
+  const info = options.sessionId
+    ? options.runtime.getSession(options.sessionId)
+    : await options.runtime.createSession({
+        ...options.create,
+        metadata: { ...options.create?.metadata, tuiMode: 'local' },
+      });
+  const skillPackRegistryPath = options.skillPackRegistryPath
+    ?? join(info.workingDirectory, '.cortx', 'skill-packs', 'registry.json');
+  return new LocalRuntimeSessionAdapter(options.runtime, info.id, skillPackRegistryPath);
 }
 
 export async function createRemoteRuntimeSession(options: RemoteRuntimeSessionOptions): Promise<TuiSessionAdapter> {
@@ -370,8 +344,6 @@ export async function createRemoteRuntimeSession(options: RemoteRuntimeSessionOp
       });
   return new RemoteRuntimeSessionAdapter(options.client, info);
 }
-
-export type { CortxFactoryMap, CortxExtensionType };
 
 export async function resolveAgentSpecIdentifier(
   specs: TuiAgentSpecInfo[],
@@ -392,4 +364,24 @@ export async function resolveAgentSpecIdentifier(
     throw new Error(`AgentSpec "${needle}" is ambiguous. Use a full relative path from /agents.`);
   }
   return matches[0];
+}
+
+function onceSubscription(close: () => void | Promise<void>): TuiEventSubscription {
+  let result: Promise<void> | undefined;
+  return {
+    close() {
+      result ??= Promise.resolve().then(close);
+      return result;
+    },
+  };
+}
+
+async function closeSubscriptions(label: string, subscriptions: Set<TuiEventSubscription>): Promise<void> {
+  const failures: unknown[] = [];
+  for (const subscription of [...subscriptions]) {
+    try { await subscription.close(); }
+    catch (error) { failures.push(error); }
+  }
+  subscriptions.clear();
+  if (failures.length > 0) throw new AggregateError(failures, `${label} close failed`);
 }

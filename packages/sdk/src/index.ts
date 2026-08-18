@@ -35,11 +35,14 @@ export {
   AGENT_TOOL,
   AGENT_TOOL_AFTER,
   AGENT_TOOL_BEFORE,
-  CORTX_EXTENSION_TYPES,
-  CORTX_EXTENSION_SCHEMA_VERSION,
+  CORTX_CONTRIBUTION_TYPES,
+  CORTX_EXECUTABLE_CONTRIBUTION_TYPES,
+  PROJECT_CONTRIBUTION_TYPES,
+  RUNTIME_TOOL_PROFILE,
   appendAgentRuntimeExtension,
   createEmptyAgentRuntimeExtensions,
-  defineCapabilityContribution,
+  defineContributionBinding,
+  defineCortxContributionDescriptor,
   defineContributionFactory,
   defineContextOverflow,
   defineCortxPlugin,
@@ -47,7 +50,6 @@ export {
   defineEventObserverFactory,
   defineEventObserver,
   defineMessagesTransform,
-  defineRuntimeCapability,
   defineSessionPolicyFactory,
   defineSessionPolicy,
   defineSystemTransform,
@@ -55,9 +57,9 @@ export {
   defineToolAfter,
   defineToolBefore,
   mergeAgentRuntimeExtensions,
-  normalizeCortxCapabilityContribution,
-  normalizeRuntimeCapabilityDefinition,
-  registerRuntimeCapability,
+  isAgentExtensionType,
+  isProjectContributionType,
+  parseCortxContributionReference,
 } from './extensions.js';
 
 export type {
@@ -84,18 +86,22 @@ export type {
   AgentToolBeforeContribution,
   AgentToolBeforeInput,
   AgentToolBeforeResult,
-  AnyCortxCapabilityContribution,
-  AnyNormalizedCortxCapabilityContribution,
-  CortxCapabilityContribution,
-  CortxExtensionSchemaVersion,
-  CortxExtensionType,
+  CortxContributionBinding,
+  CortxContributionConfig,
   CortxContributionFactory,
-  CortxFactoryContext,
-  CortxFactoryMap,
+  CortxContributionHostContext,
+  CortxContributionLease,
+  CortxContributionMap,
+  CortxContributionOptions,
+  CortxContributionReference,
+  CortxContributionType,
+  CortxExecutableContributionType,
+  CortxHostScopeKind,
   CortxPluginContext,
-  NormalizedCortxCapabilityContribution,
-  NormalizedRuntimeCapabilityDefinition,
-  RuntimeCapabilityDefinition,
+  CortxPlugin,
+  ProjectContributionMap,
+  ProjectContributionType,
+  SynaxContributionType,
 } from './extensions.js';
 
 export type {
@@ -125,7 +131,17 @@ export type {
   AgentTracer,
 } from './runtime.js';
 
-export type { PluginModule, PluginContext, PluginManifest, PluginContribution, InlinePlugin } from '@nerax-ai/plugin';
+export type {
+  ContributionBinding,
+  ContributionDescriptor,
+  ContributionHostContext,
+  ContributionLease,
+  DeclarativePlugin,
+  DeclarativePluginContext,
+  JsonObject,
+  ManifestContributionDescriptor,
+  PluginManifest,
+} from '@nerax-ai/plugin';
 export type { SkillInfo } from './skill.js';
 export { formatToolSummary } from './tool-format.js';
 export type { FormatToolSummaryOptions } from './tool-format.js';

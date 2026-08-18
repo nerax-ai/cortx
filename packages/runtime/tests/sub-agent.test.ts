@@ -142,8 +142,8 @@ describe('runtime sub-agent capability', () => {
     await waitForEvent(disabledEvents, 'done');
     expect(((enabledCapture.tools ?? []) as Array<{ name: string }>).some((tool) => tool.name === 'agent')).toBe(true);
     expect(((disabledCapture.tools ?? []) as Array<{ name: string }>).some((tool) => tool.name === 'agent')).toBe(false);
-    enabled.dispose();
-    disabled.dispose();
+    await enabled.close();
+    await disabled.close();
   });
 
   test('foreground agent tool returns child output and lifecycle events', async () => {
@@ -347,7 +347,7 @@ describe('runtime sub-agent capability', () => {
         output: 'child output',
       },
     ]);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('background agent tool returns immediately and completes the child session', async () => {
@@ -392,9 +392,9 @@ describe('runtime sub-agent capability', () => {
     );
     expect(result.success).toBe(true);
 
-    store.abortRunning('stop child');
+    await store.abortRunning('stop child');
 
-    await waitFor(() => store.get('agent-call')?.status === 'error');
+    await waitFor(() => store.get('agent-call')?.status === 'cancelled');
     expect(events.find((event) => event.type === 'agent_completed')).toMatchObject({
       type: 'agent_completed',
       toolCallId: 'agent-call',

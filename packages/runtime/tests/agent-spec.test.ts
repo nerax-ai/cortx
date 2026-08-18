@@ -98,7 +98,7 @@ describe('AgentSpec asset launch', () => {
 
     expect(textOf(captured.messages?.at(-1))).toBe('small agent task');
     expect(captured.tools ?? []).toEqual([]);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('returns current session info after launching the AgentSpec prompt', async () => {
@@ -119,7 +119,7 @@ describe('AgentSpec asset launch', () => {
 
     expect(session.isRunning).toBe(true);
     expect(runtime.getSession(session.id).isRunning).toBe(true);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('loads and launches an AgentSpec JSON file', async () => {
@@ -154,7 +154,7 @@ describe('AgentSpec asset launch', () => {
     expect(session.metadata).toMatchObject({ agentSpec: 'file-agent' });
     expect(textOf(captured.messages?.at(-1))).toBe('file task');
     expect(captured.tools ?? []).toEqual([]);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('loads legacy AgentSpec JSON files as current schema', async () => {
@@ -280,7 +280,7 @@ describe('AgentSpec asset launch', () => {
 
     expect(session.skillPacks).toEqual(['review-pack']);
     expect(textOf(captured.messages?.at(-1))).toContain('Installed AgentSpec skill: code');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('skips invalid specs by default and throws in strict discovery mode', async () => {

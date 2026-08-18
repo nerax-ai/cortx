@@ -1,5 +1,6 @@
 import { createStorage } from '@nerax-ai/storage';
 import type { ProviderConfig, GroupConfig } from '@synax-ai/sdk';
+import type { CortxContributionConfig } from '@cortx/sdk';
 
 export interface CortxConfig {
   model: string;
@@ -19,9 +20,8 @@ export interface CortxConfig {
       workingDirectory?: string;
     };
   };
-  workspaceToolsPlugin?: string | false;
   plugins?: string[];
-  agentPlugins?: Array<{ use: string; options?: Record<string, unknown> }>;
+  contributions?: CortxContributionConfig[];
   providers?: ProviderConfig[];
   groups?: GroupConfig[];
 }

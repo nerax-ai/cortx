@@ -1,7 +1,8 @@
-import type { AgentDoneUsage, AgentEvent, ContextUsageSource, LanguageMessage, Tool } from '@cortx/sdk';
-import type { Cortx, PluginConfig, CortxRegistry } from '@cortx/core';
+import type { AgentDoneUsage, AgentEvent, ContextUsageSource, CortxContributionConfig, LanguageMessage, Tool } from '@cortx/sdk';
+import type { Cortx } from '@cortx/core';
 import type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 import type { SubAgentSessionStore } from './capabilities/sub-agent/session-store.js';
+import type { CortxHostScope } from './host-scope.js';
 import type { WorkspaceToolMode } from './workspace-tool-mode.js';
 
 export interface RuntimeSessionMetadata {
@@ -12,6 +13,7 @@ export type RuntimeApprovalMode = 'deny' | 'interactive' | 'full-access';
 
 export interface RuntimeSessionInfo {
   id: string;
+  creatorPrincipalId?: string;
   createdAt: number;
   lastActivityAt: number;
   workingDirectory: string;
@@ -22,6 +24,8 @@ export interface RuntimeSessionInfo {
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
+  /** Canonical runtime.toolProfile contribution reference used by the Host. */
+  toolProfile: string;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
@@ -37,6 +41,7 @@ export interface RuntimeSessionInfo {
 
 export interface RuntimeSessionCreateRequest {
   id?: string;
+  creatorPrincipalId?: string;
   workingDirectory?: string;
   model?: string;
   reasoningEffort?: string;
@@ -49,8 +54,7 @@ export interface RuntimeSessionCreateRequest {
   capabilities?: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   skillPacks?: string[];
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
+  contributions?: CortxContributionConfig[];
   metadata?: RuntimeSessionMetadata;
 }
 
@@ -89,6 +93,7 @@ export interface ManagedRuntimeSession {
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
+  toolProfile: string;
   approvalMode: RuntimeApprovalMode;
   requestedCapabilities: RuntimeDefaultCapabilities;
   capabilities: RuntimeDefaultCapabilities;
@@ -96,8 +101,10 @@ export interface ManagedRuntimeSession {
   skillPacks?: string[];
   promptHistory: string[];
   requestTools: Tool[];
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
+  contributions: CortxContributionConfig[];
+  scope: CortxHostScope;
+  runScope?: CortxHostScope;
+  creatorPrincipalId?: string;
   events: AgentEvent[];
   eventEnvelopes: import('@cortx/sdk').RuntimeAgentEventEnvelope[];
   usage?: AgentDoneUsage;
@@ -106,7 +113,6 @@ export interface ManagedRuntimeSession {
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   isRunning: boolean;
   runPromise?: Promise<void>;
-  needsHostRefresh?: boolean;
   runId: number;
   nextEventSequence: number;
   agentSessions: SubAgentSessionStore;

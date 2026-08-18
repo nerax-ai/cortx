@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { Cortx, createEmptyAgentRuntimeExtensions } from '../src/index.js';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageMessage } from '@cortx/sdk';
-import { PluginRegistry } from '@nerax-ai/plugin';
 
 let testDir: string;
 
@@ -16,7 +15,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(testDir, { recursive: true, force: true });
-  PluginRegistry.reset();
 });
 
 async function writeSkill(name: string, body: string): Promise<void> {

@@ -1,4 +1,4 @@
-import type { AgentRunCheckpoint, Tool } from '@cortx/sdk';
+import type { AgentRunCheckpoint, CortxContributionConfig, Tool } from '@cortx/sdk';
 import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION } from '@cortx/sdk';
 import { DEFAULT_RUNTIME_CAPABILITIES } from '../default-capabilities.js';
 import {
@@ -29,9 +29,12 @@ export function parseRuntimeSessionSnapshot(value: unknown): RuntimeSessionSnaps
     return isCurrentRuntimeSessionSnapshot(value)
       ? ({
           ...value,
+          creatorPrincipalId: typeof value.creatorPrincipalId === 'string' ? value.creatorPrincipalId : undefined,
           reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : undefined,
           promptHistory: stringArray(value.promptHistory),
           requestTools: toolArray(value.requestTools),
+          toolProfile: typeof value.toolProfile === 'string' ? value.toolProfile : undefined,
+          contributions: contributionArray(value.contributions),
         } as unknown as RuntimeSessionSnapshot)
       : undefined;
   }
@@ -85,6 +88,7 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
   return {
     schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
     id: value.id,
+    creatorPrincipalId: typeof value.creatorPrincipalId === 'string' ? value.creatorPrincipalId : undefined,
     createdAt: value.createdAt,
     lastActivityAt: value.lastActivityAt,
     workingDirectory: value.workingDirectory,
@@ -95,12 +99,14 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     contextWindowTokens: typeof value.contextWindowTokens === 'number' ? value.contextWindowTokens : undefined,
     contextWindowSource: parseContextWindowSource(value.contextWindowSource),
     toolMode: parseToolMode(value.toolMode),
+    toolProfile: typeof value.toolProfile === 'string' ? value.toolProfile : undefined,
     approvalMode: parseApprovalMode(value.approvalMode),
     capabilities: isObject(value.capabilities) ? { ...DEFAULT_RUNTIME_CAPABILITIES, ...value.capabilities } : { skills: false, subAgents: false, approval: false },
     skillPaths: stringArray(value.skillPaths),
     skillPacks: stringArray(value.skillPacks),
     promptHistory: stringArray(value.promptHistory),
     requestTools: toolArray(value.requestTools),
+    contributions: contributionArray(value.contributions),
     runId: typeof value.runId === 'number' ? value.runId : 0,
     nextEventSequence: typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
     metadata: isObject(value.metadata) ? value.metadata : undefined,
@@ -116,6 +122,22 @@ function toolArray(value: unknown): Tool[] | undefined {
     value.every((item) => isObject(item) && typeof item.name === 'string' && typeof item.execute === 'function')
     ? (value as Tool[])
     : undefined;
+}
+
+function contributionArray(value: unknown): CortxContributionConfig[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result: CortxContributionConfig[] = [];
+  for (const item of value) {
+    if (!isObject(item) || typeof item.use !== 'string') return undefined;
+    if (item.options !== undefined && !isObject(item.options)) return undefined;
+    result.push({
+      use: item.use,
+      ...(item.options === undefined
+        ? {}
+        : { options: { ...item.options } as CortxContributionConfig['options'] }),
+    });
+  }
+  return result;
 }
 
 function migrateRuntimeSubAgentSessionSnapshotV0(value: Record<string, unknown>): RuntimeSubAgentSessionSnapshot | undefined {
@@ -243,7 +265,7 @@ function parseContextWindowSource(value: unknown): RuntimeSessionSnapshot['conte
 }
 
 function isSubAgentStatus(value: unknown): value is RuntimeSubAgentSessionSnapshot['status'] {
-  return value === 'running' || value === 'completed' || value === 'error';
+  return value === 'running' || value === 'completed' || value === 'error' || value === 'interrupted' || value === 'cancelled';
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

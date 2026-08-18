@@ -1,13 +1,7 @@
 import type { LanguageClient } from '@synax-ai/core';
 import type { AgentEvent, AgentRuntimeExtensions, LanguageMessage, Logger, Tool, ToolResult } from '@cortx/sdk';
-import { formatToolSummary, mergeAgentRuntimeExtensions } from '@cortx/sdk';
-import {
-  AgentLoopController,
-  agentLoop,
-  resolveExtensions,
-  type CortxRegistry,
-  type PluginConfig,
-} from '@cortx/core';
+import { formatToolSummary } from '@cortx/sdk';
+import { AgentLoopController, agentLoop } from '@cortx/core';
 import type { SubAgentSession, SubAgentSessionStore } from './session-store.js';
 
 export interface SubAgentToolOptions {
@@ -20,10 +14,14 @@ export interface SubAgentToolOptions {
   };
   maxOutputTokens?: number;
   limits?: import('@cortx/sdk').AgentRunLimits;
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
   getTools(): Tool[];
   getExtensions(): AgentRuntimeExtensions;
+  createChildHost?(input: {
+    toolCallId: string;
+    sessionId: string;
+    runId?: number;
+    isBackground: boolean;
+  }): Promise<{ extensions: AgentRuntimeExtensions; signal: AbortSignal; close(reason?: unknown): Promise<void> }>;
   agentSessions: SubAgentSessionStore;
   onAgentEvent(event: AgentEvent): void;
 }
@@ -53,17 +51,19 @@ function childProgressForEvent(event: AgentEvent): string | undefined {
 async function runSubAgentLoop(input: {
   loopOpts: Parameters<typeof agentLoop>[0];
   session: SubAgentSession;
+  agentSessions: SubAgentSessionStore;
   toolCallId: string;
   controller: AgentLoopController;
   bridgeAskUser?: (event: Extract<AgentEvent, { type: 'user_request' | 'user_question' }>) => Promise<void>;
   reportProgress?: (text: string) => void;
   onAgentEvent(event: AgentEvent): void;
 }): Promise<void> {
-  const { loopOpts, session, toolCallId, controller, bridgeAskUser, reportProgress, onAgentEvent } = input;
+  const { loopOpts, session, agentSessions, toolCallId, controller, bridgeAskUser, reportProgress, onAgentEvent } = input;
   const bridgedQuestions = new Set<string>();
   try {
     for await (const event of agentLoop(loopOpts)) {
       session.events.push(event);
+      agentSessions.recordEvent(toolCallId, event);
       if (event.type === 'user_request' || event.type === 'user_question') {
         const requestId = event.type === 'user_request' ? event.request.requestId : event.toolCallId;
         if (!bridgedQuestions.has(requestId) && bridgeAskUser) {
@@ -150,10 +150,13 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
       const description = (input.description as string | undefined) ?? 'sub-agent';
       const isBackground = input.run_in_background === true;
       const toolCallId = ctx.toolCallId;
-      const pluginExtensions = options.registry
-        ? await resolveExtensions(options.plugins, options.registry, `agent-${toolCallId}`)
-        : undefined;
-      const childExtensions = mergeAgentRuntimeExtensions(options.getExtensions(), pluginExtensions);
+      const childHost = await options.createChildHost?.({
+        toolCallId,
+        sessionId: ctx.sessionId,
+        runId: ctx.runId,
+        isBackground,
+      });
+      const childExtensions = childHost?.extensions ?? options.getExtensions();
       const policyResult = await applySubAgentPolicies({
         sessionId: ctx.sessionId,
         parentToolCallId: toolCallId,
@@ -162,7 +165,10 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
         isBackground,
         extensions: childExtensions,
       });
-      if (policyResult) return policyResult;
+      if (policyResult) {
+        await childHost?.close(new Error('Sub-agent denied by policy'));
+        return policyResult;
+      }
 
       const session = options.agentSessions.create(toolCallId, description, isBackground, ctx.sessionId, ctx.runId);
       ctx.reportProgress?.(`starting ${description}...`);
@@ -172,6 +178,8 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
       const abortChild = () => childController.abort('parent aborted');
       if (ctx.signal?.aborted) abortChild();
       ctx.signal?.addEventListener('abort', abortChild, { once: true });
+      if (childHost?.signal.aborted) abortChild();
+      childHost?.signal.addEventListener('abort', abortChild, { once: true });
       options.agentSessions.registerAbort(toolCallId, (reason) => childController.abort(reason ?? 'parent aborted'));
       const bridgeAskUser = ctx.askUser
         ? async (event: Extract<AgentEvent, { type: 'user_request' | 'user_question' }>) => {
@@ -222,6 +230,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
             await runSubAgentLoop({
               loopOpts,
               session,
+              agentSessions: options.agentSessions,
               toolCallId,
               controller: childController,
               bridgeAskUser,
@@ -237,7 +246,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
             });
           } catch (error) {
             ctx.logger.error(`Background agent "${description}" failed: ${error instanceof Error ? error.message : String(error)}`);
-            options.agentSessions.complete(toolCallId, true);
+            options.agentSessions.finish(toolCallId, childController.isAborted ? 'cancelled' : 'error');
             options.onAgentEvent({
               type: 'agent_completed',
               toolCallId,
@@ -248,7 +257,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
             });
           } finally {
             ctx.signal?.removeEventListener('abort', abortChild);
+            childHost?.signal.removeEventListener('abort', abortChild);
             options.agentSessions.clearAbort(toolCallId);
+            await childHost?.close(new Error(`Background sub-agent settled: ${toolCallId}`));
           }
         })();
 
@@ -259,6 +270,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
         await runSubAgentLoop({
           loopOpts,
           session,
+          agentSessions: options.agentSessions,
           toolCallId,
           controller: childController,
           bridgeAskUser,
@@ -282,7 +294,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
             : session.output;
         return { success: true, output: preview || '(sub-agent produced no text output)' };
       } catch (error) {
-        options.agentSessions.complete(toolCallId, true);
+        options.agentSessions.finish(toolCallId, childController.isAborted ? 'cancelled' : 'error');
         options.onAgentEvent({
           type: 'agent_completed',
           toolCallId,
@@ -295,7 +307,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): Tool {
         return { success: false, error: `Sub-agent failed: ${error instanceof Error ? error.message : String(error)}` };
       } finally {
         ctx.signal?.removeEventListener('abort', abortChild);
+        childHost?.signal.removeEventListener('abort', abortChild);
         options.agentSessions.clearAbort(toolCallId);
+        await childHost?.close(new Error(`Foreground sub-agent settled: ${toolCallId}`));
       }
     },
   };

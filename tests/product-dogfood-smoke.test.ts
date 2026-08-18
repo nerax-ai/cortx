@@ -1,22 +1,27 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { PluginRegistry } from '../../nerax/packages/plugin/src/index.ts';
+import { join } from 'node:path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { LanguageStreamPart } from '@synax-ai/sdk';
 import { AgentStore } from '../packages/store/src/index';
 import { createServerRuntime, type ServerRuntimeHandle } from '../packages/server/src/server';
-import type { CortxExtensionType, CortxFactoryMap, CortxRegistry } from '../packages/runtime/src/index';
+import { OFFICIAL_TOOL_PROFILE_ALIASES, type ProjectDomain } from '../packages/runtime/src/index';
+import { createWorkspaceToolProjectDomain } from '../packages/runtime/tests/helpers/project-domain';
 import { EventBridge, EventBridgeError } from '../packages/web/src/bridge/event-bridge';
 import { RemoteRuntimeClient } from '../packages/tui/src/remote-client';
 
 const BASE_URL = 'http://cortx-smoke.test';
 const originalFetch = globalThis.fetch;
-const originalEventSource = (globalThis as unknown as { EventSource?: unknown }).EventSource;
 
 let tmpRoot: string;
 let activeFetch: ((input: string | URL, init?: RequestInit) => Promise<Response>) | undefined;
+let transportRequests: Array<{
+  path: string;
+  method: string;
+  authorization: string | null;
+  accept: string | null;
+}>;
 
 function textParts(text: string): LanguageStreamPart[] {
   const id = `text-${Math.random().toString(36).slice(2)}`;
@@ -51,90 +56,20 @@ function createAppFetch(handle: ServerRuntimeHandle): (input: string | URL, init
   return async (input, init = {}) => {
     const url = new URL(String(input), BASE_URL);
     const headers = new Headers(init.headers);
+    transportRequests.push({
+      path: `${url.pathname}${url.search}`,
+      method: init.method ?? 'GET',
+      authorization: headers.get('Authorization'),
+      accept: headers.get('Accept'),
+    });
     const requestInit: RequestInit = {
       method: init.method,
       headers,
       body: init.body,
       signal: init.signal,
     };
-    return handle.app.request(`${url.pathname}${url.search}`, requestInit);
+    return handle.app.request(`${url.pathname}${url.search}`, requestInit, { remoteAddress: '127.0.0.1' });
   };
-}
-
-class ServerBackedEventSource {
-  static instances: ServerBackedEventSource[] = [];
-  onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-  readonly messages: string[] = [];
-  private readonly controller = new AbortController();
-  private closed = false;
-
-  constructor(readonly url: string) {
-    ServerBackedEventSource.instances.push(this);
-    void this.open();
-  }
-
-  close(): void {
-    this.closed = true;
-    this.controller.abort();
-  }
-
-  private async open(): Promise<void> {
-    try {
-      if (!activeFetch) throw new Error('No app-backed fetch is active for the smoke EventSource.');
-      const response = await activeFetch(this.url, { signal: this.controller.signal });
-      if (!response.ok) throw new Error(`SSE failed: ${response.status}`);
-      this.onopen?.({});
-      await this.readStream(response);
-    } catch (error) {
-      if (!this.closed) this.onerror?.(error);
-    }
-  }
-
-  private async readStream(response: Response): Promise<void> {
-    if (!response.body) return;
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (!this.closed) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      buffer = this.drain(buffer);
-    }
-  }
-
-  private drain(input: string): string {
-    let buffer = input;
-    while (true) {
-      const match = /\r?\n\r?\n/.exec(buffer);
-      if (!match) return buffer;
-      const raw = buffer.slice(0, match.index);
-      buffer = buffer.slice(match.index + match[0].length);
-      const data = raw
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (data) {
-        this.messages.push(data);
-        this.onmessage?.({ data });
-      }
-    }
-  }
-}
-
-async function createWorkspaceToolRegistry(): Promise<CortxRegistry> {
-  const source = resolve(import.meta.dir, '../../cortx-plugins/workspace-tools');
-  const cleanSource = mkdtempSync(join(tmpdir(), 'cortx-smoke-workspace-tools-plugin-'));
-  cpSync(resolve(source, 'manifest.json'), resolve(cleanSource, 'manifest.json'));
-  cpSync(resolve(source, 'src'), resolve(cleanSource, 'src'), { recursive: true });
-  const registry = new PluginRegistry<CortxExtensionType, CortxFactoryMap>({
-    appName: `cortx-smoke-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  }) as CortxRegistry;
-  await registry.load(cleanSource);
-  return registry;
 }
 
 async function createRuntimeHandle(input: {
@@ -143,15 +78,16 @@ async function createRuntimeHandle(input: {
   rootB?: string;
   stateDir: string;
   approvalMode?: 'interactive' | 'full-access';
-}): Promise<ServerRuntimeHandle> {
-  return createServerRuntime({
+}): Promise<{ handle: ServerRuntimeHandle; projectDomain: ProjectDomain }> {
+  const projectDomain = await createWorkspaceToolProjectDomain();
+  const handle = createServerRuntime({
     apiKey: 'root-key',
     apiKeys: [
       {
         id: 'project-a',
         key: 'key-a',
         allowedWorkspaceRoots: [input.rootA],
-        toolMode: 'all',
+        allowedToolProfiles: [OFFICIAL_TOOL_PROFILE_ALIASES.all],
         approvalMode: input.approvalMode ?? 'interactive',
       },
       ...(input.rootB
@@ -160,27 +96,27 @@ async function createRuntimeHandle(input: {
               id: 'project-b',
               key: 'key-b',
               allowedWorkspaceRoots: [input.rootB],
-              toolMode: 'read-only' as const,
+              allowedToolProfiles: [OFFICIAL_TOOL_PROFILE_ALIASES['read-only']],
               approvalMode: 'deny' as const,
             },
           ]
         : []),
     ],
-    registry: await createWorkspaceToolRegistry(),
+    projectDomain,
     language: input.language,
     model: 'smoke-model',
     defaultWorkingDirectory: input.rootA,
     allowedWorkspaceRoots: input.rootB ? [input.rootA, input.rootB] : [input.rootA],
-    toolMode: 'all',
+    toolMode: OFFICIAL_TOOL_PROFILE_ALIASES.all,
     approvalMode: input.approvalMode ?? 'interactive',
     skillPackRegistryPath: join(input.stateDir, 'skill-packs.json'),
   });
+  return { handle, projectDomain };
 }
 
 function installAppTransport(handle: ServerRuntimeHandle): void {
   activeFetch = createAppFetch(handle);
   globalThis.fetch = activeFetch as typeof fetch;
-  (globalThis as unknown as { EventSource?: typeof ServerBackedEventSource }).EventSource = ServerBackedEventSource;
 }
 
 function createSkillPack(root: string): string {
@@ -190,7 +126,11 @@ function createSkillPack(root: string): string {
   mkdirSync(skillDir, { recursive: true });
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(join(packDir, 'skill-pack.json'), JSON.stringify({ name: 'Review Pack', version: '1.0.0' }), 'utf8');
-  writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: review\ndescription: Review project changes.\n---\nReview the change.', 'utf8');
+  writeFileSync(
+    join(skillDir, 'SKILL.md'),
+    '---\nname: review\ndescription: Review project changes.\n---\nReview the change.',
+    'utf8',
+  );
   writeFileSync(
     join(agentsDir, 'reviewer.json'),
     JSON.stringify({
@@ -214,20 +154,23 @@ async function waitUntil(assertion: () => boolean, label: string, timeoutMs = 2_
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-function parsedEnvelopeMessages(source: ServerBackedEventSource): Array<Record<string, unknown>> {
-  return source.messages
-    .filter((message) => message !== '{}')
-    .map((message) => JSON.parse(message) as Record<string, unknown>);
+async function fetchEnvelopeHistory(sessionId: string): Promise<Array<Record<string, unknown>>> {
+  if (!activeFetch) throw new Error('No app-backed fetch is active for event history.');
+  const response = await activeFetch(
+    `${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/events/history?format=envelope`,
+    { headers: { Authorization: 'Bearer key-a' } },
+  );
+  if (!response.ok) throw new Error(`Event history failed: ${response.status}`);
+  return ((await response.json()) as { events: Array<Record<string, unknown>> }).events;
 }
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'cortx-product-smoke-'));
-  ServerBackedEventSource.instances = [];
+  transportRequests = [];
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  (globalThis as unknown as { EventSource?: unknown }).EventSource = originalEventSource;
   activeFetch = undefined;
   rmSync(tmpRoot, { recursive: true, force: true });
 });
@@ -241,7 +184,7 @@ describe('product dogfood smoke', () => {
     mkdirSync(rootB, { recursive: true });
     mkdirSync(stateDir, { recursive: true });
     createSkillPack(rootA);
-    const handle = await createRuntimeHandle({
+    const { handle, projectDomain } = await createRuntimeHandle({
       rootA,
       rootB,
       stateDir,
@@ -251,21 +194,29 @@ describe('product dogfood smoke', () => {
       ]),
     });
     installAppTransport(handle);
+    const webStore = new AgentStore();
+    const web = new EventBridge(webStore, 'key-a', BASE_URL);
+    const replayStore = new AgentStore();
+    const replayWeb = new EventBridge(replayStore, 'key-a', BASE_URL);
+    const tuiB = new RemoteRuntimeClient({ baseUrl: BASE_URL, apiKey: 'key-b', fetch: activeFetch });
+    const tuiA = new RemoteRuntimeClient({ baseUrl: BASE_URL, apiKey: 'key-a', fetch: activeFetch });
 
     try {
-      const webStore = new AgentStore();
-      const web = new EventBridge(webStore, 'key-a', BASE_URL);
-      const tuiB = new RemoteRuntimeClient({ baseUrl: BASE_URL, apiKey: 'key-b', fetch: activeFetch });
-      const tuiA = new RemoteRuntimeClient({ baseUrl: BASE_URL, apiKey: 'key-a', fetch: activeFetch });
-
       const webSession = await web.createSession({
         workingDirectory: rootA,
-        toolMode: 'all',
+        toolMode: OFFICIAL_TOOL_PROFILE_ALIASES.all,
         approvalMode: 'interactive',
-        capabilities: { skills: false, subAgents: true, approval: true },
       });
       await web.connect(webSession.id);
-      const tuiSession = await tuiB.createSession({ workingDirectory: rootB, toolMode: 'read-only', approvalMode: 'deny' });
+      const tuiSession = await tuiB.createSession({
+        workingDirectory: rootB,
+        toolMode: OFFICIAL_TOOL_PROFILE_ALIASES['read-only'],
+        approvalMode: 'deny',
+      });
+
+      expect(webSession.toolMode).toBe(OFFICIAL_TOOL_PROFILE_ALIASES.all);
+      expect(tuiSession.toolMode).toBe(OFFICIAL_TOOL_PROFILE_ALIASES['read-only']);
+      expect((await web.listToolProfiles()).map((profile) => profile.use)).toEqual([OFFICIAL_TOOL_PROFILE_ALIASES.all]);
 
       const webSessions = await web.listSessions();
       expect(webSessions.map((session) => session.id)).toEqual([webSession.id]);
@@ -287,15 +238,18 @@ describe('product dogfood smoke', () => {
 
       expect(readFileSync(join(rootA, 'approved.txt'), 'utf8')).toBe('approved by smoke');
       expect(webStore.getState().messages.turns.some((turn) => turn.content.includes('approval complete'))).toBe(true);
-      expect(webStore.getState().activity.find((entry) => entry.kind === 'tool' && entry.id === 'write-call')).toMatchObject({
+      expect(
+        webStore.getState().activity.find((entry) => entry.kind === 'tool' && entry.id === 'write-call'),
+      ).toMatchObject({
         kind: 'tool',
         entry: { status: 'complete', isError: false },
       });
 
-      const replayStore = new AgentStore();
-      const replayWeb = new EventBridge(replayStore, 'key-a', BASE_URL);
       await replayWeb.connect(webSession.id);
-      await waitUntil(() => replayStore.getState().messages.turns.some((turn) => turn.content.includes('approval complete')), 'event replay');
+      await waitUntil(
+        () => replayStore.getState().messages.turns.some((turn) => turn.content.includes('approval complete')),
+        'event replay',
+      );
 
       const installed = await web.installSkillPack({ path: 'review-pack', id: 'review-pack' });
       expect(installed).toMatchObject({ id: 'review-pack', name: 'Review Pack', version: '1.0.0' });
@@ -305,8 +259,21 @@ describe('product dogfood smoke', () => {
       await tuiB.abort(tuiSession.id);
       await tuiB.resume(tuiSession.id);
       expect((await tuiB.getSession(tuiSession.id)).workingDirectory).toBe(rootB);
+      expect(
+        transportRequests.some(
+          (request) =>
+            request.path.startsWith(`/sessions/${webSession.id}/events?`) &&
+            request.authorization === 'Bearer key-a' &&
+            request.accept === 'text/event-stream',
+        ),
+      ).toBe(true);
     } finally {
-      handle.dispose();
+      await replayWeb.disconnect();
+      await web.disconnect();
+      await tuiA.close();
+      await tuiB.close();
+      await handle.close();
+      await projectDomain.close();
     }
   });
 
@@ -315,7 +282,7 @@ describe('product dogfood smoke', () => {
     const stateDir = join(tmpRoot, 'state');
     mkdirSync(rootA, { recursive: true });
     mkdirSync(stateDir, { recursive: true });
-    const handle = await createRuntimeHandle({
+    const { handle, projectDomain } = await createRuntimeHandle({
       rootA,
       stateDir,
       approvalMode: 'full-access',
@@ -326,19 +293,23 @@ describe('product dogfood smoke', () => {
       ]),
     });
     installAppTransport(handle);
+    const store = new AgentStore();
+    const web = new EventBridge(store, 'key-a', BASE_URL);
+    const replayStore = new AgentStore();
+    const replayWeb = new EventBridge(replayStore, 'key-a', BASE_URL);
 
     try {
-      const store = new AgentStore();
-      const web = new EventBridge(store, 'key-a', BASE_URL);
       const session = await web.createSession({
         workingDirectory: rootA,
-        toolMode: 'all',
+        toolMode: OFFICIAL_TOOL_PROFILE_ALIASES.all,
         approvalMode: 'full-access',
-        capabilities: { skills: false, subAgents: true, approval: true },
       });
       await web.connect(session.id);
       await web.prompt(session.id, 'run a child agent');
-      await waitUntil(() => store.getState().agentSessions.get('agent-call')?.status === 'completed', 'sub-agent completion');
+      await waitUntil(
+        () => store.getState().agentSessions.get('agent-call')?.status === 'completed',
+        'sub-agent completion',
+      );
 
       expect(store.getState().agentSessions.get('agent-call')).toMatchObject({
         description: 'child check',
@@ -347,11 +318,27 @@ describe('product dogfood smoke', () => {
       });
       expect(store.getState().messages.turns.some((turn) => turn.content.includes('parent observed child'))).toBe(true);
 
-      const source = ServerBackedEventSource.instances.at(-1);
-      expect(source).toBeDefined();
-      const envelopes = parsedEnvelopeMessages(source!);
-      const started = envelopes.find((envelope) => (envelope.event as { type?: string } | undefined)?.type === 'agent_started');
-      const completed = envelopes.find((envelope) => (envelope.event as { type?: string } | undefined)?.type === 'agent_completed');
+      await replayWeb.connect(session.id);
+      await waitUntil(
+        () => replayStore.getState().agentSessions.get('agent-call')?.status === 'completed',
+        'sub-agent replay',
+      );
+      expect(replayStore.getState().agentSessions.get('agent-call')).toMatchObject({
+        description: 'child check',
+        status: 'completed',
+        isBackground: false,
+      });
+      expect(replayStore.getState().messages.turns.some((turn) => turn.content.includes('parent observed child'))).toBe(
+        true,
+      );
+
+      const envelopes = await fetchEnvelopeHistory(session.id);
+      const started = envelopes.find(
+        (envelope) => (envelope.event as { type?: string } | undefined)?.type === 'agent_started',
+      );
+      const completed = envelopes.find(
+        (envelope) => (envelope.event as { type?: string } | undefined)?.type === 'agent_completed',
+      );
 
       expect(started).toMatchObject({
         sessionId: session.id,
@@ -363,8 +350,19 @@ describe('product dogfood smoke', () => {
         parent: { sessionId: session.id, toolCallId: 'agent-call' },
         event: { type: 'agent_completed', toolCallId: 'agent-call' },
       });
+      expect(
+        transportRequests.filter(
+          (request) =>
+            request.path.startsWith(`/sessions/${session.id}/events?`) &&
+            request.authorization === 'Bearer key-a' &&
+            request.accept === 'text/event-stream',
+        ),
+      ).toHaveLength(2);
     } finally {
-      handle.dispose();
+      await replayWeb.disconnect();
+      await web.disconnect();
+      await handle.close();
+      await projectDomain.close();
     }
   });
 });

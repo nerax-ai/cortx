@@ -4,6 +4,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -20,7 +23,9 @@
     "@cortx/core": "workspace:*",
     "@cortx/sdk": "workspace:*",
     "@nerax-ai/logger": "^0.2.0",
-    "@synax-ai/core": "link:@synax-ai/core"
+    "@nerax-ai/plugin": "^0.2.0",
+    "@synax-ai/core": "^0.1.0",
+    "@synax-ai/sdk": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

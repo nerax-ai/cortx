@@ -85,8 +85,8 @@ describe('runtime durable resume', () => {
     await waitForEvent(secondEvents, 'done');
 
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed' });
-    first.dispose();
-    second.dispose();
+    await first.close();
+    await second.close();
   });
 
   test('restores durable sessions from file snapshots and auto-resumes non-terminal checkpoints', async () => {
@@ -104,6 +104,7 @@ describe('runtime durable resume', () => {
     });
     const firstSession = await first.createSession({
       id: 'file-backed-session',
+      creatorPrincipalId: 'principal:alice',
       metadata: { source: 'durable-test' },
     });
     const firstEvents: AgentEvent[] = [];
@@ -145,6 +146,7 @@ describe('runtime durable resume', () => {
     expect(restored).toHaveLength(1);
     expect(second.getSession('file-backed-session')).toMatchObject({
       workingDirectory: tmpDir,
+      creatorPrincipalId: 'principal:alice',
       model: 'test',
       toolMode: 'none',
       approvalMode: 'deny',
@@ -155,7 +157,7 @@ describe('runtime durable resume', () => {
       description: 'restored child',
       parentRunId: 1,
       output: 'partial child output',
-      status: 'running',
+      status: 'interrupted',
     });
     expect(replayedHistory[0]).toMatchObject({
       sessionId: 'file-backed-session',
@@ -173,8 +175,8 @@ describe('runtime durable resume', () => {
       runId: 2,
     });
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed from disk' });
-    first.dispose();
-    second.dispose();
+    await first.close();
+    await second.close();
   });
 
   test('restored legacy done envelopes are enriched with context usage facts', async () => {
@@ -256,7 +258,7 @@ describe('runtime durable resume', () => {
       'system_prompt',
       'other',
     ]);
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('backfills legacy prompt history into replayable user message events', async () => {
@@ -313,7 +315,7 @@ describe('runtime durable resume', () => {
       event: { type: 'user_message', message: 'restore my original question', source: 'prompt' },
     });
     expect(history[1]).toMatchObject({ sequence: 1, event: { type: 'turn_start' } });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('restores cumulative usage from full durable events even when replay history is bounded', async () => {
@@ -398,7 +400,7 @@ describe('runtime durable resume', () => {
       requestCacheReadTokens: 2000,
       cacheHitRate: 86.95652173913044,
     });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('restores terminal and empty sessions while marking interrupted replay recoverable', async () => {
@@ -509,7 +511,7 @@ describe('runtime durable resume', () => {
       type: 'error',
       code: 'client_error',
     });
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('unsupported checkpoint schema emits a typed client error event', async () => {
@@ -545,7 +547,7 @@ describe('runtime durable resume', () => {
 
     expect(error).toMatchObject({ type: 'error', code: 'client_error' });
     expect(error.type === 'error' ? error.error.message : '').toContain('Unsupported checkpoint schema version');
-    runtime.dispose();
+    await runtime.close();
   });
 });
 

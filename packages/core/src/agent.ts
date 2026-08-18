@@ -1,13 +1,9 @@
 import type { LanguageClient } from '@synax-ai/core';
-import type { AgentEvent, AgentController, CortxConfig, CortxRegistry } from './types.js';
+import type { AgentEvent, AgentController, CortxConfig } from './types.js';
 import type { AgentRunCheckpoint, LanguageMessage, Tool } from '@cortx/sdk';
-import {
-  AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
-  mergeAgentRuntimeExtensions,
-} from '@cortx/sdk';
+import { AGENT_RUN_CHECKPOINT_SCHEMA_VERSION, createEmptyAgentRuntimeExtensions } from '@cortx/sdk';
 import { AgentLoopController } from './types.js';
 import { agentLoop } from './loop.js';
-import { getRegistry, resolveExtensions } from './plugin-resolver.js';
 
 type ResumeCheckpointResult =
   | { kind: 'none' }
@@ -17,7 +13,6 @@ type ResumeCheckpointResult =
 export class Cortx {
   private readonly language: LanguageClient;
   private readonly config: CortxConfig;
-  private readonly registry: CortxRegistry;
   private readonly tools = new Map<string, Tool>();
   private _messages: LanguageMessage[] = [];
   private readonly _sessionId: string;
@@ -28,7 +23,6 @@ export class Cortx {
   constructor(language: LanguageClient, config: CortxConfig) {
     this.language = language;
     this.config = config;
-    this.registry = getRegistry(config);
     this._sessionId = config.sessionId ?? `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     this._runId = config.runId;
     for (const t of config.tools ?? []) this.tools.set(t.name, t);
@@ -61,9 +55,7 @@ export class Cortx {
 
   async *run(userMessage: string | LanguageMessage): AsyncGenerator<AgentEvent> {
     this.resetControllerIfAborted();
-    const namespace = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
-    const extensions = mergeAgentRuntimeExtensions(this.config.extensions, configuredExtensions);
+    const extensions = this.config.extensions ?? createEmptyAgentRuntimeExtensions();
     const messages = [...this._messages];
     messages.push(
       typeof userMessage === 'string'
@@ -91,9 +83,7 @@ export class Cortx {
 
   async *continue(): AsyncGenerator<AgentEvent> {
     this.resetControllerIfAborted();
-    const namespace = `continue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const configuredExtensions = await resolveExtensions(this.config.plugins, this.registry, namespace);
-    const extensions = mergeAgentRuntimeExtensions(this.config.extensions, configuredExtensions);
+    const extensions = this.config.extensions ?? createEmptyAgentRuntimeExtensions();
     const resumeCheckpoint = await this.loadResumeCheckpoint();
     if (resumeCheckpoint.kind === 'unsupported_schema') {
       yield {

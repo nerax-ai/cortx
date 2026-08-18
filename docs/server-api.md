@@ -1,8 +1,8 @@
 # Cortx Server API 接口说明
 
-最后核对：2026-07-07，对照 `packages/server/src/server.ts` 当前实现。
+最后核对：2026-08-18，对照 `packages/server/src/server.ts`、`auth.ts`、`security.ts` 和 `plugin-admin-http.ts` 当前实现。
 
-本文档描述 `@cortx/server` 暴露给 Web、TUI、桌面端或第三方客户端的 HTTP/SSE 接口。Server 的职责是作为 thin client 背后的支撑端：认证、workspace 授权、多 session 管理、AgentSpec/SkillPack 资产发现、运行时事件回放和实时推送。真正的 agent 执行由 `@cortx/runtime` 承接，`@cortx/core` 仍保持为无宿主状态的 agent 基座。
+本文档描述 `@cortx/server` 暴露给 Web、远程 TUI、桌面端或第三方客户端的 HTTP/SSE 接口。Server 借用 Host 注入的 `ProjectDomain`，并通过 Host-owned `PluginAdminService` 暴露唯一的在线插件控制面；远程客户端只持有 HTTP/SSE client，绝不能创建本地 Registry、Manager、writer lease 或自动本地降级路径。真正的 agent 执行由 `@cortx/runtime` 承接，`@cortx/core` 仍保持为无宿主状态的 agent 基座。
 
 ## 1. 基本约定
 
@@ -20,21 +20,13 @@ Web 开发服务器一般通过 Vite proxy 访问这些接口，因此浏览器�
 
 除 `GET /health` 外，所有接口都需要认证。
 
-支持三种传递方式：
+唯一支持的 credential 传递方式：
 
 ```http
-Authorization: Bearer <apiKey-or-shortToken>
+Authorization: Bearer <apiKey>
 ```
 
-```text
-?key=<apiKey>
-```
-
-```text
-?token=<shortToken>
-```
-
-推荐普通 HTTP 请求使用 `Authorization: Bearer ...`。SSE 如果使用原生 `EventSource`，因为浏览器不能自定义 header，可以先调用 `POST /auth/token` 换短 token，再用 `?token=` 打开事件流。
+所有 JSON 请求和 SSE 请求都使用 Bearer header。浏览器客户端使用 `fetch()` 读取 `ReadableStream`，不使用无法附加认证 header 的浏览器原生 SSE constructor。Server 会拒绝 `token`、`key`、`credential`、`authorization`、`api_key`、`access_token` 等 URL credential 参数；任何可复用 credential 都不能进入 query string、日志、历史记录或 referrer。
 
 ### 1.3 API key scope
 
@@ -44,18 +36,25 @@ Authorization: Bearer <apiKey-or-shortToken>
 interface ServerAuthKey {
   id?: string;
   key: string;
+  admin?: boolean;
   allowedWorkspaceRoots?: string[];
-  toolMode?: string;
+  allowedContributions?: string[];
+  allowedToolProfiles?: string[];
+  capabilities?: RuntimeDefaultCapabilities;
   approvalMode?: 'deny' | 'interactive' | 'full-access';
+  pluginGrants?: Array<'plugins.inspect' | 'plugins.observe' | 'plugins.manage'>;
 }
 ```
 
 Server 会在以下位置执行 scope 约束：
 
 - `workingDirectory` 必须位于允许的 workspace roots 内。
-- `toolMode` 不能超过 API key 允许的工具 profile。
+- `allowedContributions` 和 `allowedToolProfiles` 只接受 canonical contribution ID，例如 `@cortx-ai/workspace-tools/coding`。
+- 客户端请求只能缩小 Server 配置和 principal 已授权的 contributions、tool profile、capabilities 与 approval mode，不能扩大 ceiling。
 - `approvalMode` 不能超过 API key 允许的权限模式。
 - session、AgentSpec、SkillPack 列表会过滤当前 principal 不可访问的项目。
+- session 记录 creator principal；默认只有 creator 或 admin 可以读取和操作。
+- `pluginGrants` 分别控制插件检查、事件观察和管理 mutation；普通 run 或 sub-agent 权限不隐含插件管理权。
 
 ### 1.4 JSON Body 约定
 
@@ -77,15 +76,15 @@ Runtime 类型错误会保持稳定结构：
 
 常见 `kind` 与 HTTP status：
 
-| kind | HTTP | 含义 |
-| --- | ---: | --- |
-| `invalid_request` | 400 | 请求体、query 或字段类型错误 |
-| `invalid_workspace` | 400 | workspace 不存在、不可访问或不是目录 |
-| `permission_denied` | 403 | 超出当前 API key 的 workspace/tool/approval scope |
-| `session_not_found` | 404 | session 不存在，且 durable store 中也无法恢复 |
-| `session_busy` | 409 | 当前 session 正在运行，不能再次启动 run |
-| `capacity_exceeded` | 429 | 同时运行中的 session 数超过 `maxSessions` |
-| `runtime_failure` | 500 | 未归类运行时错误 |
+| kind                | HTTP | 含义                                              |
+| ------------------- | ---: | ------------------------------------------------- |
+| `invalid_request`   |  400 | 请求体、query 或字段类型错误                      |
+| `invalid_workspace` |  400 | workspace 不存在、不可访问或不是目录              |
+| `permission_denied` |  403 | 超出当前 API key 的 workspace/tool/approval scope |
+| `session_not_found` |  404 | session 不存在，且 durable store 中也无法恢复     |
+| `session_busy`      |  409 | 当前 session 正在运行，不能再次启动 run           |
+| `capacity_exceeded` |  429 | 同时运行中的 session 数超过 `maxSessions`         |
+| `runtime_failure`   |  500 | 未归类运行时错误                                  |
 
 认证失败固定返回：
 
@@ -132,7 +131,7 @@ interface RuntimeSessionInfo {
 
 ### 2.2 Tool Profile
 
-工具不是 server 固定写死的模式，而是由 runtime registry/plugin 贡献 `runtime.toolProfile`。
+工具不是 Server 固定写死的模式，而是由 `ProjectDomain` 中的 Manifest descriptor 声明 `runtime.toolProfile`。该类型是 metadata-only contribution，不创建 executable lease。
 
 默认至少存在：
 
@@ -146,15 +145,15 @@ interface RuntimeSessionInfo {
 }
 ```
 
-官方或第三方插件可以贡献更多 profile，例如 coding、read-only、ops 等。`toolMode` 可以使用 profile 的 `id`、`use`、`pluginId` 或 `pluginId/id`。
+官方或第三方插件可以贡献更多 profile，例如 coding、read-only、ops 等。`none`、`read-only`、`coding`、`all` 只是 Host UI alias；Runtime 最终解析并持久化 `@scope/plugin/contribution` 形式的 canonical `toolProfile`。任意非 canonical 引用、两段式引用或仅按 package 名称解析都会被拒绝。
 
 ### 2.3 Approval Mode
 
-| approvalMode | 含义 |
-| --- | --- |
-| `deny` | 默认拒绝需要用户确认的工具调用 |
+| approvalMode  | 含义                                                      |
+| ------------- | --------------------------------------------------------- |
+| `deny`        | 默认拒绝需要用户确认的工具调用                            |
 | `interactive` | 对写入/破坏性工具通过 `user_request` 事件向客户端请求确认 |
-| `full-access` | 放行需要确认的工具调用 |
+| `full-access` | 放行需要确认的工具调用                                    |
 
 ### 2.4 Agent Event
 
@@ -182,48 +181,53 @@ interface RuntimeAgentEventEnvelope {
 
 常见 `AgentEvent.type`：
 
-| type | 说明 |
-| --- | --- |
-| `user_message` | 用户消息，来源可能是 `prompt` 或 `follow_up` |
-| `turn_start` / `turn_end` | agent loop 回合开始/结束 |
-| `text_delta` / `text` | 模型文本流式片段或完整文本 |
-| `thinking_delta` / `thinking` | 思考流式片段或完整思考文本 |
-| `tool_use` | 即将调用工具 |
-| `tool_progress` | 工具运行中进度 |
-| `tool_result` | 工具调用结果，可能带 `details` 供 UI 展示 |
-| `user_request` | 需要用户选择或确认，例如工具审批 |
-| `user_question` / `user_answer` | askUser 问答事件 |
-| `agent_started` / `agent_progress` / `agent_completed` | sub-agent 生命周期 |
-| `done` | run 正常完成，可能带 usage |
-| `error` | run 错误终止 |
+| type                                                   | 说明                                         |
+| ------------------------------------------------------ | -------------------------------------------- |
+| `user_message`                                         | 用户消息，来源可能是 `prompt` 或 `follow_up` |
+| `turn_start` / `turn_end`                              | agent loop 回合开始/结束                     |
+| `text_delta` / `text`                                  | 模型文本流式片段或完整文本                   |
+| `thinking_delta` / `thinking`                          | 思考流式片段或完整思考文本                   |
+| `tool_use`                                             | 即将调用工具                                 |
+| `tool_progress`                                        | 工具运行中进度                               |
+| `tool_result`                                          | 工具调用结果，可能带 `details` 供 UI 展示    |
+| `user_request`                                         | 需要用户选择或确认，例如工具审批             |
+| `user_question` / `user_answer`                        | askUser 问答事件                             |
+| `agent_started` / `agent_progress` / `agent_completed` | sub-agent 生命周期                           |
+| `done`                                                 | run 正常完成，可能带 usage                   |
+| `error`                                                | run 错误终止                                 |
 
 ## 3. 接口总览
 
-| 方法 | 路径 | 功能 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查，不需要认证 |
-| POST | `/auth/token` | 用 API key 换短 token，主要给 SSE 使用 |
-| GET | `/models` | 获取 server 可选模型和推理强度信息 |
-| GET | `/tool-profiles` | 获取当前 principal 可用工具 profile |
-| GET | `/workspaces/directories` | 浏览允许 scope 内的服务端目录 |
-| POST | `/sessions` | 创建 session |
-| GET | `/sessions` | 列出当前 principal 可见 session |
-| GET | `/sessions/:id` | 获取 session 详情 |
-| PATCH | `/sessions/:id` | 更新 session 配置 |
-| DELETE | `/sessions/:id` | 删除 session，并清理 durable runtime session |
-| GET | `/sessions/:id/skills` | 列出 session 当前可用 skills |
-| POST | `/sessions/:id/prompt` | 启动一次用户 prompt run |
-| POST | `/sessions/:id/steer` | 当前 run 中插入 steer 指令 |
-| POST | `/sessions/:id/follow-up` | 当前 run 中追加 follow-up，完成后自动继续 |
-| POST | `/sessions/:id/resume` | 从当前 messages/checkpoint 继续运行 |
-| POST | `/sessions/:id/abort` | 中止当前运行中的 session |
-| POST | `/sessions/:id/answer` | 回答 `user_request` 或 askUser 问题 |
-| GET | `/sessions/:id/events/history` | 一次性读取 session 事件历史，支持分页 |
-| GET | `/sessions/:id/events` | 打开 session SSE 实时事件流 |
-| GET | `/agent-specs` | 发现当前 principal 可见 AgentSpec |
-| POST | `/agent-specs/launch` | 通过 AgentSpec 启动新 session |
-| GET | `/skill-packs` | 列出已安装且可见 SkillPack |
-| POST | `/skill-packs/install` | 安装本地 SkillPack 到 server registry |
+| 方法   | 路径                           | 功能                                         |
+| ------ | ------------------------------ | -------------------------------------------- |
+| GET    | `/health`                      | 健康检查，不需要认证                         |
+| GET    | `/models`                      | 获取 server 可选模型和推理强度信息           |
+| GET    | `/tool-profiles`               | 获取当前 principal 可用工具 profile          |
+| GET    | `/workspaces/directories`      | 浏览允许 scope 内的服务端目录                |
+| POST   | `/sessions`                    | 创建 session                                 |
+| GET    | `/sessions`                    | 列出当前 principal 可见 session              |
+| GET    | `/sessions/:id`                | 获取 session 详情                            |
+| PATCH  | `/sessions/:id`                | 更新 session 配置                            |
+| DELETE | `/sessions/:id`                | 删除 session，并清理 durable runtime session |
+| GET    | `/sessions/:id/skills`         | 列出 session 当前可用 skills                 |
+| POST   | `/sessions/:id/prompt`         | 启动一次用户 prompt run                      |
+| POST   | `/sessions/:id/steer`          | 当前 run 中插入 steer 指令                   |
+| POST   | `/sessions/:id/follow-up`      | 当前 run 中追加 follow-up，完成后自动继续    |
+| POST   | `/sessions/:id/resume`         | 从当前 messages/checkpoint 继续运行          |
+| POST   | `/sessions/:id/abort`          | 中止当前运行中的 session                     |
+| POST   | `/sessions/:id/answer`         | 回答 `user_request` 或 askUser 问题          |
+| GET    | `/sessions/:id/events/history` | 一次性读取 session 事件历史，支持分页        |
+| GET    | `/sessions/:id/events`         | 打开 session SSE 实时事件流                  |
+| GET    | `/agent-specs`                 | 发现当前 principal 可见 AgentSpec            |
+| POST   | `/agent-specs/launch`          | 通过 AgentSpec 启动新 session                |
+| GET    | `/skill-packs`                 | 列出已安装且可见 SkillPack                   |
+| POST   | `/skill-packs/install`         | 安装本地 SkillPack 到 server registry        |
+| POST   | `/api/plugins/actions`         | 执行授权后的 `PluginAdminAction`             |
+| GET    | `/api/plugins/snapshot`        | 获取授权投影后的插件 snapshot                |
+| GET    | `/api/plugins/catalog`         | 获取授权投影后的 catalog                     |
+| GET    | `/api/plugins/descriptors`     | 获取 Manifest contribution descriptors       |
+| GET    | `/api/plugins/lock`            | 导出授权后的 portable lock DTO               |
+| GET    | `/api/plugins/events`          | 打开有界、cursor-aware 的插件管理 SSE        |
 
 ## 4. 系统与认证接口
 
@@ -245,35 +249,21 @@ interface RuntimeAgentEventEnvelope {
 
 字段说明：
 
-| 字段 | 说明 |
-| --- | --- |
-| `status` | 固定为 `ok` |
-| `uptime` | Node 进程已运行秒数 |
-| `sessions` | runtime 当前加载的 session 数 |
-| `runningSessions` | 正在运行中的 session 数 |
-| `maxSessions` | 允许同时运行的 session 上限 |
+| 字段              | 说明                          |
+| ----------------- | ----------------------------- |
+| `status`          | 固定为 `ok`                   |
+| `uptime`          | Node 进程已运行秒数           |
+| `sessions`        | runtime 当前加载的 session 数 |
+| `runningSessions` | 正在运行中的 session 数       |
+| `maxSessions`     | 允许同时运行的 session 上限   |
 
-### 4.2 `POST /auth/token`
+### 4.2 `ProjectDomain` 与 `PluginAdminService`
 
-用长期 API key 换 15 分钟有效的短 token。短 token 继承原 API key 的 workspace/tool/approval scope。
+每个持久 Cortx Host 创建一个显式 `ProjectDomain`，其中持有该 runtime domain 唯一的 production Registry、Manager 和 writer lease。Server、Runtime 和本地 TUI 借用同一个 domain；远程 Web/TUI/agent client 只调用 Server transport，不创建第二个 Manager，也不存在进程级全局 Registry accessor 或自动本地降级路径。
 
-请求：
+Server 在 `/api/plugins/*` 后挂载 Host-owned `CortxPluginAdminService`。DTO 来自共享 `PluginAdminService` contract，保留 desired revision、`managerEpoch`、operation ID、cursor、稳定错误码和授权后的最小投影；transport 不复制 Manager state machine。
 
-```http
-POST /auth/token
-Authorization: Bearer <apiKey>
-```
-
-响应：
-
-```json
-{
-  "token": "4b5c...",
-  "expiresAt": 1780000000000
-}
-```
-
-`expiresAt` 是毫秒时间戳。
+插件在线管理的授权顺序是：Bearer principal -> TLS/trusted-proxy 与 origin 检查 -> `plugins.inspect` / `plugins.observe` / `plugins.manage` grant -> Host service action。任何一步失败都必须发生在 mutation、snapshot 构造或 subscription 创建之前。
 
 ## 5. 模型、工具与 Workspace
 
@@ -303,7 +293,7 @@ Authorization: Bearer <apiKey>
 
 ### 5.2 `GET /tool-profiles`
 
-返回当前 principal 可用的工具 profile。profile 由 runtime registry/plugin 提供，server 会按 API key 的 `toolMode` scope 过滤。
+返回当前 principal 可用的工具 profile。profile 来自 `ProjectDomain` 的 Manifest descriptors；Server 按 principal 的 `allowedToolProfiles` 和全局 contribution ceiling 过滤。
 
 响应：
 
@@ -324,10 +314,7 @@ Authorization: Bearer <apiKey>
       "description": "Read, search, edit and run workspace commands.",
       "pluginId": "@cortx-ai/workspace-tools",
       "packageName": "@cortx-ai/workspace-tools",
-      "tools": [
-        { "use": "@cortx-ai/workspace-tools/read" },
-        { "use": "@cortx-ai/workspace-tools/edit" }
-      ]
+      "tools": [{ "use": "@cortx-ai/workspace-tools/read" }, { "use": "@cortx-ai/workspace-tools/edit" }]
     }
   ]
 }
@@ -339,15 +326,15 @@ Authorization: Bearer <apiKey>
 
 Query：
 
-| 参数 | 类型 | 说明 |
-| --- | --- | --- |
+| 参数   | 类型   | 说明                                                               |
+| ------ | ------ | ------------------------------------------------------------------ |
 | `path` | string | 可选。要浏览的目录；不传时使用当前 principal 的第一个 allowed root |
 
 请求：
 
 ```http
 GET /workspaces/directories?path=/Users/me/project
-Authorization: Bearer <token>
+Authorization: Bearer <apiKey>
 ```
 
 响应：
@@ -397,11 +384,15 @@ interface RuntimeSessionCreateRequest {
   };
   skillPaths?: string[];
   skillPacks?: string[];
-  registry?: unknown;
-  plugins?: unknown[];
+  contributions?: Array<{
+    use: string; // canonical @scope/plugin/contribution
+    options?: Record<string, unknown>;
+  }>;
   metadata?: Record<string, unknown>;
 }
 ```
+
+`contributions` 只能从 Server 配置和 principal 的 `allowedContributions` 中做子集选择，不能让 client 注入 plugin source、Registry、Manager 或 executable factory。Server 会拒绝非 canonical contribution ID。
 
 常用请求：
 
@@ -753,12 +744,12 @@ Web/桌面端推荐：
 
 Query：
 
-| 参数 | 类型 | 说明 |
-| --- | --- | --- |
+| 参数     | 类型   | 说明                                                           |
+| -------- | ------ | -------------------------------------------------------------- |
 | `format` | string | 传 `envelope` 时返回 envelope；不传时返回 plain `AgentEvent[]` |
-| `after` | number | 只返回 sequence 大于该值的 envelope |
-| `before` | number | 只返回 sequence 小于该值的 envelope |
-| `limit` | number | 最多返回条数，最大 2000 |
+| `after`  | number | 只返回 sequence 大于该值的 envelope                            |
+| `before` | number | 只返回 sequence 小于该值的 envelope                            |
+| `limit`  | number | 最多返回条数，最大 2000                                        |
 
 Envelope 请求：
 
@@ -800,9 +791,7 @@ GET /sessions/sess_123/events/history
 
 ```json
 {
-  "events": [
-    { "type": "text", "content": "..." }
-  ]
+  "events": [{ "type": "text", "content": "..." }]
 }
 ```
 
@@ -818,17 +807,18 @@ GET /sessions/sess_123/events/history
 
 Query：
 
-| 参数 | 类型 | 说明 |
-| --- | --- | --- |
-| `format` | string | 传 `envelope` 时使用推荐 envelope 格式 |
+| 参数     | 类型   | 说明                                           |
+| -------- | ------ | ---------------------------------------------- |
+| `format` | string | 传 `envelope` 时使用推荐 envelope 格式         |
 | `replay` | string | 默认 replay 历史；传 `false` 只订阅 live event |
-| `after` | number | envelope 模式下只回放 sequence 大于该值的事件 |
-| `token` | string | 短 token，给原生 EventSource 使用 |
+| `after`  | number | envelope 模式下只回放 sequence 大于该值的事件  |
 
 推荐请求：
 
-```text
-GET /sessions/sess_123/events?format=envelope&replay=false&after=200&token=<shortToken>
+```http
+GET /sessions/sess_123/events?format=envelope&replay=false&after=200
+Authorization: Bearer <apiKey>
+Accept: text/event-stream
 ```
 
 SSE event：
@@ -848,8 +838,15 @@ data: {}
 
 - Envelope SSE 使用 `sequence` 作为 SSE `id`。
 - Server 先订阅 live event，再读取 snapshot，并缓冲窗口内 live event，避免快照和订阅之间漏事件。
-- 客户端应忽略 `{}` heartbeat。
-- 客户端仍建议按 `sequence` 去重，尤其是断线重连或旧客户端 replay 场景。
+- `{}` 是 replay-complete/keepalive heartbeat。客户端收到第一次 heartbeat 后，才把 catch-up buffer 一次性切到 live。
+- 浏览器客户端必须用 `fetch()`、`AbortController` 和 `response.body.getReader()`；关闭时先 abort，再 `await reader.cancel()` 并等待 pump settlement。
+- SSE parser 需要支持跨 chunk 的 CRLF、注释、多个 `data:` 行和空行分帧，不能假设一个 chunk 等于一个 event。
+- 客户端按 envelope `sequence` 去重。断线后使用当前最后 sequence 重新请求 `replay=false&after=<lastSequence>`，等待 heartbeat 后再恢复 live 状态。
+- credential 只能放在 `Authorization` header；任何 URL credential 都返回 `400`。
+
+### 8.4 插件管理 SSE
+
+`GET /api/plugins/events?afterCursor=<cursor>&capacity=<n>` 使用相同的 Bearer-header fetch streaming。它由 Host-owned `PluginAdminService.subscribe()` 提供有界 delivery；gap 或 cursor 失效时，client 重新读取 `/api/plugins/snapshot`，再从新 cursor 订阅。`capacity`、全局订阅数和每 principal 订阅数都受 Host 上限约束，授权丢失会结束或拒绝流。
 
 ## 9. AgentSpec 接口
 
@@ -1070,20 +1067,22 @@ interface SkillPackManifest {
 
 ### 11.1 Web/桌面端推荐启动流程
 
-1. 用长期 API key 调 `POST /auth/token`。
-2. 并行加载：
+1. 创建只保存 base URL 和 API key 的 remote client；拒绝带 username/password、query 或 fragment 的 base URL。
+2. 所有 HTTP 和 SSE 请求直接发送 `Authorization: Bearer <apiKey>`，不做 token exchange。
+3. 并行加载：
    - `GET /models`
    - `GET /tool-profiles`
    - `GET /sessions`
    - `GET /agent-specs`
    - `GET /skill-packs`
-3. 用户选择或添加项目目录时，用 `GET /workspaces/directories` 做服务端目录浏览。
-4. 创建 session：`POST /sessions`。
-5. 切换模型、工具和权限：`PATCH /sessions/:id`，不要新建 session。
-6. 发送消息：`POST /sessions/:id/prompt`。
-7. 历史加载 + 实时流：
+4. 用户选择或添加项目目录时，用 `GET /workspaces/directories` 做服务端目录浏览。
+5. 创建 session：`POST /sessions`；`contributions` 只传 canonical ID，并且只能缩小授权集合。
+6. 切换模型、工具和权限：`PATCH /sessions/:id`，不要新建 session。
+7. 发送消息：`POST /sessions/:id/prompt`。
+8. 历史加载 + 实时流：
    - 先 `GET /events/history?format=envelope&limit=200`
    - 再 `GET /events?format=envelope&replay=false&after=<lastSequence>`
+9. 退出或切换 remote client 时，异步关闭 session/plugin SSE readers；remote client 不关闭 Server 的 `ProjectDomain`。
 
 ### 11.2 运行中追加消息
 
@@ -1139,12 +1138,12 @@ packages/server/src/server.ts
 
 关键类型位置：
 
-| 类型 | 文件 |
-| --- | --- |
-| `ServerConfig` | `packages/server/src/types.ts` |
-| `AuthPrincipal` / token exchange | `packages/server/src/auth.ts` |
-| `RuntimeSessionInfo` / create/update request | `packages/runtime/src/session.ts` |
-| `RuntimeToolProfile` | `packages/runtime/src/tool-mount.ts` |
-| `AgentSpec` | `packages/runtime/src/assets/agent-spec.ts` |
-| `SkillPack` / install registry | `packages/runtime/src/assets/skill-pack.ts`, `packages/runtime/src/assets/skill-pack-registry.ts` |
-| `AgentEvent` / `RuntimeAgentEventEnvelope` | `packages/sdk/src/events.ts` |
+| 类型                                         | 文件                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ServerConfig`                               | `packages/server/src/types.ts`                                                                    |
+| `AuthPrincipal` / token exchange             | `packages/server/src/auth.ts`                                                                     |
+| `RuntimeSessionInfo` / create/update request | `packages/runtime/src/session.ts`                                                                 |
+| `RuntimeToolProfile`                         | `packages/runtime/src/tool-mount.ts`                                                              |
+| `AgentSpec`                                  | `packages/runtime/src/assets/agent-spec.ts`                                                       |
+| `SkillPack` / install registry               | `packages/runtime/src/assets/skill-pack.ts`, `packages/runtime/src/assets/skill-pack-registry.ts` |
+| `AgentEvent` / `RuntimeAgentEventEnvelope`   | `packages/sdk/src/events.ts`                                                                      |

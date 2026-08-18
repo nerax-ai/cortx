@@ -10,6 +10,7 @@ import {
 
 const specs: TuiAgentSpecInfo[] = [
   {
+    schemaVersion: 1,
     name: 'reviewer',
     path: '/repo/agents/reviewer.json',
     relativePath: 'agents/reviewer.json',
@@ -19,6 +20,7 @@ const specs: TuiAgentSpecInfo[] = [
     approvalMode: 'deny',
   },
   {
+    schemaVersion: 1,
     name: 'builder',
     path: '/repo/examples/skill-packs/basic/agents/builder.json',
     relativePath: 'examples/skill-packs/basic/agents/builder.json',

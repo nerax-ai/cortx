@@ -337,7 +337,7 @@ describe('skill pack assets', () => {
     await waitForEvent(events, 'done');
 
     expect(textOf(captured.messages?.at(-1))).toContain('Expanded pack skill: fix bug');
-    runtime.dispose();
+    await runtime.close();
   });
 
   test('createSession enables installed SkillPacks by id', async () => {
@@ -372,7 +372,7 @@ describe('skill pack assets', () => {
 
     expect(runtime.getSession(session.id).skillPacks).toEqual(['session-pack']);
     expect(textOf(captured.messages?.at(-1))).toContain('Installed review skill: files');
-    runtime.dispose();
+    await runtime.close();
   });
 });
 

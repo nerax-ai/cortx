@@ -4,8 +4,13 @@ import {
   moveSelection,
   formatHelpText,
 } from '../components/command-palette.js';
-import type { CommandDef } from '../types/tui-plugin.js';
-import { TUI_COMMAND } from '../types/tui-plugin.js';
+import {
+  TUI_COMMAND,
+  defineTuiContributionBinding,
+  defineTuiContributionDescriptor,
+  type CommandDef,
+  type TuiPluginContext,
+} from '../types/tui-plugin.js';
 import { TuiRegistry } from '../tui-registry.js';
 import { commandPlugin, formatAgentSpecList, formatRuntimeSessionList, formatSkillPackList, parseSkillPackSessionIds } from '../plugins/command-plugin.js';
 
@@ -195,6 +200,7 @@ describe('formatAgentSpecList', () => {
   test('formats discovered AgentSpec assets with launch identifiers', () => {
     const text = formatAgentSpecList([
       {
+        schemaVersion: 1,
         name: 'reviewer',
         path: '/repo/agents/reviewer.json',
         relativePath: 'agents/reviewer.json',
@@ -221,6 +227,7 @@ describe('SkillPack command helpers', () => {
   test('formats installed SkillPacks', () => {
     const text = formatSkillPackList([
       {
+        schemaVersion: 1,
         id: 'review-pack',
         name: 'Review Pack',
         sourcePath: '/repo/review-pack',
@@ -257,7 +264,9 @@ describe('Runtime session command helpers', () => {
         workingDirectory: '/repo/old',
         model: 'default',
         toolMode: 'read-only',
+        toolProfile: '@cortx-ai/workspace-tools/read-only',
         approvalMode: 'deny',
+        capabilities: { skills: true, subAgents: true, approval: true },
         isRunning: false,
         eventCount: 1,
       },
@@ -268,20 +277,22 @@ describe('Runtime session command helpers', () => {
         workingDirectory: '/repo/new',
         model: 'default',
         toolMode: 'all',
+        toolProfile: '@cortx-ai/workspace-tools/all',
         approvalMode: 'interactive',
+        capabilities: { skills: true, subAgents: true, approval: true },
         isRunning: true,
         eventCount: 2,
       },
     ]);
 
-    expect(text).toContain('Remote sessions:');
+    expect(text).toContain('Runtime sessions:');
     expect(text.indexOf('sess_running_l')).toBeLessThan(text.indexOf('sess_old'));
     expect(text).toContain('running · repo/new · all/interactive');
     expect(text).toContain('ready · repo/old · read-only/deny');
   });
 
   test('formats empty remote runtime sessions', () => {
-    expect(formatRuntimeSessionList([])).toBe('No remote sessions available.');
+    expect(formatRuntimeSessionList([])).toBe('No runtime sessions available.');
   });
 });
 
@@ -302,18 +313,25 @@ describe('Integration: plugin commands in palette', () => {
 
     // Register an additional plugin command
     await registry.registerPlugin({
-      manifest: { manifestVersion: 1, id: 'custom-plugin', name: 'custom-plugin', version: '0.0.0', runtime: { main: 'inline' } },
-      setup(ctx: any) {
-        ctx.register(TUI_COMMAND, 'custom', () => ({
+      manifest: {
+        manifestVersion: 1,
+        id: 'custom-plugin',
+        name: 'custom-plugin',
+        version: '0.0.0',
+        runtime: { main: 'inline' },
+        contributes: { [TUI_COMMAND]: [defineTuiContributionDescriptor({ id: 'custom', displayName: '/custom', executable: true })] },
+      },
+      setup(ctx: TuiPluginContext) {
+        ctx.bind(defineTuiContributionBinding(TUI_COMMAND, 'custom', () => ({
           name: '/custom',
           description: 'A custom plugin command',
           handler: async () => {},
-        }));
+        })));
       },
     });
 
     const commands = registry.getCommands();
-    expect(commands.length).toBe(13); // 12 built-in + 1 custom
+    expect(commands.length).toBe(14); // 13 built-in + 1 custom
     expect(commands.some((c) => c.name === '/custom')).toBe(true);
 
     // Verify it appears in palette filtering
@@ -377,7 +395,9 @@ describe('Integration: plugin commands in palette', () => {
           workingDirectory: '/remote/repo',
           model: 'default',
           toolMode: 'all',
+          toolProfile: '@cortx-ai/workspace-tools/all',
           approvalMode: 'interactive',
+          capabilities: { skills: true, subAgents: true, approval: true },
           isRunning: false,
           eventCount: 0,
         },
@@ -396,7 +416,7 @@ describe('Integration: plugin commands in palette', () => {
     await registry.executeCommand('/session', 'sess_remote', { args: 'sess_remote', abort: () => {} });
     await registry.executeCommand('/session', 'new /remote/other', { args: 'new /remote/other', abort: () => {} });
 
-    expect(notices[0]).toContain('Remote sessions:');
+    expect(notices[0]).toContain('Runtime sessions:');
     expect(notices[1]).toBe('Switched to session: sess_remote');
     expect(notices[2]).toBe('Started session for: /remote/other');
     expect(switches).toEqual(['sess_remote']);
@@ -419,9 +439,9 @@ describe('Integration: plugin commands in palette', () => {
     await registry.executeCommand('/session', 'new /remote/repo', { args: 'new /remote/repo', abort: () => {} });
 
     expect(notices).toEqual([
-      'ERROR: Server session listing is not available in this session.',
-      'ERROR: Server session switching is not available in this session.',
-      'ERROR: Server session creation is not available in this session.',
+      'ERROR: Session listing is not available.',
+      'ERROR: Session switching is not available.',
+      'ERROR: Session creation is not available.',
     ]);
   });
 
@@ -436,6 +456,7 @@ describe('Integration: plugin commands in palette', () => {
       getConfig: () => ({}),
       listAgentSpecs: async () => [
         {
+          schemaVersion: 1,
           name: 'reviewer',
           path: '/repo/agents/reviewer.json',
           relativePath: 'agents/reviewer.json',
@@ -475,6 +496,7 @@ describe('Integration: plugin commands in palette', () => {
       getConfig: () => ({}),
       listSkillPacks: async () => [
         {
+          schemaVersion: 1,
           id: 'review-pack',
           name: 'Review Pack',
           sourcePath: '/repo/review-pack',
@@ -487,6 +509,7 @@ describe('Integration: plugin commands in palette', () => {
       installSkillPack: async (path, id) => {
         installs.push({ path, id });
         return {
+          schemaVersion: 1,
           id: id ?? 'review-pack',
           name: 'Review Pack',
           sourcePath: `/repo/${path}`,
@@ -528,7 +551,7 @@ describe('Integration: plugin commands in palette', () => {
     await registry.executeCommand('/agent', '', { args: '', abort: () => {} });
 
     expect(notices).toEqual([
-      'ERROR: AgentSpec picker is not available in this session. Usage: /agent <name-or-path>',
+      'ERROR: AgentSpec picker is not available. Usage: /agent <name-or-path>',
     ]);
   });
 });

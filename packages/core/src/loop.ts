@@ -28,7 +28,7 @@ import {
 } from './loop/pipeline.js';
 import { userAbortError } from './loop/errors.js';
 
-export interface AgentLoopOptions extends Omit<CortxConfig, 'plugins'> {
+export interface AgentLoopOptions extends CortxConfig {
   language: LanguageClient;
   extensions?: AgentRuntimeExtensions;
   messages?: LanguageMessage[];

@@ -1,142 +1,212 @@
-import { PluginRegistry } from '@nerax-ai/plugin';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { noopLogger, type Logger } from '@nerax-ai/logger';
-import type { InlinePlugin, PluginStorage } from '@nerax-ai/plugin';
-import type { CommandDef, RegionDef, RendererDef, KeyBindDef, TuiFactoryMap, TuiExtensionType, CommandContext } from './types/tui-plugin.js';
-import { TUI_COMMAND, TUI_REGION, TUI_RENDERER, TUI_KEYBIND } from './types/tui-plugin.js';
-import { commandPlugin } from './plugins/command-plugin.js';
-import { markdownPlugin } from './plugins/markdown-plugin.js';
+import {
+  MemoryPluginSecretsBackend,
+  PluginRegistry,
+  createMemoryPluginRuntimeDomain,
+  normalizeContributionDescriptors,
+  type ContributionLease,
+  type DeclarativePlugin,
+} from '@nerax-ai/plugin';
+import { CortxHostScope } from '@cortx/runtime';
+import {
+  TUI_COMMAND,
+  TUI_RENDERER,
+  isTuiContributionType,
+  type CommandContext,
+  type CommandDef,
+  type RendererDef,
+  type TuiContributionHostContext,
+  type TuiContributionMap,
+  type TuiContributionType,
+} from './types/tui-plugin.js';
 
 export interface TuiRegistryOptions {
   logger?: Logger;
-  storage?: PluginStorage;
+  runtimeDomainId?: string;
+  root?: string;
 }
 
-type ExtensionValue<T extends TuiExtensionType> =
-  TuiFactoryMap[T] extends (ctx: any) => infer TResult ? TResult : never;
+type TuiLease<TType extends TuiContributionType> = ContributionLease<
+  TuiContributionMap[TType],
+  TuiContributionHostContext<TuiContributionMap[TType]>
+>;
 
-function createMemoryStorage(): PluginStorage {
-  const data = new Map<string, unknown>();
-  return {
-    async get<T>(key: string) {
-      return data.get(key) as T | undefined;
-    },
-    async set<T>(key: string, value: T) {
-      data.set(key, value);
-    },
-    async delete(key: string) {
-      data.delete(key);
-    },
-  };
-}
-
-function scopedStorage(parent: PluginStorage, scope: string): PluginStorage {
-  const key = (name: string) => `${scope}:${name}`;
-  return {
-    async get<T>(name: string) {
-      return parent.get<T>(key(name));
-    },
-    async set<T>(name: string, value: T) {
-      await parent.set(key(name), value);
-    },
-    async delete(name: string) {
-      await parent.delete(key(name));
-    },
-  };
+interface TuiSnapshot {
+  scope: CortxHostScope;
+  commands: CommandDef[];
+  renderers: RendererDef[];
 }
 
 export class TuiRegistry {
-  private readonly registry: PluginRegistry<TuiExtensionType, TuiFactoryMap>;
-  private readonly logger: Logger;
-  private readonly errors: Array<{ source: string; error: Error; timestamp: number }> = [];
-  private readonly commands: CommandDef[] = [];
-  private readonly regions: RegionDef[] = [];
-  private readonly renderers: RendererDef[] = [];
-  private readonly keyBindings: KeyBindDef[] = [];
+  readonly runtimeDomainId: string;
+  readonly #registry: PluginRegistry;
+  readonly #logger: Logger;
+  readonly #ownedRoot?: string;
+  readonly #hostScope: CortxHostScope;
+  readonly #errors: Array<{ source: string; error: Error; timestamp: number }> = [];
+  #snapshot: TuiSnapshot;
+  #started = false;
+  #closed = false;
+  #closeResult?: Promise<void>;
 
   constructor(options: TuiRegistryOptions = {}) {
-    this.logger = options.logger ?? noopLogger;
-    const storage = options.storage ?? createMemoryStorage();
-    this.registry = new PluginRegistry<TuiExtensionType, TuiFactoryMap>({
-      appName: 'cortx',
-      logger: this.logger.scope('tui'),
-      storageFactory: (packageName) => scopedStorage(storage, packageName),
+    this.runtimeDomainId = options.runtimeDomainId ?? `cortx-tui:${crypto.randomUUID()}`;
+    this.#logger = options.logger ?? noopLogger;
+    this.#ownedRoot = options.root ? undefined : mkdtempSync(join(tmpdir(), 'cortx-tui-plugin-domain-'));
+    const root = options.root ?? this.#ownedRoot!;
+    this.#registry = new PluginRegistry({
+      domain: createMemoryPluginRuntimeDomain({
+        runtimeDomainId: this.runtimeDomainId,
+        root,
+        secretsBackend: new MemoryPluginSecretsBackend(`memory:${this.runtimeDomainId}`),
+        logger: this.#logger.scope('plugins'),
+      }),
     });
+    this.#hostScope = new CortxHostScope(`tui-host:${this.runtimeDomainId}`, 'tui');
+    this.#snapshot = {
+      scope: this.#hostScope.child('empty-snapshot', 'tui'),
+      commands: [],
+      renderers: [],
+    };
   }
 
-  async init(): Promise<void> {
-    await this.registerPlugin(commandPlugin());
-    await this.registerPlugin(markdownPlugin());
+  async start(): Promise<void> {
+    this.#assertOpen();
+    if (this.#started) return;
+    await this.#registry.start();
+    this.#started = true;
   }
 
-  async registerPlugin(plugin: InlinePlugin<TuiExtensionType, TuiFactoryMap>): Promise<void> {
-    await this.registry.register(plugin);
-    await this.refreshExtensions();
+  async registerPlugin(plugin: DeclarativePlugin): Promise<void> {
+    this.#assertSupportedPlugin(plugin);
+    await this.start();
+    const mutation = await this.#registry.register(plugin, { enabled: true });
+    if (!mutation.accepted) throw new Error(`TUI plugin desired revision conflict: ${mutation.currentRevision}`);
+    const operation = await mutation.operation.wait();
+    if (operation.status !== 'succeeded') {
+      throw new Error(operation.diagnostic?.message ?? `TUI plugin settled as ${operation.status}`);
+    }
+    await this.#refreshSnapshot();
   }
 
   getCommands(): CommandDef[] {
-    return this.commands;
-  }
-
-  getRegions(position?: string): RegionDef[] {
-    return position ? this.regions.filter((region) => region.position === position) : this.regions;
+    return this.#snapshot.commands;
   }
 
   getRenderers(eventType?: string): RendererDef[] {
-    return eventType ? this.renderers.filter((renderer) => renderer.eventType === eventType) : this.renderers;
-  }
-
-  getKeyBindings(): KeyBindDef[] {
-    return this.keyBindings;
+    return eventType
+      ? this.#snapshot.renderers.filter((renderer) => renderer.eventType === eventType)
+      : this.#snapshot.renderers;
   }
 
   async executeCommand(name: string, args: string, cmdCtx: CommandContext): Promise<boolean> {
-    const commands = this.getCommands();
-    const cmd = commands.find((c) => c.name === name);
-    if (!cmd) return false;
-
+    const command = this.#snapshot.commands.find((candidate) => candidate.name === name);
+    if (!command) return false;
     try {
-      await cmd.handler(args, cmdCtx);
-    } catch (err) {
-      this.logError(`executeCommand(${name})`, err);
+      await command.handler(args, cmdCtx);
+    } catch (error) {
+      this.#logError(`executeCommand(${name})`, error);
     }
     return true;
   }
 
   getErrors(): ReadonlyArray<{ source: string; error: Error; timestamp: number }> {
-    return this.errors;
+    return this.#errors;
   }
 
-  getPluginRegistry(): PluginRegistry<TuiExtensionType, TuiFactoryMap> {
-    return this.registry;
+  close(): Promise<void> {
+    if (this.#closeResult) return this.#closeResult;
+    this.#closed = true;
+    this.#closeResult = this.#closeOwners();
+    return this.#closeResult;
   }
 
-  private async refreshExtensions(): Promise<void> {
-    this.commands.splice(0, this.commands.length, ...await this.createExtensions(TUI_COMMAND));
-    this.regions.splice(0, this.regions.length, ...await this.createExtensions(TUI_REGION));
-    this.renderers.splice(0, this.renderers.length, ...await this.createExtensions(TUI_RENDERER));
-    this.keyBindings.splice(0, this.keyBindings.length, ...await this.createExtensions(TUI_KEYBIND));
-  }
-
-  private async createExtensions<T extends TuiExtensionType>(type: T): Promise<Array<ExtensionValue<T>>> {
-    const values: Array<ExtensionValue<T>> = [];
-    for (const ext of this.registry.listExtensions(type)) {
-      const instanceId = `tui:${type}:${ext.fullId}`;
-      try {
-        const existing = this.registry.getInstance(instanceId);
-        const value = existing
-          ? await this.registry.reinitialize(instanceId)
-          : await this.registry.create(type, ext.fullId, instanceId, {}, 'tui');
-        values.push(value as ExtensionValue<T>);
-      } catch (err) {
-        this.logError(`create(${ext.fullId})`, err);
+  async #refreshSnapshot(): Promise<void> {
+    const candidateScope = this.#hostScope.child(`snapshot:${crypto.randomUUID()}`, 'tui');
+    const candidate: TuiSnapshot = { scope: candidateScope, commands: [], renderers: [] };
+    try {
+      for (const entry of await this.#registry.listCatalog()) {
+        const normalized = normalizeContributionDescriptors(entry.manifest.contributes ?? {});
+        if (!normalized.ok || !normalized.descriptors) {
+          throw new Error(`Invalid TUI contribution descriptors: ${entry.id}`);
+        }
+        for (const descriptor of normalized.descriptors) {
+          if (!isTuiContributionType(descriptor.type) || !descriptor.executable) continue;
+          const value = await this.#invoke(entry.id, descriptor.type, descriptor.id, candidateScope);
+          if (descriptor.type === TUI_COMMAND) candidate.commands.push(value as CommandDef);
+          if (descriptor.type === TUI_RENDERER) candidate.renderers.push(value as RendererDef);
+        }
       }
+    } catch (error) {
+      await candidateScope.close(error).catch((cleanupError) => this.#logError('candidate-cleanup', cleanupError));
+      throw error;
     }
-    return values;
+
+    candidate.commands.sort((left, right) => left.name.localeCompare(right.name));
+    candidate.renderers.sort((left, right) => left.eventType.localeCompare(right.eventType));
+    const previous = this.#snapshot;
+    this.#snapshot = candidate;
+    try {
+      await previous.scope.close(new Error('TUI contribution snapshot replaced'));
+    } catch (error) {
+      this.#logError('snapshot-cleanup', error);
+    }
   }
 
-  private logError(source: string, err: unknown): void {
-    const error = err instanceof Error ? err : new Error(String(err));
-    this.errors.push({ source, error, timestamp: Date.now() });
-    this.logger.scope('TuiRegistry').error(source, error);
+  async #invoke<TType extends TuiContributionType>(
+    pluginId: string,
+    type: TType,
+    contributionId: string,
+    scope: CortxHostScope,
+  ): Promise<TuiContributionMap[TType]> {
+    const lease = await this.#registry.resolveContribution(pluginId, type, contributionId) as TuiLease<TType>;
+    return lease.invoke({}, {
+      instanceId: `${this.runtimeDomainId}:${lease.canonicalId}`,
+      signal: scope.signal,
+      logger: this.#logger.scope(lease.canonicalId),
+      abort: (reason) => scope.abort(reason),
+      dispose: (_value, reason) => scope.close(reason),
+      defer: (disposer, label) => scope.defer(disposer, label),
+      acquire: (acquire, dispose, label) => scope.acquire(acquire, dispose, label),
+    });
+  }
+
+  #assertSupportedPlugin(plugin: DeclarativePlugin): void {
+    const normalized = normalizeContributionDescriptors(plugin.manifest.contributes ?? {});
+    if (!normalized.ok || !normalized.descriptors) {
+      throw new Error(normalized.issues.map((issue) => `${issue.field}: ${issue.message}`).join('; '));
+    }
+    const unsupported = normalized.descriptors.find((descriptor) => !isTuiContributionType(descriptor.type));
+    if (unsupported) throw new Error(`Unsupported TUI contribution type: ${unsupported.type}`);
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) throw new Error('TUI registry is closed');
+  }
+
+  async #closeOwners(): Promise<void> {
+    const failures: unknown[] = [];
+    for (const close of [
+      () => this.#snapshot.scope.close(new Error('TUI registry closed')),
+      () => this.#registry.close(),
+      () => this.#hostScope.close(new Error('TUI registry closed')),
+    ]) {
+      try { await close(); }
+      catch (error) { failures.push(error); }
+    }
+    if (this.#ownedRoot) {
+      try { rmSync(this.#ownedRoot, { recursive: true, force: true }); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'TUI registry close failed');
+  }
+
+  #logError(source: string, value: unknown): void {
+    const error = value instanceof Error ? value : new Error(String(value));
+    this.#errors.push({ source, error, timestamp: Date.now() });
+    this.#logger.scope('TuiRegistry').error(source, error);
   }
 }

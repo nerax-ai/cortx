@@ -1,43 +1,51 @@
-/**
- * Built-in command plugin — registers core TUI slash commands.
- *
- * Commands registered:
- *   /exit   — exit the TUI application
- *   /clear  — clear the output and reset state
- *   /config — show current configuration
- *   /help   — list all available commands
- *   /steer  — steer the active run
- *   /agents — list available AgentSpec agents
- *   /agent  — launch or pick an AgentSpec agent
- *   /skill-packs — list installed SkillPacks
- *   /skill-pack  — install or enable SkillPacks
- */
-
-import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
-import type { TuiFactoryMap, TuiExtensionType, CommandDef } from '../types/tui-plugin.js';
-import { TUI_COMMAND } from '../types/tui-plugin.js';
-import type { TuiAgentSpecInfo, TuiSkillPackInfo } from '../runtime-session.js';
 import type { RuntimeSessionInfo } from '@cortx/runtime';
+import type { TuiAgentSpecInfo, TuiSkillPackInfo } from '../runtime-session.js';
+import {
+  TUI_COMMAND,
+  defineTuiContributionBinding,
+  defineTuiContributionDescriptor,
+  type CommandDef,
+  type TuiPlugin,
+  type TuiPluginContext,
+} from '../types/tui-plugin.js';
 
 export interface CommandPluginDeps {
-  exit: () => void;
-  clear: () => void;
-  steer: (message: string) => void;
-  getConfig: () => Record<string, unknown>;
-  listAgentSpecs: () => Promise<TuiAgentSpecInfo[]>;
-  launchAgentSpec: (identifier: string) => void | Promise<void>;
-  openAgentSpecPicker: () => void | Promise<void>;
-  listSessions: () => Promise<RuntimeSessionInfo[]>;
-  switchSession: (sessionId: string) => void | Promise<void>;
-  createWorkspaceSession: (workingDirectory: string) => void | Promise<void>;
-  listSkillPacks: () => Promise<TuiSkillPackInfo[]>;
-  installSkillPack: (path: string, id?: string) => Promise<TuiSkillPackInfo>;
-  createSkillPackSession: (ids: string[]) => void | Promise<void>;
-  showNotice: (message: string) => void;
-  showError: (message: string) => void;
-  /** Returns all registered commands (for /help). */
-  getCommands?: () => CommandDef[];
+  exit(): void;
+  clear(): void;
+  steer(message: string): void | Promise<void>;
+  resume(): void | Promise<void>;
+  getConfig(): Record<string, unknown>;
+  listAgentSpecs(): Promise<TuiAgentSpecInfo[]>;
+  launchAgentSpec(identifier: string): void | Promise<void>;
+  openAgentSpecPicker(): void | Promise<void>;
+  listSessions(): Promise<RuntimeSessionInfo[]>;
+  switchSession(sessionId: string): void | Promise<void>;
+  createWorkspaceSession(workingDirectory: string): void | Promise<void>;
+  listSkillPacks(): Promise<TuiSkillPackInfo[]>;
+  installSkillPack(path: string, id?: string): Promise<TuiSkillPackInfo>;
+  createSkillPackSession(ids: string[]): void | Promise<void>;
+  showNotice(message: string): void;
+  showError(message: string): void;
+  getCommands?(): CommandDef[];
 }
+
+const commandMetadata = {
+  exit: ['/exit', 'Exit the TUI application'],
+  quit: ['/quit', 'Exit the TUI application (alias for /exit)'],
+  clear: ['/clear', 'Clear the output and reset conversation state'],
+  config: ['/config', 'Show current configuration'],
+  steer: ['/steer', 'Steer the active run with a new instruction'],
+  resume: ['/resume', 'Resume the active Runtime or Server session'],
+  sessions: ['/sessions', 'List Runtime or Server sessions'],
+  session: ['/session', 'Switch sessions or create one for a workspace'],
+  agents: ['/agents', 'List available AgentSpec agents'],
+  agent: ['/agent', 'Launch an AgentSpec by name or path'],
+  'skill-packs': ['/skill-packs', 'List installed SkillPacks'],
+  'skill-pack': ['/skill-pack', 'Install or enable SkillPacks'],
+  help: ['/help', 'List all available commands'],
+} as const satisfies Record<string, readonly [string, string]>;
+
+type CommandId = keyof typeof commandMetadata;
 
 export function formatAgentSpecList(specs: TuiAgentSpecInfo[]): string {
   if (specs.length === 0) return 'No AgentSpecs found in this workspace.';
@@ -68,17 +76,13 @@ export function formatSkillPackList(packs: TuiSkillPackInfo[]): string {
 }
 
 export function parseSkillPackSessionIds(value: string): string[] {
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 function compactPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
   const parts = normalized.split('/').filter(Boolean);
-  if (parts.length === 0) return path || '/';
-  return parts.slice(-2).join('/');
+  return parts.length === 0 ? path || '/' : parts.slice(-2).join('/');
 }
 
 function compactSessionId(id: string): string {
@@ -86,11 +90,11 @@ function compactSessionId(id: string): string {
 }
 
 export function formatRuntimeSessionList(sessions: RuntimeSessionInfo[]): string {
-  if (sessions.length === 0) return 'No remote sessions available.';
+  if (sessions.length === 0) return 'No runtime sessions available.';
   const sorted = [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
   const maxIdLen = Math.max(...sorted.map((session) => compactSessionId(session.id).length));
   return [
-    'Remote sessions:',
+    'Runtime sessions:',
     ...sorted.map((session) => {
       const id = compactSessionId(session.id).padEnd(maxIdLen);
       const state = session.isRunning ? 'running' : 'ready';
@@ -99,32 +103,14 @@ export function formatRuntimeSessionList(sessions: RuntimeSessionInfo[]): string
   ].join('\n');
 }
 
-/**
- * Create the built-in command plugin.
- * Accepts dependency injection for testability.
- */
-export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
-  const exit = deps?.exit ?? (() => {});
-  const clear = deps?.clear ?? (() => {});
-  const steer = deps?.steer ?? (() => {});
-  const getConfig = deps?.getConfig ?? (() => ({}));
-  const listAgentSpecs = deps?.listAgentSpecs;
-  const launchAgentSpec = deps?.launchAgentSpec;
-  const openAgentSpecPicker = deps?.openAgentSpecPicker;
-  const listSessions = deps?.listSessions;
-  const switchSession = deps?.switchSession;
-  const createWorkspaceSession = deps?.createWorkspaceSession;
-  const listSkillPacks = deps?.listSkillPacks;
-  const installSkillPack = deps?.installSkillPack;
-  const createSkillPackSession = deps?.createSkillPackSession;
-  const showNotice = deps?.showNotice ?? ((message: string) => ctxLogFallback(message));
-  const showError = deps?.showError ?? ((message: string) => ctxLogFallback(message));
-  const getCommands = deps?.getCommands;
-
-  let fallbackLogger: { info(message: string): void; error(message: string): void } | undefined;
-  function ctxLogFallback(message: string): void {
-    fallbackLogger?.info(message);
-  }
+export function commandPlugin(deps: Partial<CommandPluginDeps> = {}): TuiPlugin {
+  let fallbackLogger: TuiPluginContext['logger'] | undefined;
+  const exit = deps.exit ?? (() => {});
+  const clear = deps.clear ?? (() => {});
+  const steer = deps.steer ?? (() => {});
+  const resume = deps.resume ?? (() => {});
+  const showNotice = deps.showNotice ?? ((message) => fallbackLogger?.info(message));
+  const showError = deps.showError ?? ((message) => fallbackLogger?.error(message));
 
   return {
     manifest: {
@@ -133,248 +119,118 @@ export function commandPlugin(deps?: Partial<CommandPluginDeps>): InlinePlugin<T
       name: 'TUI Built-in Commands',
       version: '1.0.0',
       runtime: { main: 'inline' },
-      description: 'Core slash commands for the cortx TUI',
+      description: 'Core slash commands for the Cortx TUI',
+      contributes: {
+        [TUI_COMMAND]: Object.entries(commandMetadata).map(([id, [displayName, description]]) =>
+          defineTuiContributionDescriptor({ id, displayName, description, executable: true }),
+        ),
+      },
     },
-
-    setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>): void {
+    setup(ctx: TuiPluginContext): void {
       fallbackLogger = ctx.logger;
-      // /exit
-      ctx.register(TUI_COMMAND, 'exit', (_ctx) => ({
-        name: '/exit',
-        description: 'Exit the TUI application',
-        handler: async (_args, _cmdCtx) => {
-          exit();
-        },
-      }));
+      const bind = (id: CommandId, handler: CommandDef['handler']) => {
+        const [name, description] = commandMetadata[id];
+        ctx.bind(defineTuiContributionBinding(TUI_COMMAND, id, () => ({ name, description, handler })));
+      };
 
-      // /quit (alias for /exit)
-      ctx.register(TUI_COMMAND, 'quit', (_ctx) => ({
-        name: '/quit',
-        description: 'Exit the TUI application (alias for /exit)',
-        handler: async (_args, _cmdCtx) => {
-          exit();
-        },
-      }));
-
-      // /clear
-      ctx.register(TUI_COMMAND, 'clear', (_ctx) => ({
-        name: '/clear',
-        description: 'Clear the output and reset conversation state',
-        handler: async (_args, _cmdCtx) => {
-          clear();
-        },
-      }));
-
-      // /config
-      ctx.register(TUI_COMMAND, 'config', (_ctx) => ({
-        name: '/config',
-        description: 'Show current configuration',
-        handler: async (_args, _cmdCtx) => {
-          const config = getConfig();
-          // For now, just log it. In the full TUI this would render in output.
-          ctx.logger.info(JSON.stringify(config, null, 2));
-        },
-      }));
-
-      // /steer
-      ctx.register(TUI_COMMAND, 'steer', (_ctx) => ({
-        name: '/steer',
-        description: 'Steer the active run with a new instruction',
-        handler: async (args, _cmdCtx) => {
-          const message = args.trim();
-          if (message) steer(message);
-        },
-      }));
-
-      ctx.register(TUI_COMMAND, 'sessions', (_ctx) => ({
-        name: '/sessions',
-        description: 'List server runtime sessions',
-        handler: async () => {
-          if (!listSessions) {
-            showError('Server session listing is not available in this session.');
-            return;
-          }
+      bind('exit', () => exit());
+      bind('quit', () => exit());
+      bind('clear', () => clear());
+      bind('config', () => ctx.logger.info(JSON.stringify(deps.getConfig?.() ?? {}, null, 2)));
+      bind('steer', async (args) => {
+        const message = args.trim();
+        if (message) await steer(message);
+      });
+      bind('resume', async () => {
+        try {
+          await resume();
+          showNotice('Resume requested for the active session.');
+        } catch (error) {
+          showError(`Failed to resume session: ${errorMessage(error)}`);
+        }
+      });
+      bind('sessions', async () => {
+        if (!deps.listSessions) return showError('Session listing is not available.');
+        try { showNotice(formatRuntimeSessionList(await deps.listSessions())); }
+        catch (error) { showError(`Failed to list sessions: ${errorMessage(error)}`); }
+      });
+      bind('session', async (args) => {
+        const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+        if (!action) return showError('Usage: /session <session-id> or /session new <workspace>');
+        if (action === 'new') {
+          const workingDirectory = rest.join(' ').trim();
+          if (!deps.createWorkspaceSession) return showError('Session creation is not available.');
+          if (!workingDirectory) return showError('Usage: /session new <workspace>');
           try {
-            showNotice(formatRuntimeSessionList(await listSessions()));
-          } catch (error) {
-            showError(`Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        },
-      }));
-
-      ctx.register(TUI_COMMAND, 'session', (_ctx) => ({
-        name: '/session',
-        description: 'Switch to a server session or create one for a workspace',
-        handler: async (args) => {
-          const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
-          if (!action) {
-            showError('Usage: /session <session-id> or /session new <workspace>');
-            return;
-          }
-
-          if (action === 'new') {
-            if (!createWorkspaceSession) {
-              showError('Server session creation is not available in this session.');
-              return;
-            }
-            const workingDirectory = rest.join(' ').trim();
-            if (!workingDirectory) {
-              showError('Usage: /session new <workspace>');
-              return;
-            }
-            try {
-              await createWorkspaceSession(workingDirectory);
-              showNotice(`Started session for: ${workingDirectory}`);
-            } catch (error) {
-              showError(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            return;
-          }
-
-          if (!switchSession) {
-            showError('Server session switching is not available in this session.');
-            return;
-          }
-          try {
-            await switchSession(action);
-            showNotice(`Switched to session: ${action}`);
-          } catch (error) {
-            showError(`Failed to switch session: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        },
-      }));
-
-      ctx.register(TUI_COMMAND, 'agents', (_ctx) => ({
-        name: '/agents',
-        description: 'List available AgentSpec agents',
-        handler: async () => {
-          if (!listAgentSpecs) {
-            showError('AgentSpec listing is not available in this session.');
-            return;
-          }
-          try {
-            showNotice(formatAgentSpecList(await listAgentSpecs()));
-          } catch (error) {
-            showError(`Failed to list AgentSpecs: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        },
-      }));
-
-      ctx.register(TUI_COMMAND, 'agent', (_ctx) => ({
-        name: '/agent',
-        description: 'Launch an AgentSpec by name or path',
-        handler: async (args) => {
-          const identifier = args.trim();
-          if (!identifier) {
-            if (!openAgentSpecPicker) {
-              showError('AgentSpec picker is not available in this session. Usage: /agent <name-or-path>');
-              return;
-            }
-            try {
-              await openAgentSpecPicker();
-            } catch (error) {
-              showError(`Failed to open AgentSpec picker: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            return;
-          }
-          if (!launchAgentSpec) {
-            showError('AgentSpec launch is not available in this session.');
-            return;
-          }
-          try {
-            await launchAgentSpec(identifier);
+            await deps.createWorkspaceSession(workingDirectory);
+            showNotice(`Started session for: ${workingDirectory}`);
+          } catch (error) { showError(`Failed to create session: ${errorMessage(error)}`); }
+          return;
+        }
+        if (!deps.switchSession) return showError('Session switching is not available.');
+        try {
+          await deps.switchSession(action);
+          showNotice(`Switched to session: ${action}`);
+        } catch (error) { showError(`Failed to switch session: ${errorMessage(error)}`); }
+      });
+      bind('agents', async () => {
+        if (!deps.listAgentSpecs) return showError('AgentSpec listing is not available.');
+        try { showNotice(formatAgentSpecList(await deps.listAgentSpecs())); }
+        catch (error) { showError(`Failed to list AgentSpecs: ${errorMessage(error)}`); }
+      });
+      bind('agent', async (args) => {
+        const identifier = args.trim();
+        try {
+          if (identifier) {
+            if (!deps.launchAgentSpec) return showError('AgentSpec launch is not available.');
+            await deps.launchAgentSpec(identifier);
             showNotice(`Launched AgentSpec: ${identifier}`);
-          } catch (error) {
-            showError(`Failed to launch AgentSpec: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        },
-      }));
-
-      ctx.register(TUI_COMMAND, 'skill-packs', (_ctx) => ({
-        name: '/skill-packs',
-        description: 'List installed SkillPacks',
-        handler: async () => {
-          if (!listSkillPacks) {
-            showError('SkillPack listing is not available in this session.');
-            return;
-          }
-          try {
-            showNotice(formatSkillPackList(await listSkillPacks()));
-          } catch (error) {
-            showError(`Failed to list SkillPacks: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        },
-      }));
-
-      ctx.register(TUI_COMMAND, 'skill-pack', (_ctx) => ({
-        name: '/skill-pack',
-        description: 'Install or enable SkillPacks',
-        handler: async (args) => {
-          const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
-          if (action === 'install') {
-            if (!installSkillPack) {
-              showError('SkillPack install is not available in this session.');
-              return;
-            }
-            const [path, id] = rest;
-            if (!path) {
-              showError('Usage: /skill-pack install <path> [id]');
-              return;
-            }
-            try {
-              const pack = await installSkillPack(path, id);
-              showNotice(`Installed SkillPack: ${pack.id}`);
-            } catch (error) {
-              showError(`Failed to install SkillPack: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            return;
-          }
-
-          if (action === 'session') {
-            if (!createSkillPackSession) {
-              showError('SkillPack session creation is not available in this session.');
-              return;
-            }
-            const ids = parseSkillPackSessionIds(rest.join(' '));
-            if (ids.length === 0) {
-              showError('Usage: /skill-pack session <id[,id...]>');
-              return;
-            }
-            try {
-              await createSkillPackSession(ids);
-              showNotice(`Started session with SkillPacks: ${ids.join(', ')}`);
-            } catch (error) {
-              showError(`Failed to start SkillPack session: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            return;
-          }
-
-          showError('Usage: /skill-pack install <path> [id] or /skill-pack session <id[,id...]>');
-        },
-      }));
-
-      // /help — lists all registered commands
-      ctx.register(TUI_COMMAND, 'help', (_ctx) => ({
-        name: '/help',
-        description: 'List all available commands',
-        handler: async (_args, _cmdCtx) => {
-          if (getCommands) {
-            const commands = getCommands();
-            const maxNameLen = Math.max(...commands.map((c) => c.name.length));
-            const lines = commands
-              .slice()
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((cmd) => `  ${cmd.name.padEnd(maxNameLen)}  - ${cmd.description}`);
-            ctx.logger.info(
-              ['Available commands:', ...lines].join('\n'),
-            );
+          } else if (deps.openAgentSpecPicker) {
+            await deps.openAgentSpecPicker();
           } else {
-            ctx.logger.info(
-              'Available commands: /exit, /quit, /clear, /config, /help, /steer, /sessions, /session, /agents, /agent, /skill-packs, /skill-pack',
-            );
+            showError('AgentSpec picker is not available. Usage: /agent <name-or-path>');
           }
-        },
-      }));
+        } catch (error) { showError(`Failed to launch AgentSpec: ${errorMessage(error)}`); }
+      });
+      bind('skill-packs', async () => {
+        if (!deps.listSkillPacks) return showError('SkillPack listing is not available.');
+        try { showNotice(formatSkillPackList(await deps.listSkillPacks())); }
+        catch (error) { showError(`Failed to list SkillPacks: ${errorMessage(error)}`); }
+      });
+      bind('skill-pack', async (args) => {
+        const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+        if (action === 'install') {
+          const [path, id] = rest;
+          if (!deps.installSkillPack) return showError('SkillPack install is not available.');
+          if (!path) return showError('Usage: /skill-pack install <path> [id]');
+          try { showNotice(`Installed SkillPack: ${(await deps.installSkillPack(path, id)).id}`); }
+          catch (error) { showError(`Failed to install SkillPack: ${errorMessage(error)}`); }
+          return;
+        }
+        if (action === 'session') {
+          const ids = parseSkillPackSessionIds(rest.join(' '));
+          if (!deps.createSkillPackSession) return showError('SkillPack session creation is not available.');
+          if (ids.length === 0) return showError('Usage: /skill-pack session <id[,id...]>');
+          try {
+            await deps.createSkillPackSession(ids);
+            showNotice(`Started session with SkillPacks: ${ids.join(', ')}`);
+          } catch (error) { showError(`Failed to start SkillPack session: ${errorMessage(error)}`); }
+          return;
+        }
+        showError('Usage: /skill-pack install <path> [id] or /skill-pack session <id[,id...]>');
+      });
+      bind('help', () => {
+        const commands = deps.getCommands?.();
+        if (!commands?.length) return ctx.logger.info('Available commands: ' + Object.values(commandMetadata).map(([name]) => name).join(', '));
+        const maxNameLen = Math.max(...commands.map((command) => command.name.length));
+        ctx.logger.info(['Available commands:', ...commands.slice().sort((a, b) => a.name.localeCompare(b.name)).map((command) =>
+          `  ${command.name.padEnd(maxNameLen)}  - ${command.description}`,
+        )].join('\n'));
+      });
     },
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

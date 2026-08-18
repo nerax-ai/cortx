@@ -133,14 +133,14 @@ Web：
 
 ## 包职责边界
 
-| 包 | 应该负责 | 不应该负责 |
-| --- | --- | --- |
-| `@cortx/core` | 单 agent loop、model streaming、tool pipeline、policy/transform/observer/error recovery、AbortSignal、timeout、checkpoint primitive、`AgentEvent` | 多 session、workspace root、HTTP/SSE、UI 状态、默认 coding tool pack、产品级审批 UX |
-| `@cortx/runtime` | session 生命周期、多目录、多 agent、workspace 验证、工具挂载、默认 capability、event history、host action、运行错误归一化 | UI 渲染、HTTP 鉴权细节、终端快捷键、浏览器状态 |
-| `@cortx/server` | REST/SSE、认证、CORS、短 token、HTTP 错误格式化、日志脱敏 | 独立 session manager、独立 workspace policy、独立 agent loop 语义 |
-| `@cortx/tui` | Ink UI、local/remote adapter、输入历史、快捷键、审批表现、终端渲染 | 绕过 runtime 装配工具、复制 server session manager |
-| `@cortx/web` | React UI、server client、SSE 消费、session 状态展示 | 浏览器内运行本地 agent、本地 filesystem 工具、导入 core/runtime/workspace-tools 执行本地能力 |
-| `@cortx/sdk` | 插件作者和工具作者使用的稳定类型、helper、extension point 常量 | 产品默认行为、运行时宿主策略 |
+| 包               | 应该负责                                                                                                                                          | 不应该负责                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `@cortx/core`    | 单 agent loop、model streaming、tool pipeline、policy/transform/observer/error recovery、AbortSignal、timeout、checkpoint primitive、`AgentEvent` | 多 session、workspace root、HTTP/SSE、UI 状态、默认 coding tool pack、产品级审批 UX          |
+| `@cortx/runtime` | session 生命周期、多目录、多 agent、workspace 验证、工具挂载、默认 capability、event history、host action、运行错误归一化                         | UI 渲染、HTTP 鉴权细节、终端快捷键、浏览器状态                                               |
+| `@cortx/server`  | REST/SSE、认证、CORS、短 token、HTTP 错误格式化、日志脱敏                                                                                         | 独立 session manager、独立 workspace policy、独立 agent loop 语义                            |
+| `@cortx/tui`     | Ink UI、local/remote adapter、输入历史、快捷键、审批表现、终端渲染                                                                                | 绕过 runtime 装配工具、复制 server session manager                                           |
+| `@cortx/web`     | React UI、server client、SSE 消费、session 状态展示                                                                                               | 浏览器内运行本地 agent、本地 filesystem 工具、导入 core/runtime/workspace-tools 执行本地能力 |
+| `@cortx/sdk`     | 插件作者和工具作者使用的稳定类型、helper、extension point 常量                                                                                    | 产品默认行为、运行时宿主策略                                                                 |
 
 ## Core 的稳定边界
 
@@ -192,11 +192,7 @@ interface CortxRuntimeHost {
   answer(sessionId: string, input: AnswerRequest): Promise<void>;
   abort(sessionId: string): Promise<void>;
 
-  subscribe(
-    sessionId: string,
-    listener: (event: AgentEvent) => void,
-    options?: { replay?: boolean },
-  ): () => void;
+  subscribe(sessionId: string, listener: (event: AgentEvent) => void, options?: { replay?: boolean }): () => void;
 
   subscribeEnvelopes(
     sessionId: string,
@@ -313,12 +309,12 @@ workspace 安全不依赖 UI 约定，而由 runtime 的 workspace 验证和官�
 
 建议 tool mode：
 
-| 模式 | 语义 |
-| --- | --- |
-| `none` | 不挂载 workspace tools |
-| `read-only` | 只挂载 read/list/grep/find 等读工具 |
-| `coding` | 挂载常用读写编辑工具，write/destructive 仍受 approval 约束 |
-| `all` | 挂载完整工具集，仍受 policy/approval 约束 |
+| 模式        | 语义                                                       |
+| ----------- | ---------------------------------------------------------- |
+| `none`      | 不挂载 workspace tools                                     |
+| `read-only` | 只挂载 read/list/grep/find 等读工具                        |
+| `coding`    | 挂载常用读写编辑工具，write/destructive 仍受 approval 约束 |
+| `all`       | 挂载完整工具集，仍受 policy/approval 约束                  |
 
 ## Approval 默认行为
 
@@ -360,7 +356,7 @@ Sub-agent 长期设计：
 
 server 是 runtime 的网络 adapter，至少提供：
 
-- `POST /auth/token`
+- 所有受保护请求直接使用 `Authorization: Bearer <api-key>`；不提供 token exchange，也不接受 URL query credential。
 - `POST /sessions`
 - `GET /sessions`
 - `GET /sessions/:id`
@@ -386,15 +382,15 @@ server error body 应该保持稳定：
 
 建议错误映射：
 
-| Runtime error kind | HTTP status | 说明 |
-| --- | ---: | --- |
-| `invalid_request` | 400 | 请求体、字段或 action 不合法 |
-| `invalid_workspace` | 400 | 工作目录非法、越界或 symlink escape |
-| `unauthorized` | 401 | 缺少或错误认证 |
-| `permission_denied` | 403 | policy/approval 拒绝 |
-| `session_not_found` | 404 | session 不存在 |
-| `session_busy` | 409 | 当前 session 已有主 run |
-| `runtime_error` | 500 | 未归类运行时错误 |
+| Runtime error kind  | HTTP status | 说明                                |
+| ------------------- | ----------: | ----------------------------------- |
+| `invalid_request`   |         400 | 请求体、字段或 action 不合法        |
+| `invalid_workspace` |         400 | 工作目录非法、越界或 symlink escape |
+| `unauthorized`      |         401 | 缺少或错误认证                      |
+| `permission_denied` |         403 | policy/approval 拒绝                |
+| `session_not_found` |         404 | session 不存在                      |
+| `session_busy`      |         409 | 当前 session 已有主 run             |
+| `runtime_error`     |         500 | 未归类运行时错误                    |
 
 ## Frontend Contract
 

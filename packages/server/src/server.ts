@@ -6,9 +6,18 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { noopLogger, type AgentEvent, type RuntimeAgentEventEnvelope, type SkillInfo } from '@cortx/sdk';
 import {
+  parseCortxContributionReference,
+  noopLogger,
+  type AgentEvent,
+  type CortxContributionConfig,
+  type RuntimeAgentEventEnvelope,
+  type SkillInfo,
+} from '@cortx/sdk';
+import {
+  CortxPluginAdminService,
   CortxRuntime,
+  OFFICIAL_TOOL_PROFILE_ALIASES,
   discoverAgentSpecs,
   installSkillPack,
   isRuntimeError,
@@ -21,20 +30,34 @@ import {
   type DiscoveredAgentSpec,
   type InstalledSkillPack,
   type RuntimeApprovalMode,
+  type RuntimeDefaultCapabilities,
   type RuntimeToolProfile,
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
   type RuntimeSessionUpdateRequest,
   type WorkspaceToolMode,
 } from '@cortx/runtime';
+import type { PluginAdminService } from '@synax-ai/sdk';
 import type { ServerConfig } from './types.js';
-import { createAuthHandlers, getAuthPrincipal, type AuthPrincipal } from './auth.js';
+import {
+  createAuthMiddleware,
+  getAuthPrincipal,
+  principalContributionConfigs,
+  type AuthPrincipal,
+} from './auth.js';
 import { buildFileEditDetails } from './file-edit-details.js';
+import { mountPluginAdminHttp } from './plugin-admin-http.js';
+import {
+  assertServerRequestSecurity,
+  isAllowedOrigin,
+  pluginAdminGrantIsCurrent,
+} from './security.js';
 
 export interface ServerRuntimeHandle {
   app: Hono;
   runtime: CortxRuntime;
-  dispose(): void;
+  pluginAdminService: PluginAdminService;
+  close(): Promise<void>;
 }
 
 interface WorkspaceDirectoryEntry {
@@ -66,6 +89,21 @@ interface WebModelInfo {
   name: string;
   contextWindowTokens?: number;
   reasoningEfforts?: WebReasoningEffortOption[];
+}
+
+interface WebChildSession {
+  runId: string;
+  parentSessionId: string;
+  parentRunId?: number;
+  toolCallId: string;
+  description: string;
+  isBackground: boolean;
+  status: 'running' | 'completed' | 'error' | 'interrupted' | 'cancelled';
+  output: string;
+  iterations: number;
+  toolCallCount: number;
+  startedAt: number;
+  completedAt?: number;
 }
 
 const REASONING_EFFORT_LABELS: Record<string, string> = {
@@ -120,6 +158,23 @@ function serializeSkillInfo(skill: SkillInfo): WebSkillInfo {
     description: skill.description,
     arguments: skill.arguments,
     dirPath: skill.dirPath,
+  };
+}
+
+function serializeChildSession(child: ReturnType<CortxRuntime['getChildSession']>): WebChildSession {
+  return {
+    runId: child.runId,
+    parentSessionId: child.parentSessionId,
+    parentRunId: child.parentRunId,
+    toolCallId: child.toolCallId,
+    description: child.description,
+    isBackground: child.isBackground,
+    status: child.status,
+    output: child.output,
+    iterations: child.iterations,
+    toolCallCount: child.toolCallCount,
+    startedAt: child.startedAt,
+    completedAt: child.completedAt,
   };
 }
 
@@ -418,6 +473,15 @@ function parseOptionalLimit(value: string | undefined): number | undefined {
   return Math.min(parsed, 2_000);
 }
 
+function parseOptionalTimeout(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 60_000) {
+    throw new RuntimeError('invalid_request', 'timeoutMs must be an integer between 1 and 60000');
+  }
+  return parsed;
+}
+
 function errorResponse(error: unknown): {
   body: { error: string; kind?: string; details?: Record<string, unknown> };
   status: ContentfulStatusCode;
@@ -529,84 +593,19 @@ function assertOptionalString(value: unknown, field: string): string | undefined
   return value;
 }
 
-const TOOL_MODE_RANK: Record<string, number> = {
-  none: 0,
-  'read-only': 1,
-  coding: 2,
-  all: 3,
-};
-
 const APPROVAL_MODE_RANK: Record<RuntimeApprovalMode, number> = {
   deny: 0,
   interactive: 1,
   'full-access': 2,
 };
 
-function assertWithinToolScope(
-  requested: WorkspaceToolMode | undefined,
-  allowed: WorkspaceToolMode | undefined,
-  principal: AuthPrincipal,
-  profiles: RuntimeToolProfile[],
-): void {
-  if (!requested || !allowed) return;
-  const requestedProfile = assertKnownToolProfile(requested, profiles);
-  const allowedProfile = assertKnownToolProfile(allowed, profiles);
-  if (requestedProfile.use === allowedProfile.use) return;
-  const requestedRank = TOOL_MODE_RANK[requestedProfile.id];
-  const allowedRank = TOOL_MODE_RANK[allowedProfile.id];
-  if (requestedRank !== undefined && allowedRank !== undefined && requestedRank <= allowedRank) return;
-  if (requestedProfile.id === 'none') return;
-  throw new RuntimeError('permission_denied', 'toolMode is outside the current API key scope', {
-    requested,
-    allowed,
-    principal: principal.id,
-  });
-}
-
-function assertKnownToolProfile(mode: WorkspaceToolMode, profiles: RuntimeToolProfile[]): RuntimeToolProfile {
-  const matches = profiles.filter((profile) => matchesToolProfileMode(profile, mode));
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    throw new RuntimeError('invalid_request', `toolMode is ambiguous: ${mode}`, {
-      toolMode: mode,
-      matches: matches.map((profile) => profile.use),
-    });
-  }
-  throw new RuntimeError('invalid_request', `toolMode profile not found: ${mode}`, {
-    toolMode: mode,
-    availableToolModes: profiles.map((profile) => profile.id),
-  });
-}
-
-function matchesToolProfileMode(profile: RuntimeToolProfile, mode: WorkspaceToolMode): boolean {
-  return (
-    profile.id === mode ||
-    profile.use === mode ||
-    profile.pluginId === mode ||
-    (profile.pluginId ? `${profile.pluginId}/${profile.id}` === mode : false)
-  );
-}
-
-function isToolProfileWithinScope(
-  profile: RuntimeToolProfile,
-  allowed: WorkspaceToolMode | undefined,
-  profiles: RuntimeToolProfile[],
-): boolean {
-  if (!allowed) return true;
-  const allowedProfile = profiles.find((candidate) => matchesToolProfileMode(candidate, allowed));
-  if (!allowedProfile) return false;
-  if (profile.use === allowedProfile.use) return true;
-  const profileRank = TOOL_MODE_RANK[profile.id];
-  const allowedRank = TOOL_MODE_RANK[allowedProfile.id];
-  if (profile.id === 'none') return true;
-  return profileRank !== undefined && allowedRank !== undefined && profileRank <= allowedRank;
-}
-
 function filterToolProfilesForPrincipal(
   profiles: RuntimeToolProfile[],
   principal: AuthPrincipal | undefined,
 ): RuntimeToolProfile[] {
-  return profiles.filter((profile) => isToolProfileWithinScope(profile, principal?.toolMode, profiles));
+  if (!principal?.allowedToolProfiles) return profiles;
+  const allowed = new Set(principal.allowedToolProfiles);
+  return profiles.filter((profile) => allowed.has(profile.use));
 }
 
 function assertWithinApprovalScope(
@@ -631,22 +630,14 @@ function assertWithinApprovalScope(
 
 function applyPrincipalSessionBounds<T extends RuntimeSessionCreateRequest | AgentSpec>(
   request: T,
+  config: ServerConfig,
   principal: AuthPrincipal | undefined,
   profiles: RuntimeToolProfile[],
 ): T {
   const next = { ...request };
-
-  if (principal?.toolMode) {
-    const toolMode = next.toolMode ?? principal.toolMode;
-    assertWithinToolScope(toolMode, principal.toolMode, principal, profiles);
-    next.toolMode = toolMode;
-  }
-
-  if (principal?.approvalMode) {
-    assertWithinApprovalScope(next.approvalMode, principal.approvalMode, principal);
-    next.approvalMode = next.approvalMode ?? principal.approvalMode;
-  }
-
+  next.toolMode = resolveAuthorizedToolProfile(next.toolMode ?? config.toolMode ?? 'none', principal, profiles);
+  next.approvalMode = resolveAuthorizedApproval(next.approvalMode, config, principal);
+  next.capabilities = resolveAuthorizedCapabilities(next.capabilities, config.capabilities, principal);
   return next as T;
 }
 
@@ -659,30 +650,140 @@ async function buildAuthorizedSessionRequest(
   const principal = getAuthPrincipal(c);
   const requested = assertOptionalString(body.workingDirectory, 'workingDirectory');
   const workspace = await authorizeWorkspace(config, principal, requested);
-  return applyPrincipalSessionBounds(
+  const request = applyPrincipalSessionBounds(
     {
       ...body,
+      creatorPrincipalId: principal?.id,
       workingDirectory: workspace.workingDirectory,
+      contributions: resolveAuthorizedContributions(body.contributions, config, principal),
     } as RuntimeSessionCreateRequest,
+    config,
     principal,
     profiles,
   ) as RuntimeSessionCreateRequest;
+  return request;
 }
 
 function buildAuthorizedSessionUpdateRequest(
   c: Context,
+  config: ServerConfig,
   body: Record<string, unknown>,
   profiles: RuntimeToolProfile[],
 ): RuntimeSessionUpdateRequest {
   const principal = getAuthPrincipal(c);
   const request = { ...body } as RuntimeSessionUpdateRequest;
-  if (principal?.toolMode) assertWithinToolScope(request.toolMode, principal.toolMode, principal, profiles);
-  if (principal?.approvalMode) assertWithinApprovalScope(request.approvalMode, principal.approvalMode, principal);
+  if (request.toolMode !== undefined) request.toolMode = resolveAuthorizedToolProfile(request.toolMode, principal, profiles);
+  if (request.approvalMode !== undefined) request.approvalMode = resolveAuthorizedApproval(request.approvalMode, config, principal);
+  if (request.capabilities !== undefined) {
+    request.capabilities = resolveAuthorizedCapabilities(request.capabilities, config.capabilities, principal);
+  }
   return request;
 }
 
+function resolveAuthorizedToolProfile(
+  requested: WorkspaceToolMode,
+  principal: AuthPrincipal | undefined,
+  profiles: RuntimeToolProfile[],
+): WorkspaceToolMode {
+  const canonical = OFFICIAL_TOOL_PROFILE_ALIASES[requested as keyof typeof OFFICIAL_TOOL_PROFILE_ALIASES] ?? requested;
+  if (canonical !== OFFICIAL_TOOL_PROFILE_ALIASES.none && !profiles.some((profile) => profile.use === canonical)) {
+    throw new RuntimeError('invalid_request', `toolMode profile not found: ${requested}`, {
+      toolMode: requested,
+      availableToolModes: profiles.map((profile) => profile.use),
+    });
+  }
+  if (principal?.allowedToolProfiles && !principal.allowedToolProfiles.includes(canonical)) {
+    throw new RuntimeError('permission_denied', 'toolMode is outside the current principal scope', {
+      requested: canonical,
+      allowed: principal.allowedToolProfiles,
+      principal: principal.id,
+    });
+  }
+  return canonical;
+}
+
+function resolveAuthorizedApproval(
+  requested: RuntimeApprovalMode | undefined,
+  config: ServerConfig,
+  principal: AuthPrincipal | undefined,
+): RuntimeApprovalMode {
+  const serverCeiling = config.approvalMode ?? 'interactive';
+  const ceiling =
+    principal?.approvalMode && APPROVAL_MODE_RANK[principal.approvalMode] < APPROVAL_MODE_RANK[serverCeiling]
+      ? principal.approvalMode
+      : serverCeiling;
+  const value = requested ?? ceiling;
+  if (principal) assertWithinApprovalScope(value, ceiling, principal);
+  else if (APPROVAL_MODE_RANK[value] > APPROVAL_MODE_RANK[ceiling]) {
+    throw new RuntimeError('permission_denied', 'approvalMode exceeds the Server ceiling');
+  }
+  return value;
+}
+
+function resolveAuthorizedCapabilities(
+  requested: RuntimeDefaultCapabilities | undefined,
+  serverCeiling: RuntimeDefaultCapabilities | undefined,
+  principal: AuthPrincipal | undefined,
+): RuntimeDefaultCapabilities {
+  const principalCeiling = principal?.capabilities;
+  const allowed: Required<RuntimeDefaultCapabilities> = {
+    skills: serverCeiling?.skills !== false && principalCeiling?.skills !== false,
+    subAgents: serverCeiling?.subAgents !== false && principalCeiling?.subAgents !== false,
+    approval: serverCeiling?.approval !== false && principalCeiling?.approval !== false,
+  };
+  const value = requested ?? allowed;
+  for (const key of ['skills', 'subAgents', 'approval'] as const) {
+    if (value[key] === true && allowed[key] === false) {
+      throw new RuntimeError('permission_denied', `capability is outside the current principal scope: ${key}`, {
+        capability: key,
+        principal: principal?.id,
+      });
+    }
+  }
+  return {
+    skills: value.skills ?? allowed.skills,
+    subAgents: value.subAgents ?? allowed.subAgents,
+    approval: value.approval ?? allowed.approval,
+  };
+}
+
+function resolveAuthorizedContributions(
+  requested: unknown,
+  config: ServerConfig,
+  principal: AuthPrincipal | undefined,
+): CortxContributionConfig[] {
+  const configured = principalContributionConfigs(config.contributions ?? [], principal);
+  if (requested === undefined) return configured;
+  if (!Array.isArray(requested)) throw new RuntimeError('invalid_request', 'contributions must be an array');
+  const globallyAllowed = new Set((config.contributions ?? []).map((entry) => entry.use));
+  const principalAllowed = principal?.allowedContributions ? new Set(principal.allowedContributions) : undefined;
+  return requested.map((value, index) => {
+    if (!isRecord(value) || typeof value.use !== 'string') {
+      throw new RuntimeError('invalid_request', `contributions[${index}].use must be canonical`);
+    }
+    const canonical = parseCortxContributionReference(value.use).canonicalId;
+    if (!globallyAllowed.has(canonical) || (principalAllowed && !principalAllowed.has(canonical))) {
+      throw new RuntimeError('permission_denied', 'contribution is outside the current principal scope', {
+        contribution: canonical,
+        principal: principal?.id,
+      });
+    }
+    if (value.options !== undefined && !isRecord(value.options)) {
+      throw new RuntimeError('invalid_request', `contributions[${index}].options must be an object`);
+    }
+    return { use: canonical, options: value.options } as CortxContributionConfig;
+  });
+}
+
 async function assertSessionAccess(c: Context, config: ServerConfig, session: RuntimeSessionInfo): Promise<void> {
-  await authorizeWorkspace(config, getAuthPrincipal(c), session.workingDirectory);
+  const principal = getAuthPrincipal(c);
+  if (!principal?.isAdmin && (!session.creatorPrincipalId || session.creatorPrincipalId !== principal?.id)) {
+    throw new RuntimeError('permission_denied', 'Session access is limited to its creator or an administrator', {
+      sessionId: session.id,
+      principal: principal?.id,
+    });
+  }
+  await authorizeWorkspace(config, principal, session.workingDirectory);
 }
 
 async function getAuthorizedSession(
@@ -860,10 +961,11 @@ async function launchAgentSpecPath(runtime: CortxRuntime, config: ServerConfig, 
     const workspace = await authorizeWorkspace(config, principal, requested);
     const authorizedSpec = applyPrincipalSessionBounds(
       { ...spec, workingDirectory: workspace.workingDirectory },
+      config,
       principal,
       await runtime.listToolProfiles(),
     ) as AgentSpec;
-    return runtime.launchAgentSpec(authorizedSpec);
+    return launchAuthorizedAgentSpec(runtime, authorizedSpec, config, principal);
   });
 }
 
@@ -879,11 +981,36 @@ async function launchInlineAgentSpec(runtime: CortxRuntime, config: ServerConfig
     const workspace = await authorizeWorkspace(config, principal, spec.workingDirectory);
     const authorizedSpec = applyPrincipalSessionBounds(
       { ...spec, workingDirectory: workspace.workingDirectory },
+      config,
       principal,
       await runtime.listToolProfiles(),
     ) as AgentSpec;
-    return runtime.launchAgentSpec(authorizedSpec);
+    return launchAuthorizedAgentSpec(runtime, authorizedSpec, config, principal);
   });
+}
+
+async function launchAuthorizedAgentSpec(
+  runtime: CortxRuntime,
+  spec: AgentSpec,
+  config: ServerConfig,
+  principal: AuthPrincipal | undefined,
+): Promise<RuntimeSessionInfo> {
+  const session = await runtime.createSession({
+    creatorPrincipalId: principal?.id,
+    workingDirectory: spec.workingDirectory,
+    model: spec.model,
+    system: spec.system,
+    tools: spec.tools,
+    toolMode: spec.toolMode,
+    approvalMode: spec.approvalMode,
+    capabilities: spec.capabilities,
+    skillPaths: spec.skillPaths,
+    skillPacks: spec.skillPacks,
+    contributions: resolveAuthorizedContributions(undefined, config, principal),
+    metadata: { ...spec.metadata, agentSpec: spec.name ?? 'inline' },
+  });
+  await runtime.prompt(session.id, spec.prompt);
+  return runtime.getSession(session.id);
 }
 
 async function launchAgentSpecSafely(fn: () => Promise<Awaited<ReturnType<CortxRuntime['launchAgentSpec']>>>) {
@@ -904,37 +1031,56 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
   if (config.host === '0.0.0.0') {
     logger.warn('[server] Binding to 0.0.0.0 — server accessible from network. Ensure TLS is configured.');
   }
-  const auth = createAuthHandlers({ apiKey: config.apiKey, apiKeys: config.apiKeys });
-
-  const runtime = new CortxRuntime({
-    appName: 'cortx',
-    maxSessions: config.maxSessions,
-    maxEventsPerSession: config.maxEventsPerSession,
-    idleTimeoutMs: config.idleTimeoutMs,
-    language: config.language,
-    model: config.model,
-    models: config.models,
-    modelCatalog: config.modelCatalog,
-    system: config.system,
-    maxIterations: config.maxIterations,
-    contextWindowTokens: config.contextWindowTokens,
-    contextWindowSource: config.contextWindowSource,
-    registry: config.registry,
-    plugins: config.plugins,
-    defaultWorkingDirectory: config.defaultWorkingDirectory,
-    allowedWorkspaceRoots: getRuntimeAllowedWorkspaceRoots(config),
-    toolMode: config.toolMode,
-    approvalMode: config.approvalMode ?? 'interactive',
-    durableStore: config.durableStore,
-    skillPackRegistryPath: getSkillPackRegistryPath(config),
-    logger,
+  const runtime =
+    config.runtime?.value ??
+    new CortxRuntime({
+      maxSessions: config.maxSessions,
+      maxEventsPerSession: config.maxEventsPerSession,
+      idleTimeoutMs: config.idleTimeoutMs,
+      language: config.language,
+      model: config.model,
+      models: config.models,
+      modelCatalog: config.modelCatalog,
+      system: config.system,
+      maxIterations: config.maxIterations,
+      contextWindowTokens: config.contextWindowTokens,
+      contextWindowSource: config.contextWindowSource,
+      projectDomain: config.projectDomain,
+      contributions: config.contributions,
+      capabilities: config.capabilities,
+      defaultWorkingDirectory: config.defaultWorkingDirectory,
+      allowedWorkspaceRoots: getRuntimeAllowedWorkspaceRoots(config),
+      toolMode: config.toolMode,
+      approvalMode: config.approvalMode ?? 'interactive',
+      durableStore: config.durableStore,
+      skillPackRegistryPath: getSkillPackRegistryPath(config),
+      logger,
+    });
+  const ownsRuntime = config.runtime?.ownership !== 'borrowed';
+  const pluginAdminService = new CortxPluginAdminService({
+    projectDomain: config.projectDomain,
+    limits: config.pluginSubscriptions,
+    authorize: (context, grant) => pluginAdminGrantIsCurrent(context, config, grant),
   });
 
-  // CORS
-  app.use('*', cors({ origin: config.corsOrigin ?? '*' }));
-
-  // Auth middleware (applies to all routes except health)
-  app.use('*', auth.middleware);
+  app.use('*', async (c, next) => {
+    try {
+      assertServerRequestSecurity(c, config);
+      await next();
+    } catch (error) {
+      const source = error as { code?: string; message?: string };
+      const status = source.code === 'invalid_request' ? 400 : 403;
+      return c.json({ error: source.message ?? 'Request transport rejected' }, status);
+    }
+  });
+  app.use(
+    '*',
+    cors({
+      origin: (origin, c) => (isAllowedOrigin(c, config) ? origin : ''),
+    }),
+  );
+  app.use('*', createAuthMiddleware({ apiKey: config.apiKey, apiKeys: config.apiKeys }));
+  mountPluginAdminHttp(app, { service: pluginAdminService, config });
 
   // Health check
   app.get('/health', (c) => {
@@ -947,9 +1093,6 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       maxSessions: config.maxSessions,
     });
   });
-
-  // Token exchange
-  app.post('/auth/token', auth.tokenExchange);
 
   app.get('/models', (c) => {
     try {
@@ -1065,7 +1208,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       const body = await readOptionalJson(c);
       const session = await runtime.updateSession(
         id,
-        buildAuthorizedSessionUpdateRequest(c, body, await runtime.listToolProfiles()),
+        buildAuthorizedSessionUpdateRequest(c, config, body, await runtime.listToolProfiles()),
       );
       return c.json({ session });
     } catch (error) {
@@ -1080,6 +1223,55 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       await getAuthorizedSession(runtime, c, config, id);
       const skills = await runtime.listSessionSkills(id);
       return c.json({ skills: skills.map(serializeSkillInfo) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.get('/sessions/:id/children', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await getAuthorizedSession(runtime, c, config, id);
+      return c.json({ children: runtime.listChildSessions(id).map(serializeChildSession) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.get('/sessions/:id/children/:toolCallId', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await getAuthorizedSession(runtime, c, config, id);
+      return c.json({ child: serializeChildSession(runtime.getChildSession(id, c.req.param('toolCallId'))) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.post('/sessions/:id/children/:toolCallId/abort', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await getAuthorizedSession(runtime, c, config, id);
+      const body = await readOptionalJson(c);
+      const reason = assertOptionalString(body.reason, 'reason') ?? 'Child aborted via Server';
+      const child = await runtime.abortChild(id, c.req.param('toolCallId'), reason);
+      return c.json({ child: serializeChildSession(child) });
+    } catch (error) {
+      const response = errorResponse(error);
+      return c.json(response.body, response.status);
+    }
+  });
+
+  app.get('/sessions/:id/children/:toolCallId/wait', async (c) => {
+    const id = c.req.param('id');
+    try {
+      await getAuthorizedSession(runtime, c, config, id);
+      const timeoutMs = parseOptionalTimeout(c.req.query('timeoutMs'));
+      const child = await runtime.waitForChild(id, c.req.param('toolCallId'), timeoutMs);
+      return c.json({ child: serializeChildSession(child) });
     } catch (error) {
       const response = errorResponse(error);
       return c.json(response.body, response.status);
@@ -1328,11 +1520,30 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     }
   });
 
+  let closePromise: Promise<void> | undefined;
   return {
     app,
     runtime,
-    dispose() {
-      runtime.dispose();
+    pluginAdminService,
+    close() {
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        const errors: unknown[] = [];
+        try {
+          await pluginAdminService.close();
+        } catch (error) {
+          errors.push(error);
+        }
+        if (ownsRuntime) {
+          try {
+            await runtime.close();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length) throw new AggregateError(errors, 'Cortx Server close failed');
+      })();
+      return closePromise;
     },
   };
 }

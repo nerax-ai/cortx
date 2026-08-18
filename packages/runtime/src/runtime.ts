@@ -8,6 +8,7 @@ import type {
   ContextUsageBreakdownEntry,
   ContextUsageFacts,
   ContextUsageSource,
+  CortxContributionConfig,
   LanguageMessage,
   Logger,
   RuntimeAgentEventEnvelope,
@@ -19,11 +20,12 @@ import {
   createEmptyAgentRuntimeExtensions,
   mergeAgentRuntimeExtensions,
   noopLogger,
+  parseCortxContributionReference,
 } from '@cortx/sdk';
-import { Cortx, type CortxRegistry, type PluginConfig } from '@cortx/core';
+import { Cortx } from '@cortx/core';
 import { RuntimeError, toRuntimeError } from './errors.js';
 import { DEFAULT_RUNTIME_CAPABILITIES, type RuntimeDefaultCapabilities } from './default-capabilities.js';
-import { createWorkspaceToolPluginEntries, listRuntimeToolProfiles, parseWorkspaceToolMode } from './tool-mount.js';
+import { createWorkspaceToolPluginEntries, listRuntimeToolProfiles, parseWorkspaceToolMode, resolveRuntimeToolProfile } from './tool-mount.js';
 import type { WorkspaceToolMode } from './workspace-tool-mode.js';
 import { resolveWorkspace } from './workspace.js';
 import {
@@ -34,6 +36,7 @@ import {
   discoverSkills,
   renderSkillSummary,
 } from './capabilities/index.js';
+import type { SubAgentSession } from './capabilities/sub-agent/session-store.js';
 import { loadAgentSpecFile, parseAgentSpec } from './assets/agent-spec.js';
 import { resolveSkillPackReferences } from './assets/skill-pack-registry.js';
 import {
@@ -53,9 +56,10 @@ import type {
   RuntimeSessionLocalState,
   RuntimeSessionUpdateRequest,
 } from './session.js';
+import { CortxHostScope } from './host-scope.js';
+import type { ProjectDomain } from './project-domain.js';
 
 export interface CortxRuntimeOptions {
-  appName?: string;
   language: LanguageClient;
   model: string;
   models?: unknown[];
@@ -64,8 +68,8 @@ export interface CortxRuntimeOptions {
   maxIterations?: number;
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
+  projectDomain?: ProjectDomain;
+  contributions?: CortxContributionConfig[];
   tools?: Tool[];
   toolMode?: WorkspaceToolMode;
   approvalMode?: RuntimeApprovalMode;
@@ -105,6 +109,12 @@ export interface RuntimeEventEnvelopeHistoryPage {
   hasMoreAfter: boolean;
 }
 
+export interface RuntimeCleanupFailureInfo {
+  id: string;
+  owner: string;
+  message: string;
+}
+
 interface RuntimeSkillMounts {
   skillPaths?: string[];
   skillPacks?: string[];
@@ -120,18 +130,24 @@ interface RuntimeCortxHostInput {
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
+  toolProfile: string;
   approvalMode: RuntimeApprovalMode;
   requestedCapabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
   requestTools: Tool[];
-  registry?: CortxRegistry;
-  plugins?: PluginConfig[];
+  contributions: CortxContributionConfig[];
+  scope: CortxHostScope;
+  projectScope?: CortxHostScope;
+  mountProjectContributions?: boolean;
+  runId?: number;
+  getRunScope(): CortxHostScope | undefined;
   agentSessions: SubAgentSessionStore;
   onAgentEvent(event: AgentEvent): void;
 }
 
 interface RuntimeCortxHost {
   cortx: Cortx;
+  scope: CortxHostScope;
   capabilities: RuntimeDefaultCapabilities;
   contextMetadata: RuntimeSessionContextMetadata;
 }
@@ -140,6 +156,25 @@ interface RuntimeOfficialExtensions {
   extensions: AgentRuntimeExtensions;
   skillCount: number;
   skillSummaryTokens: number;
+}
+
+interface RuntimeSessionHostConfiguration {
+  model: string;
+  reasoningEffort?: string;
+  contextWindowTokens?: number;
+  contextWindowSource?: ContextUsageSource;
+  toolMode: WorkspaceToolMode;
+  toolProfile: string;
+  approvalMode: RuntimeApprovalMode;
+  requestedCapabilities: RuntimeDefaultCapabilities;
+  skillPaths?: string[];
+  skillPacks?: string[];
+  metadata?: import('./session.js').RuntimeSessionMetadata;
+}
+
+interface PendingRuntimeHost {
+  host: RuntimeCortxHost;
+  configuration: RuntimeSessionHostConfiguration;
 }
 
 function createSessionId(): string {
@@ -164,6 +199,19 @@ function parseOptionalPositiveInteger(value: unknown, field: string): number | u
   if (value === undefined) return undefined;
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
   throw new RuntimeError('invalid_request', `${field} must be a positive number`, { [field]: value });
+}
+
+function normalizeContributionConfigs(value: readonly CortxContributionConfig[]): CortxContributionConfig[] {
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || typeof entry.use !== 'string') {
+      throw new RuntimeError('invalid_request', `contributions[${index}].use must be canonical`);
+    }
+    const use = parseCortxContributionReference(entry.use).canonicalId;
+    if (entry.options !== undefined && (!entry.options || typeof entry.options !== 'object' || Array.isArray(entry.options))) {
+      throw new RuntimeError('invalid_request', `contributions[${index}].options must be an object`);
+    }
+    return { use, ...(entry.options === undefined ? {} : { options: structuredClone(entry.options) }) };
+  });
 }
 
 function normalizeHistoryLimit(value: number | undefined): number | undefined {
@@ -424,7 +472,7 @@ function resolveLanguageModelContextWindow(
 export class CortxRuntime {
   private readonly sessions = new Map<string, ManagedRuntimeSession>();
   private readonly deletedSessionIds = new Set<string>();
-  private readonly appName: string;
+  private readonly applicationScope = new CortxHostScope(`runtime:${crypto.randomUUID()}`, 'application');
   private readonly language: LanguageClient;
   private readonly model: string;
   private readonly modelCatalog: unknown[];
@@ -432,8 +480,8 @@ export class CortxRuntime {
   private readonly maxIterations?: number;
   private readonly contextWindowTokens?: number;
   private readonly contextWindowSource?: ContextUsageSource;
-  private readonly registry?: CortxRegistry;
-  private readonly plugins?: PluginConfig[];
+  private readonly projectDomain?: ProjectDomain;
+  private readonly contributions: CortxContributionConfig[];
   private readonly tools: Tool[];
   private readonly toolMode: WorkspaceToolMode;
   private readonly approvalMode: RuntimeApprovalMode;
@@ -446,9 +494,12 @@ export class CortxRuntime {
   private readonly logger: Logger;
   private readonly durableStore?: AgentDurableRunStore;
   private readonly skillPackRegistryPath?: string;
+  private accepting = true;
+  private closePromise?: Promise<void>;
+  private readonly pendingHosts = new Map<string, PendingRuntimeHost>();
+  private readonly cleanupFailures = new Map<string, { retry: () => Promise<void>; info: RuntimeCleanupFailureInfo }>();
 
   constructor(options: CortxRuntimeOptions) {
-    this.appName = options.appName ?? 'cortx';
     this.language = options.language;
     this.model = options.model;
     this.modelCatalog = [...(options.models ?? []), ...(options.modelCatalog ?? [])];
@@ -456,8 +507,8 @@ export class CortxRuntime {
     this.maxIterations = options.maxIterations;
     this.contextWindowTokens = parseOptionalPositiveInteger(options.contextWindowTokens, 'contextWindowTokens');
     this.contextWindowSource = options.contextWindowSource;
-    this.registry = options.registry;
-    this.plugins = options.plugins;
+    this.projectDomain = options.projectDomain;
+    this.contributions = options.contributions ?? [];
     this.tools = options.tools ?? [];
     this.toolMode = options.toolMode ?? 'none';
     this.approvalMode = options.approvalMode ?? 'deny';
@@ -473,6 +524,7 @@ export class CortxRuntime {
   }
 
   async createSession(request: RuntimeSessionCreateRequest = {}): Promise<RuntimeSessionInfo> {
+    if (!this.accepting) throw new RuntimeError('invalid_request', 'Runtime is closing');
     const workspace = await resolveWorkspace({
       requested: request.workingDirectory,
       defaultWorkingDirectory: this.defaultWorkingDirectory,
@@ -497,35 +549,48 @@ export class CortxRuntime {
           ? 'model_metadata'
           : undefined;
     const toolMode = parseWorkspaceToolMode(request.toolMode, this.toolMode);
+    const toolProfile = (await resolveRuntimeToolProfile(toolMode, this.projectDomain)).use;
     const approvalMode = parseApprovalMode(request.approvalMode, this.approvalMode);
     const requestedCapabilities = request.capabilities ?? this.capabilities;
     const { skillPaths, skillPacks } = await this.resolveRequestedSkillMounts(request);
     const system = request.system ?? this.system;
     const agentSessions = new SubAgentSessionStore();
+    const scope = this.applicationScope.child(`session:${id}`, 'session');
+    const contributions = normalizeContributionConfigs(request.contributions ?? this.contributions);
     let session: ManagedRuntimeSession;
-    const host = await this.createCortxHost({
-      id,
-      workingDirectory: workspace.workingDirectory,
-      model,
-      reasoningEffort,
-      system,
-      maxIterations,
-      contextWindowTokens,
-      contextWindowSource,
-      toolMode,
-      approvalMode,
-      requestedCapabilities,
-      skillPaths,
-      requestTools: request.tools ?? [],
-      registry: request.registry,
-      plugins: request.plugins,
-      agentSessions,
-      onAgentEvent: (event) => this.broadcast(session, event),
-    });
+    let host: RuntimeCortxHost;
+    try {
+      host = await this.createCortxHost({
+        id,
+        workingDirectory: workspace.workingDirectory,
+        model,
+        reasoningEffort,
+        system,
+        maxIterations,
+        contextWindowTokens,
+        contextWindowSource,
+        toolMode,
+        toolProfile,
+        approvalMode,
+        requestedCapabilities,
+        skillPaths,
+        requestTools: request.tools ?? [],
+        contributions,
+        scope,
+        mountProjectContributions: false,
+        getRunScope: () => session?.runScope,
+        agentSessions,
+        onAgentEvent: (event) => this.broadcast(session, event),
+      });
+    } catch (error) {
+      await scope.close(error).catch(() => undefined);
+      throw error;
+    }
 
     const now = Date.now();
     session = {
       id,
+      creatorPrincipalId: request.creatorPrincipalId,
       cortx: host.cortx,
       createdAt: now,
       lastActivityAt: now,
@@ -537,6 +602,7 @@ export class CortxRuntime {
       contextWindowTokens,
       contextWindowSource,
       toolMode,
+      toolProfile,
       approvalMode,
       requestedCapabilities,
       capabilities: host.capabilities,
@@ -544,8 +610,8 @@ export class CortxRuntime {
       skillPacks,
       promptHistory: [],
       requestTools: request.tools ?? [],
-      registry: request.registry,
-      plugins: request.plugins,
+      contributions,
+      scope: host.scope,
       events: [],
       eventEnvelopes: [],
       usage: undefined,
@@ -554,7 +620,6 @@ export class CortxRuntime {
       idleTimer: undefined,
       isRunning: false,
       runPromise: undefined,
-      needsHostRefresh: false,
       runId: 0,
       nextEventSequence: 0,
       agentSessions,
@@ -605,6 +670,8 @@ export class CortxRuntime {
           capabilities: snapshot.capabilities,
           skillPaths: snapshot.skillPaths,
           skillPacks: snapshot.skillPacks,
+          contributions: snapshot.contributions,
+          creatorPrincipalId: snapshot.creatorPrincipalId,
           metadata: snapshot.metadata,
         });
         const session = this.requireSession(info.id);
@@ -668,6 +735,7 @@ export class CortxRuntime {
     const reasoningEffort =
       'reasoningEffort' in request ? normalizeReasoningEffort(request.reasoningEffort) : session.reasoningEffort;
     const toolMode = parseWorkspaceToolMode(request.toolMode, session.toolMode);
+    const toolProfile = (await resolveRuntimeToolProfile(toolMode, this.projectDomain)).use;
     const approvalMode = parseApprovalMode(request.approvalMode, session.approvalMode);
     const requestedContextWindowTokens = parseOptionalPositiveInteger(request.contextWindowTokens, 'contextWindowTokens');
     const modelContextWindowTokens = resolveLanguageModelContextWindow(this.language, model, this.modelCatalog);
@@ -693,27 +761,33 @@ export class CortxRuntime {
       skillPacks = resolved.skillPacks;
     }
 
+    const configuration: RuntimeSessionHostConfiguration = {
+      model,
+      reasoningEffort,
+      contextWindowTokens,
+      contextWindowSource,
+      toolMode,
+      toolProfile,
+      approvalMode,
+      requestedCapabilities,
+      skillPaths,
+      skillPacks,
+      metadata: request.metadata ?? session.metadata,
+    };
+    const candidate = await this.createSessionCandidate(session, configuration);
     session.lastActivityAt = Date.now();
-    session.model = model;
-    session.reasoningEffort = reasoningEffort;
-    session.contextWindowTokens = contextWindowTokens;
-    session.contextWindowSource = contextWindowSource;
-    session.toolMode = toolMode;
-    session.approvalMode = approvalMode;
-    session.requestedCapabilities = requestedCapabilities;
-    session.skillPaths = skillPaths;
-    session.skillPacks = skillPacks;
-    if (request.metadata !== undefined) session.metadata = request.metadata;
     if (session.isRunning) {
-      session.capabilities =
-        approvalMode === 'full-access' ? { ...requestedCapabilities, approval: false } : requestedCapabilities;
-      session.needsHostRefresh = true;
+      const previousPending = this.pendingHosts.get(session.id);
+      this.pendingHosts.set(session.id, { host: candidate, configuration });
+      if (previousPending) {
+        await this.closeScope(previousPending.host.scope, `superseded session candidate:${session.id}`);
+      }
     } else {
-      await this.rebuildSessionHost(session);
+      await this.cutoverSessionHost(session, candidate, configuration);
     }
     this.resetIdleTimer(session);
     await this.persistRuntimeSession(session);
-    return this.info(session);
+    return session.isRunning ? this.info(session, configuration) : this.info(session);
   }
 
   getEventHistory(sessionId: string): AgentEvent[] {
@@ -752,7 +826,7 @@ export class CortxRuntime {
   }
 
   async listToolProfiles() {
-    return listRuntimeToolProfiles(this.registry);
+    return listRuntimeToolProfiles(this.projectDomain);
   }
 
   getLocalState(sessionId: string): RuntimeSessionLocalState {
@@ -762,6 +836,35 @@ export class CortxRuntime {
       getMessages: () => session.cortx.messages,
       replaceMessages: (messages: LanguageMessage[]) => session.cortx.replaceMessages(messages),
     };
+  }
+
+  listChildSessions(sessionId: string): SubAgentSession[] {
+    return [...this.requireSession(sessionId).agentSessions.getAll().values()];
+  }
+
+  getChildSession(sessionId: string, toolCallId: string): SubAgentSession {
+    const child = this.requireSession(sessionId).agentSessions.get(toolCallId);
+    if (!child) throw new RuntimeError('session_not_found', 'Child session not found', { sessionId, toolCallId });
+    return child;
+  }
+
+  abortChild(sessionId: string, toolCallId: string, reason = 'Child aborted by runtime'): Promise<SubAgentSession> {
+    return this.requireSession(sessionId).agentSessions.abort(toolCallId, reason);
+  }
+
+  waitForChild(sessionId: string, toolCallId: string, timeoutMs?: number): Promise<SubAgentSession> {
+    return this.requireSession(sessionId).agentSessions.wait(toolCallId, timeoutMs);
+  }
+
+  listCleanupFailures(): RuntimeCleanupFailureInfo[] {
+    return [...this.cleanupFailures.values()].map((entry) => entry.info);
+  }
+
+  async retryCleanup(id: string): Promise<void> {
+    const failure = this.cleanupFailures.get(id);
+    if (!failure) throw new RuntimeError('invalid_request', 'Cleanup operation not found', { id });
+    await failure.retry();
+    this.cleanupFailures.delete(id);
   }
 
   async prompt(sessionId: string, message: string): Promise<void> {
@@ -839,8 +942,26 @@ export class CortxRuntime {
     return () => session.envelopeSubscribers.delete(callback);
   }
 
-  dispose(): void {
-    for (const session of [...this.sessions.values()]) void this.destroy(session);
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.accepting = false;
+    this.closePromise = (async () => {
+      const errors: unknown[] = [];
+      for (const session of [...this.sessions.values()]) {
+        try {
+          await this.destroy(session);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      try {
+        await this.applicationScope.close(new Error('Runtime closed'));
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length) throw new AggregateError(errors, 'Cortx Runtime close failed');
+    })();
+    return this.closePromise;
   }
 
   private async startRun(
@@ -849,7 +970,6 @@ export class CortxRuntime {
     onStarted?: () => void,
   ): Promise<void> {
     if (session.isRunning) throw new RuntimeError('session_busy', 'Agent is already running');
-    if (session.needsHostRefresh) await this.rebuildSessionHost(session);
     const runningSessions = this.runningSessionCount();
     if (runningSessions >= this.maxSessions) {
       throw new RuntimeError('capacity_exceeded', 'Maximum concurrent running sessions reached', {
@@ -861,13 +981,49 @@ export class CortxRuntime {
 
     session.lastActivityAt = Date.now();
     this.resetIdleTimer(session);
-    session.isRunning = true;
     const runId = ++session.runId;
+    const runScope = session.scope.child(`run:${session.id}:${runId}`, 'run');
+    session.runScope = runScope;
+    try {
+      const host = await this.createCortxHost({
+        id: session.id,
+        workingDirectory: session.workingDirectory,
+        model: session.model,
+        reasoningEffort: session.reasoningEffort,
+        system: session.system,
+        maxIterations: session.maxIterations,
+        contextWindowTokens: session.contextWindowTokens,
+        contextWindowSource: session.contextWindowSource,
+        toolMode: session.toolMode,
+        toolProfile: session.toolProfile,
+        approvalMode: session.approvalMode,
+        requestedCapabilities: session.requestedCapabilities,
+        skillPaths: session.skillPaths,
+        requestTools: session.requestTools,
+        contributions: session.contributions,
+        scope: session.scope,
+        projectScope: runScope,
+        mountProjectContributions: true,
+        runId,
+        getRunScope: () => session.runScope,
+        agentSessions: session.agentSessions,
+        onAgentEvent: (event) => this.broadcast(session, event),
+      });
+      host.cortx.replaceMessages(session.cortx.messages);
+      session.cortx = host.cortx;
+      session.capabilities = host.capabilities;
+      session.contextMetadata = host.contextMetadata;
+    } catch (error) {
+      if (session.runScope === runScope) session.runScope = undefined;
+      await this.closeScope(runScope, `failed run host:${session.id}:${runId}`);
+      throw error;
+    }
+    session.isRunning = true;
     session.cortx.setRunId(runId);
     onStarted?.();
     void this.persistRuntimeSession(session);
 
-    const runPromise = this.consumeRun(session, runId, createGenerator);
+    const runPromise = this.consumeRun(session, runId, runScope, createGenerator);
     session.runPromise = runPromise;
     void runPromise;
   }
@@ -880,37 +1036,108 @@ export class CortxRuntime {
     return count;
   }
 
-  private async rebuildSessionHost(session: ManagedRuntimeSession): Promise<void> {
-    const messages = session.cortx.messages;
-    const host = await this.createCortxHost({
-      id: session.id,
-      workingDirectory: session.workingDirectory,
+  private currentHostConfiguration(session: ManagedRuntimeSession): RuntimeSessionHostConfiguration {
+    return {
       model: session.model,
       reasoningEffort: session.reasoningEffort,
-      system: session.system,
-      maxIterations: session.maxIterations,
       contextWindowTokens: session.contextWindowTokens,
       contextWindowSource: session.contextWindowSource,
       toolMode: session.toolMode,
+      toolProfile: session.toolProfile,
       approvalMode: session.approvalMode,
       requestedCapabilities: session.requestedCapabilities,
       skillPaths: session.skillPaths,
+      skillPacks: session.skillPacks,
+      metadata: session.metadata,
+    };
+  }
+
+  private async createSessionCandidate(
+    session: ManagedRuntimeSession,
+    configuration: RuntimeSessionHostConfiguration,
+  ): Promise<RuntimeCortxHost> {
+    const scope = this.applicationScope.child(`session:${session.id}:candidate:${crypto.randomUUID()}`, 'session');
+    try {
+      return await this.createCortxHost({
+      id: session.id,
+      workingDirectory: session.workingDirectory,
+      model: configuration.model,
+      reasoningEffort: configuration.reasoningEffort,
+      system: session.system,
+      maxIterations: session.maxIterations,
+      contextWindowTokens: configuration.contextWindowTokens,
+      contextWindowSource: configuration.contextWindowSource,
+      toolMode: configuration.toolMode,
+      toolProfile: configuration.toolProfile,
+      approvalMode: configuration.approvalMode,
+      requestedCapabilities: configuration.requestedCapabilities,
+      skillPaths: configuration.skillPaths,
       requestTools: session.requestTools,
-      registry: session.registry,
-      plugins: session.plugins,
+      contributions: session.contributions,
+      scope,
+      mountProjectContributions: false,
+      getRunScope: () => session.runScope,
       agentSessions: session.agentSessions,
       onAgentEvent: (event) => this.broadcast(session, event),
-    });
-    host.cortx.replaceMessages(messages);
+      });
+    } catch (error) {
+      await scope.close(error).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async cutoverSessionHost(
+    session: ManagedRuntimeSession,
+    host: RuntimeCortxHost,
+    configuration: RuntimeSessionHostConfiguration,
+  ): Promise<void> {
+    host.cortx.replaceMessages(session.cortx.messages);
+    const previousScope = session.scope;
     session.cortx = host.cortx;
+    session.scope = host.scope;
+    session.model = configuration.model;
+    session.reasoningEffort = configuration.reasoningEffort;
+    session.contextWindowTokens = configuration.contextWindowTokens;
+    session.contextWindowSource = configuration.contextWindowSource;
+    session.toolMode = configuration.toolMode;
+    session.toolProfile = configuration.toolProfile;
+    session.approvalMode = configuration.approvalMode;
+    session.requestedCapabilities = configuration.requestedCapabilities;
+    session.skillPaths = configuration.skillPaths;
+    session.skillPacks = configuration.skillPacks;
+    session.metadata = configuration.metadata;
     session.capabilities = host.capabilities;
     session.contextMetadata = host.contextMetadata;
-    session.needsHostRefresh = false;
+    await this.closeScope(previousScope, `replaced session host:${session.id}`);
+  }
+
+  private async applyPendingHost(session: ManagedRuntimeSession): Promise<void> {
+    const pending = this.pendingHosts.get(session.id);
+    if (!pending) return;
+    this.pendingHosts.delete(session.id);
+    await this.cutoverSessionHost(session, pending.host, pending.configuration);
+  }
+
+  private async closeScope(scope: CortxHostScope, owner: string): Promise<void> {
+    try {
+      await scope.close(new Error(owner));
+    } catch (error) {
+      this.recordCleanupFailure(owner, error, () => scope.retryFailedCleanup());
+    }
+  }
+
+  private recordCleanupFailure(owner: string, error: unknown, retry: () => Promise<void>): void {
+    const id = `cleanup:${crypto.randomUUID()}`;
+    this.cleanupFailures.set(id, {
+      retry,
+      info: { id, owner, message: error instanceof Error ? error.message : String(error) },
+    });
   }
 
   private async consumeRun(
     session: ManagedRuntimeSession,
     runId: number,
+    runScope: CortxHostScope,
     createGenerator: () => AsyncGenerator<AgentEvent>,
   ): Promise<void> {
     try {
@@ -922,7 +1149,16 @@ export class CortxRuntime {
       if (!this.sessions.has(session.id) || session.runId !== runId) return;
       this.broadcast(session, eventError(toRuntimeError(error)));
     } finally {
+      await this.closeScope(runScope, `settled run:${session.id}:${runId}`);
+      if (session.runScope === runScope) session.runScope = undefined;
       if (session.runId === runId) session.isRunning = false;
+      if (this.sessions.has(session.id)) {
+        try {
+          await this.applyPendingHost(session);
+        } catch (error) {
+          this.broadcast(session, eventError(error));
+        }
+      }
       if (session.runPromise && session.runId === runId) session.runPromise = undefined;
       void this.persistRuntimeSession(session);
     }
@@ -1049,7 +1285,9 @@ export class CortxRuntime {
     session.idleTimer = setTimeout(() => {
       if (!this.sessions.has(session.id)) return;
       this.logger.info(`[runtime] Session idle timeout: ${session.id}`);
-      this.destroy(session);
+      void this.destroy(session).catch((error) => {
+        this.recordCleanupFailure(`idle session destroy:${session.id}`, error, () => this.destroy(session));
+      });
     }, this.idleTimeoutMs);
     session.idleTimer.unref?.();
   }
@@ -1070,7 +1308,7 @@ export class CortxRuntime {
   ): Promise<void> {
     const previousRun = session.runPromise;
     session.cortx.abort(abortReason);
-    session.agentSessions.abortRunning(pendingQuestionReason);
+    const childShutdown = session.agentSessions.abortRunning(pendingQuestionReason);
     session.cortx.controller.rejectPendingQuestions(pendingQuestionReason);
     session.runId++;
     session.lastActivityAt = Date.now();
@@ -1083,6 +1321,8 @@ export class CortxRuntime {
         /* consumeRun already normalizes stream errors */
       }
     }
+    await childShutdown;
+    await this.applyPendingHost(session);
 
     if (!this.sessions.has(session.id)) return;
     if (session.runPromise === previousRun) session.runPromise = undefined;
@@ -1094,6 +1334,10 @@ export class CortxRuntime {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     if (options.deleteDurable) this.deletedSessionIds.add(session.id);
     await this.abortSession(session, 'Session cleaned up', 'Session destroyed');
+    const pending = this.pendingHosts.get(session.id);
+    this.pendingHosts.delete(session.id);
+    if (pending) await this.closeScope(pending.host.scope, `destroyed session candidate:${session.id}`);
+    await this.closeScope(session.scope, `destroyed session:${session.id}`);
     session.subscribers.clear();
     session.envelopeSubscribers.clear();
     session.isRunning = false;
@@ -1111,28 +1355,35 @@ export class CortxRuntime {
     return session;
   }
 
-  private info(session: ManagedRuntimeSession): RuntimeSessionInfo {
+  private info(
+    session: ManagedRuntimeSession,
+    configuration: RuntimeSessionHostConfiguration = this.currentHostConfiguration(session),
+  ): RuntimeSessionInfo {
     return {
       id: session.id,
+      creatorPrincipalId: session.creatorPrincipalId,
       createdAt: session.createdAt,
       lastActivityAt: session.lastActivityAt,
       workingDirectory: session.workingDirectory,
-      model: session.model,
-      reasoningEffort: session.reasoningEffort,
+      model: configuration.model,
+      reasoningEffort: configuration.reasoningEffort,
       system: session.system,
       maxIterations: session.maxIterations,
-      contextWindowTokens: session.contextWindowTokens,
-      contextWindowSource: session.contextWindowSource,
-      toolMode: session.toolMode,
-      approvalMode: session.approvalMode,
-      capabilities: session.capabilities,
-      skillPaths: session.skillPaths,
-      skillPacks: session.skillPacks,
+      contextWindowTokens: configuration.contextWindowTokens,
+      contextWindowSource: configuration.contextWindowSource,
+      toolMode: configuration.toolMode,
+      toolProfile: configuration.toolProfile,
+      approvalMode: configuration.approvalMode,
+      capabilities: configuration.approvalMode === 'full-access'
+        ? { ...configuration.requestedCapabilities, approval: false }
+        : configuration.requestedCapabilities,
+      skillPaths: configuration.skillPaths,
+      skillPacks: configuration.skillPacks,
       promptHistory: session.promptHistory,
       usage: session.usage,
       isRunning: session.isRunning,
       eventCount: session.events.length,
-      metadata: session.metadata,
+      metadata: configuration.metadata,
     };
   }
 
@@ -1169,6 +1420,7 @@ export class CortxRuntime {
     return {
       schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
       id: session.id,
+      creatorPrincipalId: session.creatorPrincipalId,
       createdAt: session.createdAt,
       lastActivityAt: session.lastActivityAt,
       workingDirectory: session.workingDirectory,
@@ -1179,12 +1431,14 @@ export class CortxRuntime {
       contextWindowTokens: session.contextWindowTokens,
       contextWindowSource: session.contextWindowSource,
       toolMode: session.toolMode,
+      toolProfile: session.toolProfile,
       approvalMode: session.approvalMode,
       capabilities: session.requestedCapabilities,
       skillPaths: session.skillPaths,
       skillPacks: session.skillPacks,
       promptHistory: session.promptHistory,
       requestTools: session.requestTools,
+      contributions: normalizeContributionConfigs(session.contributions),
       usage: session.usage,
       runId: session.runId,
       nextEventSequence: session.nextEventSequence,
@@ -1332,30 +1586,65 @@ export class CortxRuntime {
       return wrapped;
     });
     const mountedTools = [...runtimeTools, ...requestTools];
-    const toolProfilePluginEntries = await createWorkspaceToolPluginEntries(
-      input.workingDirectory,
-      input.toolMode,
-      input.registry ?? this.registry,
-    );
-    const pluginEntries = [...toolProfilePluginEntries, ...((input.plugins ?? this.plugins) ?? [])];
+    const mountProjectContributions = input.mountProjectContributions ?? true;
+    const toolProfilePluginEntries = mountProjectContributions
+      ? await createWorkspaceToolPluginEntries(input.workingDirectory, input.toolProfile, this.projectDomain)
+      : [];
+    const contributionEntries = [...toolProfilePluginEntries, ...input.contributions];
     const officialExtensions = await this.createOfficialExtensions({
       workingDirectory: input.workingDirectory,
       capabilities,
       skillPaths: input.skillPaths,
       needsToolApproval: (tool) => (tool ? toolApprovalRequirements.get(tool) ?? workspaceToolNeedsApproval(tool) : true),
     });
-    const extensions = officialExtensions.extensions;
+    const projectScope = input.projectScope ?? input.scope;
+    const projectExtensions = this.projectDomain && mountProjectContributions
+      ? await this.projectDomain.createAgentExtensions(contributionEntries, projectScope, {
+          instanceId: input.id,
+          sessionId: input.id,
+          runId: input.runId,
+          workingDirectory: input.workingDirectory,
+        })
+      : createEmptyAgentRuntimeExtensions();
+    if (mountProjectContributions && !this.projectDomain && contributionEntries.length > 0) {
+      throw new RuntimeError('invalid_request', 'Project contributions require a ProjectDomain');
+    }
+    const extensions = mergeAgentRuntimeExtensions(officialExtensions.extensions, projectExtensions);
 
     if (capabilities.subAgents !== false) {
       const subAgentTool = createSubAgentTool({
         language: this.language,
         model: input.model,
         reasoning: input.reasoningEffort ? { enabled: true, effort: input.reasoningEffort } : undefined,
-        registry: input.registry ?? this.registry,
-        plugins: pluginEntries,
         agentSessions: input.agentSessions,
         getTools: () => mountedTools,
         getExtensions: () => extensions,
+        createChildHost: async ({ toolCallId, runId, isBackground }) => {
+          const parentScope = isBackground ? input.scope : input.getRunScope();
+          if (!parentScope) throw new RuntimeError('invalid_request', 'Foreground child requires an active run scope');
+          const scope = parentScope.child(
+            `${isBackground ? 'background' : 'foreground'}-child:${toolCallId}`,
+            isBackground ? 'background-child' : 'foreground-child',
+          );
+          try {
+            const childProjectExtensions = this.projectDomain
+              ? await this.projectDomain.createAgentExtensions(contributionEntries, scope, {
+                  instanceId: `${input.id}:${toolCallId}`,
+                  sessionId: input.id,
+                  runId,
+                  workingDirectory: input.workingDirectory,
+                })
+              : createEmptyAgentRuntimeExtensions();
+            return {
+              extensions: mergeAgentRuntimeExtensions(officialExtensions.extensions, childProjectExtensions),
+              signal: scope.signal,
+              close: (reason?: unknown) => this.closeScope(scope, `settled child:${input.id}:${toolCallId}:${String(reason ?? '')}`),
+            };
+          } catch (error) {
+            await scope.close(error).catch(() => undefined);
+            throw error;
+          }
+        },
         onAgentEvent: input.onAgentEvent,
       });
       toolApprovalRequirements.set(subAgentTool, true);
@@ -1367,19 +1656,16 @@ export class CortxRuntime {
       contextWindowSource: input.contextWindowSource,
       systemPromptTokens: estimateTextTokens(input.system),
       toolDefinitionTokens: estimateToolDefinitionTokens(allModelTools),
-      toolCount: allModelTools.length + toolProfilePluginEntries.length,
+      toolCount: allModelTools.length,
       skillSummaryTokens: officialExtensions.skillSummaryTokens,
       skillCount: officialExtensions.skillCount,
     };
 
     const cortx = new Cortx(this.language, {
-      appName: this.appName,
       model: input.model,
       reasoning: input.reasoningEffort ? { enabled: true, effort: input.reasoningEffort } : undefined,
       system: input.system,
       maxIterations: input.maxIterations,
-      registry: input.registry ?? this.registry,
-      plugins: pluginEntries,
       tools: mountedTools,
       extensions,
       workingDirectory: input.workingDirectory,
@@ -1389,7 +1675,13 @@ export class CortxRuntime {
       logger: this.logger,
     });
     cortx.onAgentEvent = input.onAgentEvent;
-    return { cortx, capabilities, contextMetadata };
+    const abortCortx = () => cortx.abort('Cortx Host scope was revoked');
+    if (projectScope.signal.aborted) abortCortx();
+    else {
+      projectScope.signal.addEventListener('abort', abortCortx, { once: true });
+      projectScope.defer(() => projectScope.signal.removeEventListener('abort', abortCortx), 'cortx-controller-abort');
+    }
+    return { cortx, scope: input.scope, capabilities, contextMetadata };
   }
 
   private async createOfficialExtensions(input: {

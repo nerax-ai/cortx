@@ -1,13 +1,22 @@
 import type { Context, Next } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import type { RuntimeApprovalMode, WorkspaceToolMode } from '@cortx/runtime';
+import { parseCortxContributionReference, type CortxContributionConfig } from '@cortx/sdk';
+import type { PluginAdminGrant } from '@synax-ai/sdk';
+import type {
+  RuntimeApprovalMode,
+  RuntimeDefaultCapabilities,
+} from '@cortx/runtime';
 
 export interface ServerAuthKey {
   id?: string;
   key: string;
+  admin?: boolean;
   allowedWorkspaceRoots?: string[];
-  toolMode?: WorkspaceToolMode;
+  allowedContributions?: string[];
+  allowedToolProfiles?: string[];
+  capabilities?: RuntimeDefaultCapabilities;
   approvalMode?: RuntimeApprovalMode;
+  pluginGrants?: PluginAdminGrant[];
 }
 
 export interface ServerAuthConfig {
@@ -17,63 +26,60 @@ export interface ServerAuthConfig {
 
 export interface AuthPrincipal {
   id: string;
+  isAdmin: boolean;
   allowedWorkspaceRoots?: string[];
-  toolMode?: WorkspaceToolMode;
+  allowedContributions?: string[];
+  allowedToolProfiles?: string[];
+  capabilities?: RuntimeDefaultCapabilities;
   approvalMode?: RuntimeApprovalMode;
+  pluginGrants: PluginAdminGrant[];
 }
 
-interface TokenEntry {
-  token: string;
-  expiresAt: number;
-  principal: AuthPrincipal;
-}
-
-const TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const AUTH_PRINCIPAL_KEY = 'cortxAuthPrincipal';
+const ALL_PLUGIN_GRANTS: PluginAdminGrant[] = ['plugins.inspect', 'plugins.observe', 'plugins.manage'];
+const CREDENTIAL_QUERY_FIELDS = new Set([
+  'token',
+  'credential',
+  'authorization',
+  'key',
+  'api-key',
+  'api_key',
+  'apikey',
+  'access-token',
+  'access_token',
+]);
 
-interface TokenStore {
-  tokens: Map<string, TokenEntry>;
-}
-
-function createTokenStore(): TokenStore {
-  return { tokens: new Map() };
-}
-
-function generateToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function cleanupExpiredTokens(store: TokenStore): void {
-  const now = Date.now();
-  for (const [token, entry] of store.tokens) {
-    if (entry.expiresAt <= now) store.tokens.delete(token);
-  }
-}
-
-function normalizeAuthConfig(config: string | ServerAuthConfig): Array<ServerAuthKey & { id: string }> {
+function normalizeAuthConfig(config: string | ServerAuthConfig): Array<ServerAuthKey & { id: string; admin: boolean }> {
   const base = typeof config === 'string' ? { apiKey: config } : config;
-  const entries: ServerAuthKey[] = [{ id: 'default', key: base.apiKey }, ...(base.apiKeys ?? [])];
-  const keys = new Map<string, ServerAuthKey & { id: string }>();
+  const entries: ServerAuthKey[] = [
+    { id: 'default', key: base.apiKey, admin: true, pluginGrants: ALL_PLUGIN_GRANTS },
+    ...(base.apiKeys ?? []),
+  ];
+  const keys = new Map<string, ServerAuthKey & { id: string; admin: boolean }>();
 
   for (const [index, entry] of entries.entries()) {
     if (!entry.key) continue;
+    validateCanonicalList(entry.allowedContributions, 'allowedContributions');
+    validateCanonicalList(entry.allowedToolProfiles, 'allowedToolProfiles');
     keys.set(entry.key, {
       ...entry,
       id: entry.id ?? `key-${index}`,
+      admin: entry.admin === true,
     });
   }
-
   return [...keys.values()];
 }
 
-function principalFor(entry: ServerAuthKey & { id: string }): AuthPrincipal {
+function principalFor(entry: ServerAuthKey & { id: string; admin: boolean }): AuthPrincipal {
   return {
     id: entry.id,
-    allowedWorkspaceRoots: entry.allowedWorkspaceRoots,
-    toolMode: entry.toolMode,
+    isAdmin: entry.admin,
+    allowedWorkspaceRoots: clone(entry.allowedWorkspaceRoots),
+    allowedContributions: clone(entry.allowedContributions),
+    allowedToolProfiles: clone(entry.allowedToolProfiles),
+    capabilities: entry.capabilities ? { ...entry.capabilities } : undefined,
     approvalMode: entry.approvalMode,
+    pluginGrants: entry.admin ? [...ALL_PLUGIN_GRANTS] : [...(entry.pluginGrants ?? [])],
   };
 }
 
@@ -85,74 +91,77 @@ export function getAuthPrincipal(c: Context): AuthPrincipal | undefined {
   return c.get(AUTH_PRINCIPAL_KEY) as AuthPrincipal | undefined;
 }
 
-/**
- * Validate API key from Authorization header or ?key= query parameter.
- */
 export function extractApiKey(c: Context): string | null {
-  const authHeader = c.req.header('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.slice(7).trim();
-  }
-  return c.req.query('key') ?? c.req.query('token') ?? null;
+  const match = c.req.header('Authorization')?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
 }
 
-/**
- * Auth middleware: validates API key or short-lived token.
- */
-export function createAuthMiddleware(config: string | ServerAuthConfig, store: TokenStore = createTokenStore()) {
+export function rejectCredentialQuery(rawUrl: string): void {
+  const url = new URL(rawUrl);
+  for (const key of url.searchParams.keys()) {
+    if (CREDENTIAL_QUERY_FIELDS.has(key.toLowerCase())) {
+      throw Object.assign(new Error('Credentials are forbidden in URLs'), { code: 'invalid_request' });
+    }
+  }
+}
+
+export function configuredAuthPrincipals(config: ServerAuthConfig): AuthPrincipal[] {
+  return normalizeAuthConfig(config).map(principalFor);
+}
+
+export function createAuthMiddleware(config: string | ServerAuthConfig) {
   const apiKeys = normalizeAuthConfig(config);
   return createMiddleware(async (c: Context, next: Next) => {
-    // Health endpoint is always accessible
+    try {
+      rejectCredentialQuery(c.req.url);
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        400 as import('hono/utils/http-status').ContentfulStatusCode,
+      );
+    }
     if (c.req.path === '/health') return next();
 
     const providedKey = extractApiKey(c);
-
-    // Check if it's an API key directly.
-    const directKey = apiKeys.find((entry) => entry.key === providedKey);
-    if (directKey) {
-      setAuthPrincipal(c, principalFor(directKey));
-      return next();
+    const matched = providedKey
+      ? apiKeys.find((entry) => constantTimeEqual(entry.key, providedKey))
+      : undefined;
+    if (!matched) {
+      return c.json({ error: 'Unauthorized' }, 401 as import('hono/utils/http-status').ContentfulStatusCode);
     }
-
-    // Check if it's a short-lived token
-    if (providedKey) {
-      cleanupExpiredTokens(store);
-      const entry = store.tokens.get(providedKey);
-      if (entry && entry.expiresAt > Date.now()) {
-        setAuthPrincipal(c, entry.principal);
-        return next();
-      }
-    }
-
-    return c.json({ error: 'Unauthorized' }, 401 as import('hono/utils/http-status').ContentfulStatusCode);
+    setAuthPrincipal(c, principalFor(matched));
+    return next();
   });
 }
 
-/**
- * POST /auth/token — exchange API key for short-lived token.
- */
-export function handleTokenExchange(config: string | ServerAuthConfig, store: TokenStore = createTokenStore()) {
-  const apiKeys = normalizeAuthConfig(config);
-  return (c: Context) => {
-    const providedKey = extractApiKey(c);
-    const directKey = apiKeys.find((entry) => entry.key === providedKey);
-    if (!directKey) {
-      return c.json({ error: 'Unauthorized' }, 401 as import('hono/utils/http-status').ContentfulStatusCode);
-    }
-
-    cleanupExpiredTokens(store);
-    const token = generateToken();
-    const expiresAt = Date.now() + TOKEN_TTL_MS;
-    store.tokens.set(token, { token, expiresAt, principal: principalFor(directKey) });
-
-    return c.json({ token, expiresAt });
-  };
+export function principalContributionConfigs(
+  contributions: readonly CortxContributionConfig[],
+  principal: AuthPrincipal | undefined,
+): CortxContributionConfig[] {
+  if (!principal?.allowedContributions) return contributions.map((entry) => ({ ...entry }));
+  const allowed = new Set(principal.allowedContributions);
+  return contributions.filter((entry) => allowed.has(entry.use)).map((entry) => ({ ...entry }));
 }
 
-export function createAuthHandlers(config: string | ServerAuthConfig) {
-  const store = createTokenStore();
-  return {
-    middleware: createAuthMiddleware(config, store),
-    tokenExchange: handleTokenExchange(config, store),
-  };
+function validateCanonicalList(values: string[] | undefined, field: string): void {
+  for (const value of values ?? []) {
+    try {
+      parseCortxContributionReference(value);
+    } catch {
+      throw new Error(`${field} must contain canonical contribution references: ${value}`);
+    }
+  }
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const max = Math.max(left.length, right.length);
+  let diff = left.length ^ right.length;
+  for (let index = 0; index < max; index++) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+  return diff === 0;
+}
+
+function clone(values: string[] | undefined): string[] | undefined {
+  return values ? [...values] : undefined;
 }

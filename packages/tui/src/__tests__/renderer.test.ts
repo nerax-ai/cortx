@@ -3,9 +3,14 @@ import { TuiStore } from '../store.js';
 import { TuiRegistry } from '../tui-registry.js';
 import { eventToRegion, processEvent, processEvents } from '../renderer.js';
 import type { AgentEvent } from '@cortx/sdk';
-import type { TuiExtensionType, TuiFactoryMap, RendererDef } from '../types/tui-plugin.js';
-import { TUI_RENDERER } from '../types/tui-plugin.js';
-import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
+import {
+  TUI_RENDERER,
+  defineTuiContributionBinding,
+  defineTuiContributionDescriptor,
+  type RendererDef,
+  type TuiPlugin,
+  type TuiPluginContext,
+} from '../types/tui-plugin.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -14,11 +19,20 @@ import type { InlinePlugin, PluginContext } from '@nerax-ai/plugin';
 function createRendererPlugin(
   id: string,
   renderer: RendererDef,
-): InlinePlugin<TuiExtensionType, TuiFactoryMap> {
+): TuiPlugin {
   return {
-    manifest: { manifestVersion: 1, id, name: id, version: '0.0.0', runtime: { main: 'inline' } },
-    setup(ctx: PluginContext<TuiExtensionType, TuiFactoryMap>) {
-      ctx.register(TUI_RENDERER, id, () => renderer);
+    manifest: {
+      manifestVersion: 1,
+      id,
+      name: id,
+      version: '0.0.0',
+      runtime: { main: 'inline' },
+      contributes: {
+        [TUI_RENDERER]: [defineTuiContributionDescriptor({ id, displayName: id, executable: true })],
+      },
+    },
+    setup(ctx: TuiPluginContext) {
+      ctx.bind(defineTuiContributionBinding(TUI_RENDERER, id, () => renderer));
     },
   };
 }
