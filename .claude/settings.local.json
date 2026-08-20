@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd C:\\\\Users\\\\Illuxiza\\\\GitWork\\\\tools\\\\api-router\\\\synax:*)",
+      "Bash(cd C:\\\\Users\\\\Illuxiza\\\\GitWork\\\\tools\\\\agent\\\\cortx:*)"
+    ]
+  }
+}
