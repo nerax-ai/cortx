@@ -42,6 +42,20 @@ function textLanguage(text: string): LanguageClient {
   } as unknown as LanguageClient;
 }
 
+function durableProjection(lastAvailableSequence: number) {
+  return {
+    runtimeIncarnation: 'fixture',
+    runPhase: 'idle' as const,
+    sessionHealth: 'healthy' as const,
+    resumable: false,
+    queuedInputs: [],
+    eventRetention: {
+      oldestAvailableSequence: lastAvailableSequence > 0 ? 1 : null,
+      lastAvailableSequence,
+    },
+  };
+}
+
 describe('runtime durable resume', () => {
   test('new runtime instance resumes a non-terminal checkpoint by stable session id', async () => {
     const durableStore = new MemoryDurableRunStore();
@@ -127,6 +141,7 @@ describe('runtime durable resume', () => {
       toolCallCount: 2,
       startedAt: Date.now(),
     });
+    firstStore.releaseOwnership();
     const secondStore = new FileDurableRunStore(durableDir);
     const second = new CortxRuntime({
       language: textLanguage('resumed from disk'),
@@ -175,8 +190,8 @@ describe('runtime durable resume', () => {
       runId: 2,
     });
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed from disk' });
-    await first.close();
     await second.close();
+    await first.close();
   });
 
   test('restored legacy done envelopes are enriched with context usage facts', async () => {
@@ -209,6 +224,7 @@ describe('runtime durable resume', () => {
       capabilities: { skills: false, subAgents: false, approval: false },
       runId: 1,
       nextEventSequence: 1,
+      ...durableProjection(1),
     });
     await store.saveEventEnvelope({
       schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
@@ -218,6 +234,7 @@ describe('runtime durable resume', () => {
       runId: 1,
       event: { type: 'done', usage: { inputTokens: 100, outputTokens: 5 } },
     });
+    store.releaseOwnership();
 
     const runtime = new CortxRuntime({
       language: textLanguage('unused'),
@@ -278,6 +295,7 @@ describe('runtime durable resume', () => {
       promptHistory: ['restore my original question'],
       runId: 1,
       nextEventSequence: 2,
+      ...durableProjection(2),
     });
     await store.saveEventEnvelope({
       schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
@@ -295,6 +313,7 @@ describe('runtime durable resume', () => {
       runId: 1,
       event: { type: 'done', usage: { inputTokens: 1, outputTokens: 1 } },
     });
+    store.releaseOwnership();
 
     const runtime = new CortxRuntime({
       language: textLanguage('unused'),
@@ -347,6 +366,7 @@ describe('runtime durable resume', () => {
       },
       runId: 1,
       nextEventSequence: 3,
+      ...durableProjection(3),
     });
     await store.saveEventEnvelope({
       schemaVersion: RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION,
@@ -372,6 +392,7 @@ describe('runtime durable resume', () => {
       runId: 1,
       event: { type: 'done', usage: { inputTokens: 300, outputTokens: 30, cacheReadTokens: 2000 } },
     });
+    store.releaseOwnership();
 
     const runtime = new CortxRuntime({
       language: textLanguage('unused'),
@@ -418,6 +439,7 @@ describe('runtime durable resume', () => {
       capabilities: { skills: false, subAgents: false, approval: false },
       runId: 0,
       nextEventSequence: 0,
+      ...durableProjection(0),
     });
     await store.saveRuntimeSession({
       schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
@@ -431,6 +453,7 @@ describe('runtime durable resume', () => {
       capabilities: { skills: false, subAgents: false, approval: false },
       runId: 1,
       nextEventSequence: 1,
+      ...durableProjection(1),
     });
     await store.saveCheckpoint({
       schemaVersion: AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
@@ -465,6 +488,7 @@ describe('runtime durable resume', () => {
       capabilities: { skills: false, subAgents: false, approval: false },
       runId: 1,
       nextEventSequence: 1,
+      ...durableProjection(1),
     });
     await store.saveCheckpoint({
       schemaVersion: AGENT_RUN_CHECKPOINT_SCHEMA_VERSION,
@@ -487,6 +511,7 @@ describe('runtime durable resume', () => {
       runId: 1,
       event: { type: 'turn_start', iteration: 1 },
     });
+    store.releaseOwnership();
 
     const runtime = new CortxRuntime({
       language: textLanguage('unused'),
@@ -512,6 +537,45 @@ describe('runtime durable resume', () => {
       code: 'client_error',
     });
     await runtime.close();
+  });
+
+  test('restores durable queued follow-ups as visible interrupted inputs without replaying them into Core', async () => {
+    const durableDir = join(tmpDir, 'durable-queued-inputs');
+    const firstStore = new FileDurableRunStore(durableDir);
+    const first = new CortxRuntime({
+      language: neverFinishingLanguage(),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      durableStore: firstStore,
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await first.createSession({ id: 'queued-session' });
+    await first.prompt(session.id, 'start');
+    first.followUp(session.id, 'queued after restart', 'input:queued');
+    await waitForDurableSession(firstStore, session.id, (value) => value.queuedInputs.length === 1);
+    firstStore.releaseOwnership();
+
+    const second = new CortxRuntime({
+      language: textLanguage('must not run automatically'),
+      model: 'test',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      durableStore: new FileDurableRunStore(durableDir),
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    await second.restoreDurableSessions({ autoResume: false });
+
+    expect(second.getSession(session.id)).toMatchObject({
+      runPhase: 'interrupted',
+      queuedInputs: [{ inputId: 'input:queued', message: 'queued after restart', state: 'interrupted' }],
+      pendingInteraction: null,
+    });
+    expect(second.getEventHistory(session.id).some((event) => event.type === 'text')).toBe(false);
+    await second.close();
+    await first.close();
   });
 
   test('unsupported checkpoint schema emits a typed client error event', async () => {
@@ -574,4 +638,19 @@ async function waitForDurableEnvelope(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for durable ${type}`);
+}
+
+async function waitForDurableSession(
+  store: FileDurableRunStore,
+  sessionId: string,
+  predicate: (snapshot: Awaited<ReturnType<FileDurableRunStore['loadRuntimeSession']>>) => boolean,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const snapshot = await store.loadRuntimeSession(sessionId);
+    if (snapshot && predicate(snapshot)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for durable session snapshot');
 }

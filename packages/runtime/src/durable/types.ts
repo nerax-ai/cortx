@@ -1,9 +1,17 @@
 import type { AgentDoneUsage, AgentDurableRunStore, ContextUsageSource, CortxContributionConfig, RuntimeAgentEventEnvelope, Tool } from '@cortx/sdk';
 import type { RuntimeDefaultCapabilities } from '../default-capabilities.js';
-import type { RuntimeApprovalMode, RuntimeSessionMetadata } from '../session.js';
+import type {
+  RuntimeApprovalMode,
+  RuntimeEventRetention,
+  RuntimeFollowUpAdmission,
+  RuntimePendingInteraction,
+  RuntimeRunPhase,
+  RuntimeSessionHealth,
+  RuntimeSessionMetadata,
+} from '../session.js';
 import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
 
-export const RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 export const RUNTIME_SUB_AGENT_SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_EVENT_ENVELOPE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 
@@ -32,6 +40,13 @@ export interface RuntimeSessionSnapshot {
   usage?: AgentDoneUsage;
   runId: number;
   nextEventSequence: number;
+  runtimeIncarnation: string;
+  runPhase: RuntimeRunPhase;
+  sessionHealth: RuntimeSessionHealth;
+  resumable: boolean;
+  pendingInteraction?: RuntimePendingInteraction;
+  queuedInputs: RuntimeFollowUpAdmission[];
+  eventRetention: RuntimeEventRetention;
   metadata?: RuntimeSessionMetadata;
 }
 
@@ -56,6 +71,8 @@ export interface RuntimeEventEnvelopeSnapshot extends RuntimeAgentEventEnvelope 
 }
 
 export interface RuntimeDurableRunStore extends AgentDurableRunStore {
+  acquireOwnership?(): void;
+  releaseOwnership?(): void | Promise<void>;
   saveRuntimeSession(snapshot: RuntimeSessionSnapshot): void | Promise<void>;
   loadRuntimeSession(sessionId: string): RuntimeSessionSnapshot | undefined | Promise<RuntimeSessionSnapshot | undefined>;
   listRuntimeSessions(): RuntimeSessionSnapshot[] | Promise<RuntimeSessionSnapshot[]>;
@@ -66,6 +83,7 @@ export interface RuntimeDurableRunStore extends AgentDurableRunStore {
   saveEventEnvelope?(snapshot: RuntimeEventEnvelopeSnapshot): void | Promise<void>;
   listEventEnvelopes?(sessionId: string): RuntimeEventEnvelopeSnapshot[] | Promise<RuntimeEventEnvelopeSnapshot[]>;
   deleteEventEnvelopes?(sessionId: string): void | Promise<void>;
+  getEventEnvelopeRetention?(sessionId: string): RuntimeEventRetention | Promise<RuntimeEventRetention>;
 }
 
 export function isRuntimeDurableRunStore(store: AgentDurableRunStore | undefined): store is RuntimeDurableRunStore {

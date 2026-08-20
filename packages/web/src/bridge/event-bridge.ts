@@ -1,4 +1,11 @@
-import type { AgentDoneUsage, AgentEvent, ContextUsageSource, RuntimeAgentEventEnvelope } from '@cortx/sdk';
+import type {
+  AgentDoneUsage,
+  AgentEvent,
+  ContextUsageSource,
+  RuntimeAgentEventEnvelope,
+  RuntimeAgentStreamEnvelope,
+  RuntimeAgentStreamFrameEnvelope,
+} from '@cortx/sdk';
 import type { AgentStore, AgentStoreEventInput } from '@cortx/store';
 import { apiFetch, createAuthClient, type AuthClient } from './auth';
 
@@ -215,6 +222,21 @@ function isEnvelope(value: unknown): value is RuntimeAgentEventEnvelope {
   );
 }
 
+function isFrame(value: unknown): value is RuntimeAgentStreamFrameEnvelope {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.kind === 'frame' &&
+    typeof record.offset === 'number' &&
+    typeof record.timestamp === 'number' &&
+    typeof record.sessionId === 'string' &&
+    typeof record.runId === 'number' &&
+    typeof record.runtimeIncarnation === 'string' &&
+    typeof record.event === 'object' &&
+    record.event !== null
+  );
+}
+
 function mergeEnvelopes(...groups: RuntimeAgentEventEnvelope[][]): RuntimeAgentEventEnvelope[] {
   const bySequence = new Map<number, RuntimeAgentEventEnvelope>();
   for (const group of groups) {
@@ -235,7 +257,7 @@ export class EventBridge {
   private activeSessionId: string | null = null;
   private connectionState: WebEventConnectionState = { phase: 'closed', updatedAt: Date.now() };
   private replaying = false;
-  private replayBuffer: RuntimeAgentEventEnvelope[] = [];
+  private replayBuffer: RuntimeAgentStreamEnvelope[] = [];
   private replayLastSequence: number | undefined;
   private replayLastEventAt: number | undefined;
   private loadedEnvelopes: RuntimeAgentEventEnvelope[] = [];
@@ -558,27 +580,29 @@ export class EventBridge {
         void this.reconcileRuntimeSession(sessionId);
         return;
       }
-      const parsed = JSON.parse(data) as AgentEvent | RuntimeAgentEventEnvelope;
+      const parsed = JSON.parse(data) as AgentEvent | RuntimeAgentStreamEnvelope;
       const envelope = isEnvelope(parsed) ? parsed : null;
-      if (envelope && envelope.sessionId !== sessionId) return;
-      const event = envelope ? normalizeEvent(envelope.event) : normalizeEvent(parsed as AgentEvent);
+      const frame = isFrame(parsed) ? parsed : null;
+      const streamItem = envelope ?? frame;
+      if (streamItem && streamItem.sessionId !== sessionId) return;
+      const event = streamItem ? normalizeEvent(streamItem.event) : normalizeEvent(parsed as AgentEvent);
       if (event.type) {
         if (envelope?.sequence !== undefined && this.replayLastSequence !== undefined) {
           if (envelope.sequence <= this.replayLastSequence) return;
         }
         if (this.replaying) {
-          if (envelope) this.replayBuffer.push({ ...envelope, event });
+          if (streamItem) this.replayBuffer.push({ ...streamItem, event } as RuntimeAgentStreamEnvelope);
           this.replayLastSequence = envelope?.sequence ?? this.replayLastSequence;
-          this.replayLastEventAt = envelope?.timestamp ?? this.replayLastEventAt;
+          this.replayLastEventAt = streamItem?.timestamp ?? this.replayLastEventAt;
           return;
         }
         if (envelope) {
           this.loadedEnvelopes = mergeEnvelopes(this.loadedEnvelopes, [{ ...envelope, event }]);
           this.emitHistoryState(sessionId);
         }
-        this.store.dispatch(event, envelope?.timestamp);
+        this.store.dispatch(event, streamItem?.timestamp);
         this.replayLastSequence = envelope?.sequence ?? this.replayLastSequence;
-        this.replayLastEventAt = envelope?.timestamp ?? this.replayLastEventAt;
+        this.replayLastEventAt = streamItem?.timestamp ?? this.replayLastEventAt;
         this.emitConnection({
           phase: 'live',
           sessionId,
@@ -594,7 +618,8 @@ export class EventBridge {
 
   private flushReplayBuffer(): void {
     if (this.replayBuffer.length === 0) return;
-    this.loadedEnvelopes = mergeEnvelopes(this.loadedEnvelopes, this.replayBuffer);
+    const durable = this.replayBuffer.filter(isEnvelope);
+    this.loadedEnvelopes = mergeEnvelopes(this.loadedEnvelopes, durable);
     this.store.dispatchMany(this.replayBuffer.map((item) => ({ event: item.event, timestamp: item.timestamp })));
     this.replayBuffer = [];
     if (this.activeSessionId) this.emitHistoryState(this.activeSessionId);

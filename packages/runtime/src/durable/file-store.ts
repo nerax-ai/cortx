@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
   parseAgentRunCheckpoint,
@@ -27,6 +29,8 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   private readonly root: string;
   private readonly maxEventEnvelopesPerSession: number;
   private readonly subAgentWrites = new Map<string, Promise<void>>();
+  private readonly ownerToken = randomUUID();
+  private ownsRoot = false;
 
   constructor(options: FileDurableRunStoreOptions | string) {
     this.root = resolve(typeof options === 'string' ? options : options.root);
@@ -35,7 +39,52 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
     );
   }
 
+  acquireOwnership(): void {
+    if (this.ownsRoot) return;
+    mkdirSync(this.root, { recursive: true });
+    const path = this.ownerLockPath();
+    let descriptor: number;
+    try {
+      descriptor = openSync(path, 'wx', 0o600);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
+      const owner = readOwnerLock(path);
+      throw new Error(
+        `Durable root is already owned: ${this.root}${owner ? ` (pid ${owner.pid} on ${owner.hostname})` : ''}. ` +
+        'Stop the other Runtime or remove the stale owner lock after verifying no writer is active.',
+        { cause: error },
+      );
+    }
+    try {
+      writeFileSync(descriptor, JSON.stringify({
+        token: this.ownerToken,
+        pid: process.pid,
+        hostname: hostname(),
+        acquiredAt: Date.now(),
+      }), 'utf8');
+      this.ownsRoot = true;
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
+  releaseOwnership(): void {
+    if (!this.ownsRoot) return;
+    const path = this.ownerLockPath();
+    const owner = readOwnerLock(path);
+    if (!owner || owner.token !== this.ownerToken) {
+      throw new Error(`Durable root ownership changed before release: ${this.root}`);
+    }
+    rmSync(path, { force: true });
+    this.ownsRoot = false;
+  }
+
+  close(): void {
+    this.releaseOwnership();
+  }
+
   async saveCheckpoint(checkpoint: AgentRunCheckpoint): Promise<void> {
+    this.acquireOwnership();
     await writeJson(this.checkpointPath(checkpoint.sessionId), checkpoint);
   }
 
@@ -48,10 +97,12 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async deleteCheckpoint(sessionId: string): Promise<void> {
+    this.acquireOwnership();
     await rm(this.checkpointPath(sessionId), { force: true });
   }
 
   async saveRuntimeSession(snapshot: RuntimeSessionSnapshot): Promise<void> {
+    this.acquireOwnership();
     await writeJson(this.sessionPath(snapshot.id), snapshot);
   }
 
@@ -64,6 +115,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async deleteRuntimeSession(sessionId: string): Promise<void> {
+    this.acquireOwnership();
     await rm(this.sessionPath(sessionId), { force: true });
     await this.deleteCheckpoint(sessionId);
     await this.deleteSubAgentSessions(sessionId);
@@ -71,6 +123,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async saveSubAgentSession(snapshot: RuntimeSubAgentSessionSnapshot): Promise<void> {
+    this.acquireOwnership();
     const path = this.subAgentPath(snapshot.parentSessionId, snapshot.toolCallId);
     const previous = this.subAgentWrites.get(path) ?? Promise.resolve();
     const next = previous
@@ -92,10 +145,12 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async deleteSubAgentSessions(parentSessionId: string): Promise<void> {
+    this.acquireOwnership();
     await rm(join(this.root, 'sub-agents', encodeId(parentSessionId)), { recursive: true, force: true });
   }
 
   async saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): Promise<void> {
+    this.acquireOwnership();
     await writeJson(this.eventEnvelopePath(snapshot.sessionId, snapshot.sequence), serializeRuntimeEventEnvelopeSnapshot(snapshot));
     await this.pruneEventEnvelopes(snapshot.sessionId);
   }
@@ -106,11 +161,24 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   }
 
   async deleteEventEnvelopes(sessionId: string): Promise<void> {
+    this.acquireOwnership();
     await rm(join(this.root, 'events', encodeId(sessionId)), { recursive: true, force: true });
+  }
+
+  async getEventEnvelopeRetention(sessionId: string) {
+    const records = await this.listEventEnvelopes(sessionId);
+    return {
+      oldestAvailableSequence: records[0]?.sequence ?? null,
+      lastAvailableSequence: records.at(-1)?.sequence ?? 0,
+    };
   }
 
   private checkpointPath(sessionId: string): string {
     return join(this.root, 'checkpoints', `${encodeId(sessionId)}.json`);
+  }
+
+  private ownerLockPath(): string {
+    return join(this.root, '.runtime-owner.lock');
   }
 
   private sessionPath(sessionId: string): string {
@@ -158,18 +226,23 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 async function readJson<T>(path: string, parse: (value: unknown) => T | undefined): Promise<T | undefined> {
   try {
     const value = JSON.parse(await readFile(path, 'utf8')) as unknown;
-    return parse(value);
-  } catch {
-    return undefined;
+    const parsed = parse(value);
+    if (parsed === undefined) throw new Error(`Unsupported or invalid durable record: ${path}`);
+    return parsed;
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return undefined;
+    if (error instanceof SyntaxError) throw new Error(`Invalid durable JSON: ${path}`, { cause: error });
+    throw error;
   }
 }
 
 async function listJson<T>(dir: string, parse: (value: unknown) => T | undefined): Promise<T[]> {
   let files: string[];
   try {
-    files = await readdir(dir);
-  } catch {
-    return [];
+    files = (await readdir(dir)).sort();
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return [];
+    throw error;
   }
 
   const records: T[] = [];
@@ -179,4 +252,26 @@ async function listJson<T>(dir: string, parse: (value: unknown) => T | undefined
     if (record) records.push(record);
   }
   return records;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+interface DurableRootOwner {
+  token: string;
+  pid: number;
+  hostname: string;
+}
+
+function readOwnerLock(path: string): DurableRootOwner | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as Partial<DurableRootOwner>;
+    if (typeof value.token !== 'string' || typeof value.pid !== 'number' || typeof value.hostname !== 'string') {
+      return undefined;
+    }
+    return { token: value.token, pid: value.pid, hostname: value.hostname };
+  } catch {
+    return undefined;
+  }
 }

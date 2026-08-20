@@ -37,6 +37,27 @@ export interface RuntimeAgentEventEnvelope {
   };
 }
 
+export type RuntimeTransientAgentEvent = Extract<
+  AgentEvent,
+  { type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'agent_progress' }
+>;
+
+/**
+ * Ephemeral, run-local stream data. Frames are never persisted and do not
+ * consume the durable event sequence used for replay and gap detection.
+ */
+export interface RuntimeAgentStreamFrameEnvelope {
+  kind: 'frame';
+  offset: number;
+  timestamp: number;
+  sessionId: string;
+  runId: number;
+  runtimeIncarnation: string;
+  event: RuntimeTransientAgentEvent;
+}
+
+export type RuntimeAgentStreamEnvelope = RuntimeAgentEventEnvelope | RuntimeAgentStreamFrameEnvelope;
+
 export type ContextUsageBreakdownKey = 'messages' | 'tools' | 'skills' | 'system_prompt' | 'other';
 export type ContextUsageSource = 'provider' | 'runtime_exact' | 'runtime_estimate' | 'configured' | 'model_metadata' | 'unknown';
 

@@ -15,6 +15,7 @@ import type {
   AgentRunCheckpoint,
   LanguageMessage,
   RuntimeAgentEventEnvelope,
+  RuntimeAgentStreamEnvelope,
   Tool,
 } from '@cortx/sdk';
 import type {
@@ -599,6 +600,33 @@ describe('CortxRuntime sessions', () => {
     await runtime.close();
   });
 
+  test('keeps transient stream frames out of durable event sequence', async () => {
+    const runtime = new CortxRuntime({
+      language: mockLanguage([textParts('streamed')]),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'stream-frame-session' });
+    const stream: RuntimeAgentStreamEnvelope[] = [];
+    runtime.subscribeStream(session.id, (event) => stream.push(event), { replay: false });
+
+    await runtime.prompt(session.id, 'hello');
+    const deadline = Date.now() + 1_000;
+    while (!stream.some((item) => 'sequence' in item && item.event.type === 'done') && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+
+    const frames = stream.filter((item) => 'offset' in item);
+    const durable = runtime.getEventEnvelopeHistory(session.id);
+    expect(frames).toMatchObject([{ kind: 'frame', offset: 1, runId: 1, event: { type: 'text_delta' } }]);
+    expect(durable.some((item) => item.event.type === 'text_delta')).toBe(false);
+    expect(durable.map((item) => item.sequence)).toEqual(durable.map((_, index) => index + 1));
+    await runtime.close();
+  });
+
   test('enforces max sessions only for currently running sessions', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(120),
@@ -686,12 +714,13 @@ describe('CortxRuntime sessions', () => {
     const session = await runtime.createSession({ id: 'delete-race' });
     durableStore.delayRuntimeSessionSaves();
 
-    await runtime.prompt(session.id, 'delete me');
+    const prompting = runtime.prompt(session.id, 'delete me');
     await durableStore.waitForBlockedRuntimeSave();
-    await runtime.deleteSession(session.id);
-    expect(durableStore.listRuntimeSessions()).toEqual([]);
-
+    const deleting = runtime.deleteSession(session.id);
     durableStore.releaseRuntimeSessionSaves();
+    await expect(prompting).rejects.toMatchObject({ kind: 'session_not_found' });
+    await deleting;
+    expect(durableStore.listRuntimeSessions()).toEqual([]);
     await durableStore.waitForRuntimeSavesToDrain();
     expect(durableStore.listRuntimeSessions()).toEqual([]);
     await expect(runtime.restoreDurableSessions()).resolves.toEqual([]);

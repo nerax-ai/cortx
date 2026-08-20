@@ -70,6 +70,29 @@ describe('Cortx plugin runtime foundation', () => {
     expect(calls).toBe(1);
   });
 
+  test('Host scope unlinks successfully closed children and keeps ownership bounded under churn', async () => {
+    const parent = new CortxHostScope('parent', 'application');
+    for (let index = 0; index < 2_000; index++) {
+      const child = parent.child(`child:${index}`, 'run');
+      expect(parent.ownedEffectCount).toBe(1);
+      await child.close();
+      expect(parent.ownedEffectCount).toBe(0);
+    }
+    await parent.close();
+  });
+
+  test('Host scope parent/child concurrent close is idempotent', async () => {
+    const parent = new CortxHostScope('parent-race', 'application');
+    const child = parent.child('child-race', 'run');
+    let disposed = 0;
+    child.defer(() => { disposed++; });
+
+    await Promise.all([child.close(), parent.close()]);
+
+    expect(disposed).toBe(1);
+    expect(parent.ownedEffectCount).toBe(0);
+  });
+
   test(
     'ProjectDomain close waits for an in-flight start and retries registry close failures',
     async () => {
@@ -590,8 +613,7 @@ describe('Cortx plugin runtime foundation', () => {
     expect(failure).toBeDefined();
     await runtime.retryCleanup(failure!.id);
     const parentFailure = runtime.listCleanupFailures().find((item) => item.owner.includes('settled run'));
-    expect(parentFailure).toBeDefined();
-    await runtime.retryCleanup(parentFailure!.id);
+    expect(parentFailure).toBeUndefined();
     expect(runtime.listCleanupFailures()).toEqual([]);
     expect(childCleanupAttempts).toBe(2);
     await runtime.close();

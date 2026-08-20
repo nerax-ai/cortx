@@ -12,6 +12,8 @@ import type {
   LanguageMessage,
   Logger,
   RuntimeAgentEventEnvelope,
+  RuntimeAgentStreamEnvelope,
+  RuntimeAgentStreamFrameEnvelope,
   SkillInfo,
   Tool,
 } from '@cortx/sdk';
@@ -46,6 +48,7 @@ import {
   type RuntimeEventEnvelopeSnapshot,
   type RuntimeDurableRunStore,
   type RuntimeSessionSnapshot,
+  type RuntimeSubAgentSessionSnapshot,
 } from './durable/types.js';
 import type {
   ManagedRuntimeSession,
@@ -59,6 +62,7 @@ import type {
 } from './session.js';
 import { CortxHostScope } from './host-scope.js';
 import type { ProjectDomain } from './project-domain.js';
+import { RuntimeEventJournal } from './event-journal/event-journal.js';
 
 export interface CortxRuntimeOptions {
   language: LanguageClient;
@@ -226,6 +230,15 @@ function eventError(error: unknown): AgentEvent {
 
 function isTerminalEvent(event: AgentEvent | undefined): boolean {
   return event?.type === 'done' || event?.type === 'error';
+}
+
+function isTransientAgentEvent(
+  event: AgentEvent,
+): event is Extract<AgentEvent, { type: 'text_delta' | 'thinking_delta' | 'tool_progress' | 'agent_progress' }> {
+  return event.type === 'text_delta' ||
+    event.type === 'thinking_delta' ||
+    event.type === 'tool_progress' ||
+    event.type === 'agent_progress';
 }
 
 function parentAttributionFor(session: ManagedRuntimeSession, event: AgentEvent): RuntimeAgentEventEnvelope['parent'] {
@@ -490,6 +503,8 @@ export class CortxRuntime {
   private readonly idleTimeoutMs: number;
   private readonly logger: Logger;
   private readonly durableStore?: AgentDurableRunStore;
+  private readonly eventJournal: RuntimeEventJournal;
+  private readonly restoringSessionIds = new Set<string>();
   private readonly skillPackRegistryPath?: string;
   private accepting = true;
   private closePromise?: Promise<void>;
@@ -516,6 +531,15 @@ export class CortxRuntime {
     this.idleTimeoutMs = options.idleTimeoutMs ?? 30 * 60 * 1000;
     this.logger = options.logger ?? noopLogger;
     this.durableStore = options.durableStore;
+    const runtimeDurableStore = this.runtimeDurableStore();
+    runtimeDurableStore?.acquireOwnership?.();
+    this.eventJournal = new RuntimeEventJournal(runtimeDurableStore, {
+      onFailure: (sessionId, error) => this.markDurabilityFailure(sessionId, error),
+      onRetention: (sessionId, retention) => {
+        const session = this.sessions.get(sessionId);
+        if (session) session.eventRetention = retention;
+      },
+    });
     this.skillPackRegistryPath = options.skillPackRegistryPath;
   }
 
@@ -613,6 +637,7 @@ export class CortxRuntime {
       usage: undefined,
       subscribers: new Set(),
       envelopeSubscribers: new Set(),
+      streamSubscribers: new Set(),
       idleTimer: undefined,
       isRunning: false,
       runPhase: 'idle',
@@ -623,6 +648,8 @@ export class CortxRuntime {
       runPromise: undefined,
       runId: 0,
       nextEventSequence: 0,
+      streamOffset: 0,
+      eventRetention: { oldestAvailableSequence: null, lastAvailableSequence: 0 },
       agentSessions,
       contextMetadata: host.contextMetadata,
       metadata: request.metadata,
@@ -646,11 +673,13 @@ export class CortxRuntime {
   async restoreDurableSessions(options: RestoreDurableSessionsOptions = {}): Promise<RuntimeSessionInfo[]> {
     const store = this.runtimeDurableStore();
     if (!store) return [];
+    await this.eventJournal.drainAll();
 
     const restored: RuntimeSessionInfo[] = [];
     for (const snapshot of await store.listRuntimeSessions()) {
       if (this.sessions.has(snapshot.id)) continue;
       if (this.deletedSessionIds.has(snapshot.id)) continue;
+      this.restoringSessionIds.add(snapshot.id);
       try {
         const checkpoint = await this.durableStore?.loadCheckpoint(snapshot.id);
         const resumableCheckpoint =
@@ -683,27 +712,50 @@ export class CortxRuntime {
         session.lastActivityAt = snapshot.lastActivityAt;
         session.runId = snapshot.runId;
         session.nextEventSequence = snapshot.nextEventSequence;
+        session.streamOffset = 0;
+        session.eventRetention = snapshot.eventRetention;
         session.promptHistory = snapshot.promptHistory?.slice(-100) ?? [];
+        session.followUpAdmissions = new Map(
+          snapshot.queuedInputs.map((input) => [
+            input.inputId,
+            input.state === 'queued' ? { ...input, state: 'interrupted' } : { ...input },
+          ]),
+        );
         session.agentSessions.hydrate(await store.listSubAgentSessions(snapshot.id));
         const eventSnapshots = store.listEventEnvelopes ? await store.listEventEnvelopes(snapshot.id) : [];
         session.usage = this.aggregateUsageFromEventSnapshots(session, eventSnapshots) ?? snapshot.usage;
-        this.restoreSessionEventHistory(session, eventSnapshots, resumableCheckpoint);
-        if (resumableCheckpoint) {
+        const unfinished =
+          snapshot.runPhase !== 'idle' ||
+          snapshot.pendingInteraction !== undefined ||
+          snapshot.queuedInputs.some((input) => input.state === 'queued');
+        this.restoreSessionEventHistory(session, eventSnapshots, unfinished || Boolean(resumableCheckpoint), Boolean(resumableCheckpoint));
+        session.sessionHealth = snapshot.sessionHealth;
+        if (unfinished || resumableCheckpoint) {
           session.isRunning = false;
           session.runPhase = 'interrupted';
-          session.resumable = true;
+          session.resumable = Boolean(resumableCheckpoint);
           session.pendingInteraction = undefined;
         }
-        await this.persistRuntimeSession(session);
+        this.restoringSessionIds.delete(snapshot.id);
+        const lastDurableSequence = eventSnapshots.at(-1)?.sequence ?? 0;
+        const restoredTerminalEnvelope = session.eventEnvelopes.at(-1);
+        await this.persistRuntimeSession(
+          session,
+          restoredTerminalEnvelope && restoredTerminalEnvelope.sequence > lastDurableSequence
+            ? restoredTerminalEnvelope
+            : undefined,
+        );
         restored.push(this.info(session));
 
-        if (options.autoResume && resumableCheckpoint) {
+        if (options.autoResume && resumableCheckpoint && session.sessionHealth !== 'durability_failed') {
           await this.resume(session.id);
         }
       } catch (error) {
         this.logger.warn(
           `Failed to restore runtime session "${snapshot.id}": ${error instanceof Error ? error.message : String(error)}`,
         );
+      } finally {
+        this.restoringSessionIds.delete(snapshot.id);
       }
     }
     return restored;
@@ -737,6 +789,7 @@ export class CortxRuntime {
 
   async updateSession(sessionId: string, request: RuntimeSessionUpdateRequest = {}): Promise<RuntimeSessionInfo> {
     const session = this.requireSession(sessionId);
+    this.assertSessionMutable(session);
     this.assertSessionIdle(session);
     const model = normalizeModelId(request.model, session.model);
     const modelChanged = model !== session.model;
@@ -873,6 +926,7 @@ export class CortxRuntime {
 
   async prompt(sessionId: string, message: string): Promise<void> {
     const session = this.requireSession(sessionId);
+    this.assertSessionMutable(session);
     if (!message?.trim()) throw new RuntimeError('invalid_request', 'Message is required');
     await this.startRun(session, () => session.cortx.run(message), () => {
       session.promptHistory = appendPromptHistory(session.promptHistory, message);
@@ -882,11 +936,13 @@ export class CortxRuntime {
 
   async resume(sessionId: string): Promise<void> {
     const session = this.requireSession(sessionId);
+    this.assertSessionMutable(session);
     await this.startRun(session, () => session.cortx.continue());
   }
 
   steer(sessionId: string, message: string): void {
     const session = this.requireSession(sessionId);
+    this.assertSessionMutable(session);
     if (!message?.trim()) throw new RuntimeError('invalid_request', 'Message is required');
     session.lastActivityAt = Date.now();
     session.cortx.controller.steer(message);
@@ -895,6 +951,7 @@ export class CortxRuntime {
 
   followUp(sessionId: string, message: string, inputId = crypto.randomUUID()): RuntimeFollowUpAdmission {
     const session = this.requireSession(sessionId);
+    this.assertSessionMutable(session);
     if (!message?.trim()) throw new RuntimeError('invalid_request', 'Message is required');
     if (session.runPhase !== 'running' && session.runPhase !== 'waiting_user' && session.runPhase !== 'waiting_approval') {
       throw new RuntimeError('invalid_request', 'Follow-up requires a running session', {
@@ -912,6 +969,16 @@ export class CortxRuntime {
       }
       return { ...existing };
     }
+    if (session.followUpAdmissions.size >= 256) {
+      const delivered = [...session.followUpAdmissions.entries()].find(([, input]) => input.state === 'delivered');
+      if (delivered) session.followUpAdmissions.delete(delivered[0]);
+      else {
+        throw new RuntimeError('capacity_exceeded', 'Maximum queued follow-ups reached', {
+          sessionId,
+          maxQueuedInputs: 256,
+        });
+      }
+    }
     session.lastActivityAt = Date.now();
     session.promptHistory = appendPromptHistory(session.promptHistory, message);
     const admission: RuntimeFollowUpAdmission = {
@@ -919,21 +986,18 @@ export class CortxRuntime {
       message,
       acceptedAt: session.lastActivityAt,
       admissionSequence: session.nextEventSequence + 1,
+      state: 'queued',
     };
     session.followUpAdmissions.set(inputId, admission);
-    if (session.followUpAdmissions.size > 256) {
-      const oldest = session.followUpAdmissions.keys().next().value;
-      if (oldest) session.followUpAdmissions.delete(oldest);
-    }
     this.broadcast(session, { type: 'user_message', message, source: 'follow_up' });
     session.cortx.controller.followUp(message);
     this.resetIdleTimer(session);
-    void this.persistRuntimeSession(session);
     return { ...admission };
   }
 
   answer(sessionId: string, toolCallId: string, response: string): boolean {
     const session = this.requireSession(sessionId);
+    this.assertSessionMutable(session);
     const answered = session.cortx.controller.answerUser(toolCallId, response);
     if (!answered) return false;
     if (session.pendingInteraction?.requestId === toolCallId) session.pendingInteraction = undefined;
@@ -976,6 +1040,19 @@ export class CortxRuntime {
     return () => session.envelopeSubscribers.delete(callback);
   }
 
+  subscribeStream(
+    sessionId: string,
+    callback: (event: RuntimeAgentStreamEnvelope) => void,
+    options: SubscribeEnvelopeOptions = {},
+  ): () => void {
+    const session = this.requireSession(sessionId);
+    if (options.replay ?? true) {
+      for (const event of [...session.eventEnvelopes]) this.safeNotify(() => callback(event));
+    }
+    session.streamSubscribers.add(callback);
+    return () => session.streamSubscribers.delete(callback);
+  }
+
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.accepting = false;
@@ -988,8 +1065,14 @@ export class CortxRuntime {
           errors.push(error);
         }
       }
+      await this.eventJournal.drainAll();
       try {
         await this.applicationScope.close(new Error('Runtime closed'));
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await this.runtimeDurableStore()?.releaseOwnership?.();
       } catch (error) {
         errors.push(error);
       }
@@ -1003,6 +1086,7 @@ export class CortxRuntime {
     createGenerator: () => AsyncGenerator<AgentEvent>,
     onStarted?: () => void,
   ): Promise<void> {
+    this.assertSessionMutable(session);
     if (session.runPhase !== 'idle' && session.runPhase !== 'interrupted') {
       throw new RuntimeError('session_busy', 'Agent is already running', { runPhase: session.runPhase });
     }
@@ -1018,6 +1102,7 @@ export class CortxRuntime {
     session.lastActivityAt = Date.now();
     this.resetIdleTimer(session);
     const runId = ++session.runId;
+    session.streamOffset = 0;
     const runScope = session.scope.child(`run:${session.id}:${runId}`, 'run');
     session.runScope = runScope;
     try {
@@ -1059,9 +1144,32 @@ export class CortxRuntime {
     session.sessionHealth = 'healthy';
     session.pendingInteraction = undefined;
     session.resumable = false;
+    for (const [inputId, input] of session.followUpAdmissions) {
+      if (input.state !== 'delivered') session.followUpAdmissions.delete(inputId);
+    }
     session.cortx.setRunId(runId);
     onStarted?.();
-    void this.persistRuntimeSession(session);
+    try {
+      await this.persistRuntimeSession(session);
+    } catch (error) {
+      session.isRunning = false;
+      session.runPhase = 'interrupted';
+      if (session.runScope === runScope) session.runScope = undefined;
+      await this.closeScope(runScope, `failed durable run admission:${session.id}:${runId}`);
+      throw new RuntimeError('runtime_failure', `Failed to persist run admission for session "${session.id}"`, {
+        sessionId: session.id,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (!this.sessions.has(session.id) || this.deletedSessionIds.has(session.id)) {
+      session.isRunning = false;
+      session.runPhase = 'idle';
+      if (session.runScope === runScope) session.runScope = undefined;
+      await this.closeScope(runScope, `cancelled deleted run admission:${session.id}:${runId}`);
+      throw new RuntimeError('session_not_found', 'Session was deleted while the run admission was being persisted', {
+        sessionId: session.id,
+      });
+    }
 
     const runPromise = this.consumeRun(session, runId, runScope, createGenerator);
     session.runPromise = runPromise;
@@ -1189,9 +1297,12 @@ export class CortxRuntime {
         session.runPhase = 'idle';
         session.pendingInteraction = undefined;
         session.resumable = false;
+        for (const [inputId, input] of session.followUpAdmissions) {
+          if (input.state === 'queued') session.followUpAdmissions.set(inputId, { ...input, state: 'interrupted' });
+        }
       }
       if (session.runPromise && session.runId === runId) session.runPromise = undefined;
-      void this.persistRuntimeSession(session);
+      void this.persistRuntimeSession(session).catch(() => undefined);
     }
   }
 
@@ -1200,6 +1311,28 @@ export class CortxRuntime {
     session.lastActivityAt = Date.now();
     const enrichedEvent = this.enrichEvent(session, event);
     this.applyEventProjection(session, enrichedEvent);
+    if (isTransientAgentEvent(enrichedEvent)) {
+      const frame: RuntimeAgentStreamFrameEnvelope = {
+        kind: 'frame',
+        offset: ++session.streamOffset,
+        timestamp: session.lastActivityAt,
+        sessionId: session.id,
+        runId: session.runId,
+        runtimeIncarnation: this.runtimeIncarnation,
+        event: enrichedEvent,
+      };
+      for (const subscriber of session.subscribers) {
+        this.safeNotify(() => subscriber(enrichedEvent));
+      }
+      for (const subscriber of session.streamSubscribers) {
+        this.safeNotify(() => subscriber(frame));
+      }
+      if (enrichedEvent.type === 'agent_progress') {
+        const subAgent = session.agentSessions.snapshot(enrichedEvent.toolCallId);
+        if (subAgent) void this.persistRuntimeSession(session, undefined, subAgent).catch(() => undefined);
+      }
+      return;
+    }
     const envelope: RuntimeAgentEventEnvelope = {
       sequence: ++session.nextEventSequence,
       timestamp: session.lastActivityAt,
@@ -1219,13 +1352,23 @@ export class CortxRuntime {
     if (session.eventEnvelopes.length > this.maxEventsPerSession) {
       session.eventEnvelopes.splice(0, session.eventEnvelopes.length - this.maxEventsPerSession);
     }
-    void this.persistRuntimeSession(session);
-    void this.persistEventEnvelope(envelope);
-    void this.persistSubAgentSession(session, enrichedEvent);
+    session.eventRetention = {
+      oldestAvailableSequence: session.eventRetention.oldestAvailableSequence ?? envelope.sequence,
+      lastAvailableSequence: envelope.sequence,
+    };
+    const subAgentSnapshot =
+      enrichedEvent.type === 'agent_started' ||
+      enrichedEvent.type === 'agent_completed'
+        ? session.agentSessions.snapshot(enrichedEvent.toolCallId)
+        : undefined;
+    void this.persistRuntimeSession(session, envelope, subAgentSnapshot).catch(() => undefined);
     for (const subscriber of session.subscribers) {
       this.safeNotify(() => subscriber(enrichedEvent));
     }
     for (const subscriber of session.envelopeSubscribers) {
+      this.safeNotify(() => subscriber(envelope));
+    }
+    for (const subscriber of session.streamSubscribers) {
       this.safeNotify(() => subscriber(envelope));
     }
   }
@@ -1263,6 +1406,13 @@ export class CortxRuntime {
     if (event.type === 'user_answer') {
       if (session.pendingInteraction?.requestId === event.toolCallId) session.pendingInteraction = undefined;
       if (session.isRunning) session.runPhase = 'running';
+      return;
+    }
+    if (event.type === 'follow_up') {
+      const queued = [...session.followUpAdmissions.entries()].find(([, input]) =>
+        input.state === 'queued' && input.message === event.message,
+      );
+      if (queued) session.followUpAdmissions.set(queued[0], { ...queued[1], state: 'delivered' });
       return;
     }
     if (event.type === 'error') {
@@ -1385,12 +1535,15 @@ export class CortxRuntime {
     session.runPhase = 'aborting';
     session.pendingInteraction = undefined;
     session.resumable = false;
+    for (const [inputId, input] of session.followUpAdmissions) {
+      if (input.state !== 'delivered') session.followUpAdmissions.delete(inputId);
+    }
     session.cortx.abort(abortReason);
     const childShutdown = session.agentSessions.abortRunning(pendingQuestionReason);
     session.cortx.controller.rejectPendingQuestions(pendingQuestionReason);
     session.runId++;
     session.lastActivityAt = Date.now();
-    void this.persistRuntimeSession(session);
+    void this.persistRuntimeSession(session).catch(() => undefined);
 
     if (previousRun) {
       try {
@@ -1404,7 +1557,7 @@ export class CortxRuntime {
     if (session.runPromise === previousRun) session.runPromise = undefined;
     session.isRunning = false;
     session.runPhase = 'idle';
-    await this.persistRuntimeSession(session);
+    await this.persistRuntimeSession(session).catch(() => undefined);
   }
 
   private async destroy(session: ManagedRuntimeSession, options: { deleteDurable?: boolean } = {}): Promise<void> {
@@ -1419,9 +1572,9 @@ export class CortxRuntime {
     session.pendingInteraction = undefined;
     this.sessions.delete(session.id);
     if (options.deleteDurable) {
-      await this.runtimeDurableStore()?.deleteRuntimeSession(session.id);
+      await this.eventJournal.delete(session.id);
     } else {
-      await this.persistRuntimeSession(session);
+      await this.persistRuntimeSession(session).catch(() => undefined);
     }
   }
 
@@ -1436,6 +1589,15 @@ export class CortxRuntime {
     throw new RuntimeError('session_busy', 'Session configuration can only change while idle', {
       sessionId: session.id,
       runPhase: session.runPhase,
+    });
+  }
+
+  private assertSessionMutable(session: ManagedRuntimeSession): void {
+    if (session.sessionHealth !== 'durability_failed') return;
+    throw new RuntimeError('runtime_failure', 'Session durability failed; delete the session before creating new work', {
+      sessionId: session.id,
+      sessionHealth: session.sessionHealth,
+      cause: this.eventJournal.failure(session.id)?.message,
     });
   }
 
@@ -1467,11 +1629,15 @@ export class CortxRuntime {
       usage: session.usage,
       runtimeIncarnation: this.runtimeIncarnation,
       projectionAsOfSequence: session.nextEventSequence,
+      eventRetention: { ...session.eventRetention },
       runPhase: session.runPhase,
       sessionHealth: session.sessionHealth,
       resumable: session.resumable,
       acceptsPrompt: session.runPhase === 'idle' && session.sessionHealth !== 'durability_failed',
       pendingInteraction: session.pendingInteraction ? structuredClone(session.pendingInteraction) : null,
+      queuedInputs: [...session.followUpAdmissions.values()]
+        .filter((input) => input.state !== 'delivered')
+        .map((input) => ({ ...input })),
       isRunning: session.isRunning,
       eventCount: session.events.length,
       metadata: configuration.metadata,
@@ -1533,6 +1699,13 @@ export class CortxRuntime {
       usage: session.usage,
       runId: session.runId,
       nextEventSequence: session.nextEventSequence,
+      runtimeIncarnation: this.runtimeIncarnation,
+      runPhase: session.runPhase,
+      sessionHealth: session.sessionHealth,
+      resumable: session.resumable,
+      pendingInteraction: session.pendingInteraction ? structuredClone(session.pendingInteraction) : undefined,
+      queuedInputs: [...session.followUpAdmissions.values()].map((input) => ({ ...input })),
+      eventRetention: { ...session.eventRetention },
       metadata: session.metadata,
     };
   }
@@ -1552,7 +1725,8 @@ export class CortxRuntime {
   private restoreSessionEventHistory(
     session: ManagedRuntimeSession,
     snapshots: RuntimeEventEnvelopeSnapshot[],
-    resumableCheckpoint?: AgentRunCheckpoint,
+    interrupted: boolean,
+    resumable: boolean,
   ): void {
     const bounded = snapshots.slice(-this.maxEventsPerSession);
     session.eventEnvelopes = backfillUserMessageEnvelopes(session, bounded.map((snapshot) => ({
@@ -1563,7 +1737,7 @@ export class CortxRuntime {
       event: this.enrichEvent(session, snapshot.event),
       parent: parentAttributionFor(session, snapshot.event) ?? snapshot.parent,
     })));
-    if (resumableCheckpoint && !isTerminalEvent(session.eventEnvelopes.at(-1)?.event)) {
+    if (interrupted && !isTerminalEvent(session.eventEnvelopes.at(-1)?.event)) {
       const sequence = Math.max(session.nextEventSequence, session.eventEnvelopes.at(-1)?.sequence ?? 0) + 1;
       session.eventEnvelopes.push({
         sequence,
@@ -1573,7 +1747,11 @@ export class CortxRuntime {
         event: {
           type: 'error',
           code: 'client_error',
-          error: new Error('Previous run was interrupted. Use resume to continue from the last checkpoint, or send a new prompt to start a new turn.'),
+          error: new Error(
+            resumable
+              ? 'Previous run was interrupted. Use resume to continue from the last checkpoint, or send a new prompt to start a new turn.'
+              : 'Previous run was interrupted and cannot be resumed. Send a new prompt to start a new turn.',
+          ),
         },
       });
     }
@@ -1583,6 +1761,10 @@ export class CortxRuntime {
     session.events = session.eventEnvelopes.map((envelope) => envelope.event);
     const lastSequence = session.eventEnvelopes.at(-1)?.sequence ?? 0;
     session.nextEventSequence = Math.max(session.nextEventSequence, lastSequence);
+    session.eventRetention = {
+      oldestAvailableSequence: snapshots[0]?.sequence ?? session.eventRetention.oldestAvailableSequence,
+      lastAvailableSequence: lastSequence,
+    };
   }
 
   private eventEnvelopeSnapshot(envelope: RuntimeAgentEventEnvelope): RuntimeEventEnvelopeSnapshot {
@@ -1592,53 +1774,24 @@ export class CortxRuntime {
     };
   }
 
-  private async persistRuntimeSession(session: ManagedRuntimeSession): Promise<void> {
-    const store = this.runtimeDurableStore();
-    if (!store) return;
-    if (this.deletedSessionIds.has(session.id)) return;
-    try {
-      await store.saveRuntimeSession(this.sessionSnapshot(session));
-      if (this.deletedSessionIds.has(session.id)) {
-        await store.deleteRuntimeSession(session.id);
-      }
-    } catch (error) {
-      this.logger.warn(`Failed to persist runtime session "${session.id}": ${error instanceof Error ? error.message : String(error)}`);
-    }
+  private persistRuntimeSession(
+    session: ManagedRuntimeSession,
+    envelope?: RuntimeAgentEventEnvelope,
+    subAgent?: RuntimeSubAgentSessionSnapshot,
+  ): Promise<void> {
+    if (!this.runtimeDurableStore()) return Promise.resolve();
+    if (this.deletedSessionIds.has(session.id) || this.restoringSessionIds.has(session.id)) return Promise.resolve();
+    return this.eventJournal.commit({
+      snapshot: this.sessionSnapshot(session),
+      envelope: envelope ? this.eventEnvelopeSnapshot(envelope) : undefined,
+      subAgent,
+    });
   }
 
-  private async persistEventEnvelope(envelope: RuntimeAgentEventEnvelope): Promise<void> {
-    const store = this.runtimeDurableStore();
-    if (!store?.saveEventEnvelope) return;
-    if (this.deletedSessionIds.has(envelope.sessionId)) return;
-    try {
-      await store.saveEventEnvelope(this.eventEnvelopeSnapshot(envelope));
-      if (this.deletedSessionIds.has(envelope.sessionId)) {
-        await store.deleteEventEnvelopes?.(envelope.sessionId);
-      }
-    } catch (error) {
-      this.logger.warn(
-        `Failed to persist runtime event "${envelope.sessionId}:${envelope.sequence}": ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  private async persistSubAgentSession(session: ManagedRuntimeSession, event: AgentEvent): Promise<void> {
-    if (event.type !== 'agent_started' && event.type !== 'agent_progress' && event.type !== 'agent_completed') return;
-    const store = this.runtimeDurableStore();
-    if (!store) return;
-    if (this.deletedSessionIds.has(session.id)) return;
-    const snapshot = session.agentSessions.snapshot(event.toolCallId);
-    if (!snapshot) return;
-    try {
-      await store.saveSubAgentSession(snapshot);
-      if (this.deletedSessionIds.has(session.id)) {
-        await store.deleteSubAgentSessions(session.id);
-      }
-    } catch (error) {
-      this.logger.warn(
-        `Failed to persist sub-agent session "${event.toolCallId}": ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  private markDurabilityFailure(sessionId: string, error: Error): void {
+    const session = this.sessions.get(sessionId);
+    if (session) session.sessionHealth = 'durability_failed';
+    this.logger.warn(`Durability failed for runtime session "${sessionId}": ${error.message}`);
   }
 
   private async resolveRequestedSkillMounts(request: {

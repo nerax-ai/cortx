@@ -35,9 +35,13 @@ export function parseRuntimeSessionSnapshot(value: unknown): RuntimeSessionSnaps
           requestTools: toolArray(value.requestTools),
           toolProfile: typeof value.toolProfile === 'string' ? value.toolProfile : undefined,
           contributions: contributionArray(value.contributions),
+          pendingInteraction: parsePendingInteraction(value.pendingInteraction),
+          queuedInputs: parseQueuedInputs(value.queuedInputs),
+          eventRetention: parseEventRetention(value.eventRetention, value.nextEventSequence as number),
         } as unknown as RuntimeSessionSnapshot)
       : undefined;
   }
+  if (value.schemaVersion === 1) return migrateRuntimeSessionSnapshotV1(value);
   if (value.schemaVersion === 0) return migrateRuntimeSessionSnapshotV0(value);
   return undefined;
 }
@@ -75,6 +79,14 @@ export function serializeRuntimeEventEnvelopeSnapshot(snapshot: RuntimeEventEnve
 }
 
 function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): RuntimeSessionSnapshot | undefined {
+  return migrateLegacyRuntimeSessionSnapshot(value);
+}
+
+function migrateRuntimeSessionSnapshotV1(value: Record<string, unknown>): RuntimeSessionSnapshot | undefined {
+  return migrateLegacyRuntimeSessionSnapshot(value);
+}
+
+function migrateLegacyRuntimeSessionSnapshot(value: Record<string, unknown>): RuntimeSessionSnapshot | undefined {
   if (
     typeof value.id !== 'string' ||
     typeof value.createdAt !== 'number' ||
@@ -109,6 +121,16 @@ function migrateRuntimeSessionSnapshotV0(value: Record<string, unknown>): Runtim
     contributions: contributionArray(value.contributions),
     runId: typeof value.runId === 'number' ? value.runId : 0,
     nextEventSequence: typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
+    runtimeIncarnation: typeof value.runtimeIncarnation === 'string' ? value.runtimeIncarnation : 'legacy',
+    runPhase: parseRunPhase(value.runPhase),
+    sessionHealth: parseSessionHealth(value.sessionHealth),
+    resumable: value.resumable === true,
+    pendingInteraction: parsePendingInteraction(value.pendingInteraction),
+    queuedInputs: parseQueuedInputs(value.queuedInputs) ?? [],
+    eventRetention: parseEventRetention(
+      value.eventRetention,
+      typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
+    ),
     metadata: isObject(value.metadata) ? value.metadata : undefined,
   };
 }
@@ -191,8 +213,113 @@ function isCurrentRuntimeSessionSnapshot(value: Record<string, unknown>): boolea
     typeof value.approvalMode === 'string' &&
     isObject(value.capabilities) &&
     typeof value.runId === 'number' &&
-    typeof value.nextEventSequence === 'number'
+    typeof value.nextEventSequence === 'number' &&
+    typeof value.runtimeIncarnation === 'string' &&
+    isRunPhase(value.runPhase) &&
+    isSessionHealth(value.sessionHealth) &&
+    typeof value.resumable === 'boolean' &&
+    (value.pendingInteraction === undefined || parsePendingInteraction(value.pendingInteraction) !== undefined) &&
+    parseQueuedInputs(value.queuedInputs) !== undefined &&
+    isEventRetention(value.eventRetention)
   );
+}
+
+function parseQueuedInputs(value: unknown): RuntimeSessionSnapshot['queuedInputs'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const inputs: RuntimeSessionSnapshot['queuedInputs'] = [];
+  for (const input of value) {
+    if (
+      !isObject(input) ||
+      typeof input.inputId !== 'string' ||
+      typeof input.message !== 'string' ||
+      typeof input.acceptedAt !== 'number' ||
+      typeof input.admissionSequence !== 'number' ||
+      (input.state !== 'queued' && input.state !== 'delivered' && input.state !== 'interrupted')
+    ) {
+      return undefined;
+    }
+    inputs.push({
+      inputId: input.inputId,
+      message: input.message,
+      acceptedAt: input.acceptedAt,
+      admissionSequence: input.admissionSequence,
+      state: input.state,
+    });
+  }
+  return inputs;
+}
+
+function parsePendingInteraction(value: unknown): RuntimeSessionSnapshot['pendingInteraction'] {
+  if (value === undefined) return undefined;
+  if (
+    !isObject(value) ||
+    typeof value.requestId !== 'string' ||
+    (value.kind !== 'question' && value.kind !== 'approval') ||
+    typeof value.prompt !== 'string' ||
+    typeof value.runId !== 'number' ||
+    typeof value.runtimeIncarnation !== 'string' ||
+    typeof value.createdAt !== 'number'
+  ) {
+    return undefined;
+  }
+  if (value.context !== undefined && !isObject(value.context)) return undefined;
+  if (value.allowedResponses !== undefined && !stringArray(value.allowedResponses)) return undefined;
+  return {
+    requestId: value.requestId,
+    kind: value.kind,
+    prompt: value.prompt,
+    context: value.context,
+    allowedResponses: stringArray(value.allowedResponses),
+    runId: value.runId,
+    runtimeIncarnation: value.runtimeIncarnation,
+    createdAt: value.createdAt,
+  };
+}
+
+function parseEventRetention(value: unknown, fallbackLastSequence: number): RuntimeSessionSnapshot['eventRetention'] {
+  if (isEventRetention(value)) {
+    return {
+      oldestAvailableSequence: value.oldestAvailableSequence,
+      lastAvailableSequence: value.lastAvailableSequence,
+    };
+  }
+  return {
+    oldestAvailableSequence: fallbackLastSequence > 0 ? 1 : null,
+    lastAvailableSequence: fallbackLastSequence,
+  };
+}
+
+function isEventRetention(value: unknown): value is RuntimeSessionSnapshot['eventRetention'] {
+  if (!isObject(value)) return false;
+  const oldest = value.oldestAvailableSequence;
+  const last = value.lastAvailableSequence;
+  return (
+    (oldest === null || (typeof oldest === 'number' && oldest >= 0)) &&
+    typeof last === 'number' &&
+    last >= 0 &&
+    (oldest === null || oldest <= last)
+  );
+}
+
+function parseRunPhase(value: unknown): RuntimeSessionSnapshot['runPhase'] {
+  return isRunPhase(value) ? value : 'idle';
+}
+
+function isRunPhase(value: unknown): value is RuntimeSessionSnapshot['runPhase'] {
+  return value === 'idle' ||
+    value === 'running' ||
+    value === 'waiting_user' ||
+    value === 'waiting_approval' ||
+    value === 'aborting' ||
+    value === 'interrupted';
+}
+
+function parseSessionHealth(value: unknown): RuntimeSessionSnapshot['sessionHealth'] {
+  return isSessionHealth(value) ? value : 'healthy';
+}
+
+function isSessionHealth(value: unknown): value is RuntimeSessionSnapshot['sessionHealth'] {
+  return value === 'healthy' || value === 'run_failed' || value === 'durability_failed';
 }
 
 function isCurrentRuntimeSubAgentSessionSnapshot(value: Record<string, unknown>): boolean {

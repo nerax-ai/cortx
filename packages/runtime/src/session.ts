@@ -1,4 +1,4 @@
-import type { AgentDoneUsage, AgentEvent, ContextUsageSource, CortxContributionConfig, LanguageMessage, Tool } from '@cortx/sdk';
+import type { AgentDoneUsage, AgentEvent, ContextUsageSource, CortxContributionConfig, LanguageMessage, RuntimeAgentStreamEnvelope, Tool } from '@cortx/sdk';
 import type { Cortx } from '@cortx/core';
 import type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 import type { SubAgentSessionStore } from './capabilities/sub-agent/session-store.js';
@@ -26,6 +26,12 @@ export interface RuntimeFollowUpAdmission {
   message: string;
   acceptedAt: number;
   admissionSequence: number;
+  state: 'queued' | 'delivered' | 'interrupted';
+}
+
+export interface RuntimeEventRetention {
+  oldestAvailableSequence: number | null;
+  lastAvailableSequence: number;
 }
 
 export interface RuntimePendingInteraction {
@@ -64,11 +70,13 @@ export interface RuntimeSessionInfo {
   usage?: AgentDoneUsage;
   runtimeIncarnation: string;
   projectionAsOfSequence: number;
+  eventRetention: RuntimeEventRetention;
   runPhase: RuntimeRunPhase;
   sessionHealth: RuntimeSessionHealth;
   resumable: boolean;
   acceptsPrompt: boolean;
   pendingInteraction: RuntimePendingInteraction | null;
+  queuedInputs: RuntimeFollowUpAdmission[];
   /** Compatibility view. Prefer runPhase. */
   isRunning: boolean;
   eventCount: number;
@@ -146,6 +154,7 @@ export interface ManagedRuntimeSession {
   usage?: AgentDoneUsage;
   subscribers: Set<(event: AgentEvent) => void>;
   envelopeSubscribers: Set<(event: import('@cortx/sdk').RuntimeAgentEventEnvelope) => void>;
+  streamSubscribers: Set<(event: RuntimeAgentStreamEnvelope) => void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   isRunning: boolean;
   runPhase: RuntimeRunPhase;
@@ -156,6 +165,8 @@ export interface ManagedRuntimeSession {
   runPromise?: Promise<void>;
   runId: number;
   nextEventSequence: number;
+  streamOffset: number;
+  eventRetention: RuntimeEventRetention;
   agentSessions: SubAgentSessionStore;
   contextMetadata: RuntimeSessionContextMetadata;
   metadata?: RuntimeSessionMetadata;

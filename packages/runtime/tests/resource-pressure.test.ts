@@ -109,6 +109,12 @@ function sessionSnapshot(id: string, durableRoot: string): RuntimeSessionSnapsho
     capabilities: { skills: false, subAgents: false, approval: false },
     runId: 7,
     nextEventSequence: 11,
+    runtimeIncarnation: 'fixture',
+    runPhase: 'idle',
+    sessionHealth: 'healthy',
+    resumable: false,
+    queuedInputs: [],
+    eventRetention: { oldestAvailableSequence: 1, lastAvailableSequence: 11 },
   };
 }
 
@@ -177,12 +183,14 @@ describe('runtime resource pressure guardrails', () => {
 
     const alphaEnvelopes = runtime.getEventEnvelopeHistory(alpha.id);
     const betaEnvelopes = runtime.getEventEnvelopeHistory(beta.id);
-    expect(alphaEnvelopes).toHaveLength(6);
-    expect(betaEnvelopes).toHaveLength(6);
+    expect(alphaEnvelopes).toHaveLength(5);
+    expect(betaEnvelopes).toHaveLength(5);
     expect(alphaEnvelopes.every((event) => event.sessionId === alpha.id)).toBe(true);
     expect(betaEnvelopes.every((event) => event.sessionId === beta.id)).toBe(true);
     expect(alphaEnvelopes.map((event) => event.event.type)).toContain('done');
     expect(betaEnvelopes.map((event) => event.event.type)).toContain('done');
+    expect(alphaEnvelopes.some((event) => event.event.type === 'text_delta')).toBe(false);
+    expect(betaEnvelopes.some((event) => event.event.type === 'text_delta')).toBe(false);
     await runtime.close();
   });
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,6 +54,12 @@ function sessionSnapshot(id: string): RuntimeSessionSnapshot {
     capabilities: { skills: false, subAgents: false, approval: false },
     runId: 1,
     nextEventSequence: 3,
+    runtimeIncarnation: 'fixture',
+    runPhase: 'idle',
+    sessionHealth: 'healthy',
+    resumable: false,
+    queuedInputs: [],
+    eventRetention: { oldestAvailableSequence: 1, lastAvailableSequence: 3 },
     metadata: { source: 'test' },
   };
 }
@@ -102,6 +108,20 @@ describe('FileDurableRunStore', () => {
       state: { terminal: false },
     });
     expect((await second.listCheckpoints()).map((item) => item.sessionId)).toEqual(['session-a']);
+    first.close();
+  });
+
+  test('allows only one writer to own a durable root until it closes', async () => {
+    const first = new FileDurableRunStore(tmpDir);
+    const second = new FileDurableRunStore(tmpDir);
+
+    await first.saveRuntimeSession(sessionSnapshot('first'));
+    await expect(second.saveRuntimeSession(sessionSnapshot('second'))).rejects.toThrow(/already owned/i);
+
+    first.close();
+    await second.saveRuntimeSession(sessionSnapshot('second'));
+    expect(await second.loadRuntimeSession('second')).toMatchObject({ id: 'second' });
+    second.close();
   });
 
   test('persists runtime sessions and sub-agent snapshots', async () => {
@@ -204,6 +224,38 @@ describe('FileDurableRunStore', () => {
     ]);
   });
 
+  test('migrates schema v1 sessions to v2 projection defaults', async () => {
+    const sessionsDir = join(tmpDir, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, `${encodedId('v1-session')}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'v1-session',
+        createdAt: 1,
+        lastActivityAt: 2,
+        workingDirectory: tmpDir,
+        model: 'test',
+        toolMode: 'none',
+        approvalMode: 'deny',
+        capabilities: { skills: false, subAgents: false, approval: false },
+        runId: 3,
+        nextEventSequence: 4,
+      }),
+      'utf8',
+    );
+
+    expect(await new FileDurableRunStore(tmpDir).loadRuntimeSession('v1-session')).toMatchObject({
+      schemaVersion: RUNTIME_SESSION_SNAPSHOT_SCHEMA_VERSION,
+      runtimeIncarnation: 'legacy',
+      runPhase: 'idle',
+      sessionHealth: 'healthy',
+      resumable: false,
+      queuedInputs: [],
+      eventRetention: { oldestAvailableSequence: 1, lastAvailableSequence: 4 },
+    });
+  });
+
   test('prunes durable event envelopes to the configured per-session limit', async () => {
     const store = new FileDurableRunStore({ root: tmpDir, maxEventEnvelopesPerSession: 2 });
 
@@ -213,6 +265,10 @@ describe('FileDurableRunStore', () => {
     await store.saveEventEnvelope(eventSnapshot('session-a', 4));
 
     expect((await store.listEventEnvelopes('session-a')).map((event) => event.sequence)).toEqual([3, 4]);
+    expect(await store.getEventEnvelopeRetention('session-a')).toEqual({
+      oldestAvailableSequence: 3,
+      lastAvailableSequence: 4,
+    });
   });
 
   test('serializes sub-agent snapshot writes so completed status wins', async () => {
@@ -240,15 +296,17 @@ describe('FileDurableRunStore', () => {
     ]);
   });
 
-  test('skips invalid persisted records without blocking valid ones', async () => {
+  test('fails loud on invalid persisted records without modifying the source files', async () => {
     const store = new FileDurableRunStore(tmpDir);
     await store.saveRuntimeSession(sessionSnapshot('valid'));
     const sessionsDir = join(tmpDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
-    writeFileSync(join(sessionsDir, 'invalid.json'), '{', 'utf8');
+    const invalidPath = join(sessionsDir, 'invalid.json');
+    writeFileSync(invalidPath, '{', 'utf8');
     writeFileSync(join(sessionsDir, 'wrong-schema.json'), JSON.stringify({ schemaVersion: 999 }), 'utf8');
 
-    expect((await store.listRuntimeSessions()).map((item) => item.id)).toEqual(['valid']);
+    await expect(store.listRuntimeSessions()).rejects.toThrow(/invalid durable json/i);
+    expect(readFileSync(invalidPath, 'utf8')).toBe('{');
   });
 
   test('runtime store guard requires the full host-level contract', () => {

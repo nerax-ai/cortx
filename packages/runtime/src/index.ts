@@ -115,6 +115,7 @@ export type {
   RuntimeSessionMetadata,
   RuntimeSessionUpdateRequest,
   RuntimeApprovalMode,
+  RuntimeEventRetention,
   RuntimeFollowUpAdmission,
   RuntimePendingInteraction,
   RuntimeRunPhase,

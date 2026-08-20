@@ -12,6 +12,7 @@ import {
   type AgentEvent,
   type CortxContributionConfig,
   type RuntimeAgentEventEnvelope,
+  type RuntimeAgentStreamEnvelope,
   type SkillInfo,
 } from '@cortx/sdk';
 import {
@@ -136,7 +137,7 @@ function serializeEvent(event: AgentEvent): string {
   return JSON.stringify(event);
 }
 
-function serializeEnvelope(envelope: RuntimeAgentEventEnvelope): string {
+function serializeEnvelope(envelope: RuntimeAgentStreamEnvelope): string {
   if (envelope.event.type === 'error' && envelope.event.error instanceof Error) {
     return JSON.stringify({
       ...envelope,
@@ -1446,18 +1447,21 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
 
       try {
         if (useEnvelope) {
-          const buffered: RuntimeAgentEventEnvelope[] = [];
           let live = false;
           let writeQueue = Promise.resolve();
-          const writeEnvelope = (event: RuntimeAgentEventEnvelope) =>
-            stream.writeSSE({ data: serializeEnvelope(event), id: String(event.sequence) });
-          const enqueueEnvelope = (event: RuntimeAgentEventEnvelope) => {
+          const buffered: RuntimeAgentStreamEnvelope[] = [];
+          const writeEnvelope = (event: RuntimeAgentStreamEnvelope) =>
+            stream.writeSSE({
+              data: serializeEnvelope(event),
+              id: 'sequence' in event ? `e:${event.sequence}` : `f:${event.runId}:${event.offset}`,
+            });
+          const enqueueEnvelope = (event: RuntimeAgentStreamEnvelope) => {
             writeQueue = writeQueue.then(() => writeEnvelope(event)).catch(() => undefined);
           };
 
-          unsub = runtime.subscribeEnvelopes(
+          unsub = runtime.subscribeStream(
             id,
-            (event: RuntimeAgentEventEnvelope) => {
+            (event: RuntimeAgentStreamEnvelope) => {
               if (live) {
                 enqueueEnvelope(event);
               } else {
@@ -1479,9 +1483,9 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
 
           live = true;
           for (const event of buffered) {
-            if (event.sequence <= lastSequence) continue;
+            if ('sequence' in event && event.sequence <= lastSequence) continue;
             await writeEnvelope(event);
-            lastSequence = Math.max(lastSequence, event.sequence);
+            if ('sequence' in event) lastSequence = Math.max(lastSequence, event.sequence);
           }
           await writeQueue;
           await stream.writeSSE({ data: '{}' });

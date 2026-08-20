@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LanguageClient } from '@synax-ai/core';
 import type { Tool } from '@cortx/sdk';
-import { CortxRuntime } from '../src/index';
+import { CortxRuntime, FileDurableRunStore } from '../src/index';
 
 let tmpDir: string;
 
@@ -97,6 +97,35 @@ describe('runtime session projection', () => {
 
     gate.resolve();
     await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
+    await runtime.close();
+  });
+
+  test('projects durability failure and refuses later mutations', async () => {
+    const store = new FileDurableRunStore(join(tmpDir, 'durable-failure'));
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      durableStore: store,
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'durability-failure' });
+    store.saveEventEnvelope = async () => { throw new Error('disk unavailable'); };
+
+    await expect(runtime.prompt(session.id, 'must be durable')).rejects.toMatchObject({ kind: 'runtime_failure' });
+    expect(runtime.getSession(session.id)).toMatchObject({
+      sessionHealth: 'durability_failed',
+      acceptsPrompt: false,
+      runPhase: 'interrupted',
+    });
+    await expect(runtime.prompt(session.id, 'retry')).rejects.toMatchObject({ kind: 'runtime_failure' });
+    await runtime.deleteSession(session.id);
     await runtime.close();
   });
 
