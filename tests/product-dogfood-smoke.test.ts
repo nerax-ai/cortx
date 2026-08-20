@@ -257,7 +257,10 @@ describe('product dogfood smoke', () => {
       expect((await web.api.listAgentSpecs()).map((spec) => spec.name)).toContain('pack-reviewer');
 
       await tuiB.abort(tuiSession.id);
-      await tuiB.resume(tuiSession.id);
+      await expect(tuiB.resume(tuiSession.id)).rejects.toMatchObject({
+        status: 409,
+        kind: 'conflict',
+      });
       expect((await tuiB.getSession(tuiSession.id)).workingDirectory).toBe(rootB);
       expect(
         transportRequests.some(
