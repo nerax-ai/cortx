@@ -47,6 +47,19 @@ export function errorResponse(error: unknown): {
   return { body: { error: message }, status: 500 as ContentfulStatusCode };
 }
 
+export async function respondJson(
+  c: Context,
+  handler: () => unknown | Promise<unknown>,
+  status: 200 | 201 = 200,
+): Promise<Response> {
+  try {
+    return c.json(await handler(), status);
+  } catch (error) {
+    const response = errorResponse(error);
+    return c.json(response.body, response.status);
+  }
+}
+
 export async function readOptionalJson(c: Context): Promise<Record<string, unknown>> {
   const text = await c.req.text();
   if (!text.trim()) return {};

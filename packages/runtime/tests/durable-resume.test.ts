@@ -58,7 +58,8 @@ function durableProjection(lastAvailableSequence: number) {
 
 describe('runtime durable resume', () => {
   test('new runtime instance resumes a non-terminal checkpoint by stable session id', async () => {
-    const durableStore = new MemoryDurableRunStore();
+    const durableDir = join(tmpDir, 'stable-session-durable');
+    const firstStore = new FileDurableRunStore(durableDir);
     const first = new CortxRuntime({
       language: neverFinishingLanguage(),
       model: 'test',
@@ -66,7 +67,7 @@ describe('runtime durable resume', () => {
       allowedWorkspaceRoots: [tmpDir],
       toolMode: 'none',
       capabilities: { skills: false, subAgents: false, approval: false },
-      durableStore,
+      durableStore: firstStore,
     });
     const firstSession = await first.createSession({ id: 'stable-session' });
     const firstEvents: AgentEvent[] = [];
@@ -75,13 +76,14 @@ describe('runtime durable resume', () => {
     await first.prompt(firstSession.id, 'resume me');
     await waitForEvent(firstEvents, 'turn_start');
 
-    const checkpoint = durableStore.loadCheckpoint('stable-session');
+    const checkpoint = await firstStore.loadCheckpoint('stable-session');
     expect(checkpoint).toMatchObject({
       sessionId: 'stable-session',
       runId: 1,
       state: { terminal: false },
     });
 
+    firstStore.releaseOwnership();
     const second = new CortxRuntime({
       language: textLanguage('resumed'),
       model: 'test',
@@ -89,13 +91,20 @@ describe('runtime durable resume', () => {
       allowedWorkspaceRoots: [tmpDir],
       toolMode: 'none',
       capabilities: { skills: false, subAgents: false, approval: false },
-      durableStore,
+      durableStore: new FileDurableRunStore(durableDir),
     });
-    const secondSession = await second.createSession({ id: 'stable-session' });
+    const restored = await second.restoreDurableSessions({ autoResume: false });
+    expect(restored).toEqual([
+      expect.objectContaining({
+        id: 'stable-session',
+        runPhase: 'interrupted',
+        resumable: true,
+      }),
+    ]);
     const secondEvents: AgentEvent[] = [];
-    second.subscribe(secondSession.id, (event) => secondEvents.push(event));
+    second.subscribe('stable-session', (event) => secondEvents.push(event));
 
-    await second.resume(secondSession.id);
+    await second.resume('stable-session');
     await waitForEvent(secondEvents, 'done');
 
     expect(secondEvents.find((event) => event.type === 'text')).toMatchObject({ content: 'resumed' });
@@ -578,7 +587,7 @@ describe('runtime durable resume', () => {
     await first.close();
   });
 
-  test('unsupported checkpoint schema emits a typed client error event', async () => {
+  test('does not expose resume for an idle session with an unsupported checkpoint schema', async () => {
     const durableStore = new MemoryDurableRunStore();
     durableStore.saveCheckpoint({
       schemaVersion: 999 as never,
@@ -603,14 +612,8 @@ describe('runtime durable resume', () => {
       durableStore,
     });
     const session = await runtime.createSession({ id: 'unsupported-session' });
-    const events: AgentEvent[] = [];
-    runtime.subscribe(session.id, (event) => events.push(event));
-
-    await runtime.resume(session.id);
-    const error = await waitForEvent(events, 'error');
-
-    expect(error).toMatchObject({ type: 'error', code: 'client_error' });
-    expect(error.type === 'error' ? error.error.message : '').toContain('Unsupported checkpoint schema version');
+    await expect(runtime.resume(session.id)).rejects.toMatchObject({ kind: 'conflict', status: 409 });
+    expect(runtime.getSession(session.id)).toMatchObject({ runPhase: 'idle', resumable: false });
     await runtime.close();
   });
 });

@@ -272,6 +272,7 @@ export function DesktopWorkspace({
         toolMode={toolMode}
         approvalMode={approvalMode}
         canChangeModes={session ? session.runPhase === 'idle' && session.sessionHealth !== 'durability_failed' : state.status === 'idle'}
+        canResume={Boolean(session?.resumable)}
         onSend={onSend}
         onAbort={onAbort}
         onResume={onResume}

@@ -61,6 +61,7 @@ interface PromptInputProps {
   contextUsage?: ContextUsageSummary;
   tokenUsage?: TokenUsage;
   canChangeModes: boolean;
+  canResume?: boolean;
   onAbort: () => void;
   onResume: () => void;
   onSteerQueuedPrompt: (id: string) => void;
@@ -572,6 +573,7 @@ export function PromptInput({
   contextUsage,
   tokenUsage,
   canChangeModes,
+  canResume = false,
   onAbort,
   onResume,
   onSteerQueuedPrompt,
@@ -616,7 +618,7 @@ export function PromptInput({
       id: 'resume',
       label: '/resume',
       detail: 'Resume after an error',
-      disabled: status !== 'error',
+      disabled: !canResume,
       run: onResume,
     },
     ...toolModeOptions.map((option) => ({
@@ -656,6 +658,7 @@ export function PromptInput({
     })),
   ], [
     canChangeModes,
+    canResume,
     onAbort,
     onLaunchAgentSpec,
     onApprovalModeChange,

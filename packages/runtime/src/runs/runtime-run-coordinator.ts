@@ -83,7 +83,6 @@ export class RuntimeRunCoordinator {
         maxIterations: session.maxIterations,
         contextWindowTokens: session.contextWindowTokens,
         contextWindowSource: session.contextWindowSource,
-        toolMode: session.toolMode,
         toolProfile: session.toolProfile,
         approvalMode: session.approvalMode,
         requestedCapabilities: session.requestedCapabilities,

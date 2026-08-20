@@ -1,5 +1,6 @@
 import type { EffectDisposer } from '@nerax-ai/plugin';
 import type { CortxHostScopeKind } from '@cortx/sdk';
+import { asError } from './errors.js';
 
 type OwnedEffect = {
   dispose: EffectDisposer;
@@ -191,8 +192,4 @@ function withCleanupTimeout(work: Promise<void>, timeoutMs: number, label: strin
 function positiveTimeout(value: number): number {
   if (!Number.isFinite(value) || value <= 0) throw new Error('cleanupTimeoutMs must be positive');
   return value;
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

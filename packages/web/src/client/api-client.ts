@@ -205,6 +205,6 @@ export function isRuntimeEnvelope(value: unknown): value is RuntimeAgentEventEnv
     Boolean(record.event && typeof record.event === 'object');
 }
 
-function sessionPath(sessionId: string): string {
+export function sessionPath(sessionId: string): string {
   return `/sessions/${encodeURIComponent(sessionId)}`;
 }

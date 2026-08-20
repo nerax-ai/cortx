@@ -8,12 +8,12 @@ import {
 } from '@cortx/runtime';
 import {
   assertOptionalString,
-  errorResponse,
   parseOptionalTimeout,
   readMessage,
   readOptionalJson,
   readRuntimeCommandOptions,
   requireString,
+  respondJson,
 } from '../http.js';
 
 export interface SessionRouteDependencies {
@@ -44,19 +44,19 @@ export const SESSION_ENDPOINT_POLICIES = [
 export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): void {
   const { runtime } = deps;
 
-  app.post('/sessions', async (c) => respond(c, async () => {
+  app.post('/sessions', async (c) => respondJson(c, async () => {
     const body = await readOptionalJson(c);
     const session = await runtime.createSession(await deps.buildCreateRequest(c, body));
     return { sessionId: session.id, session };
   }, 201));
 
-  app.get('/sessions', async (c) => respond(c, async () => ({ sessions: await deps.listSessions(c) })));
+  app.get('/sessions', async (c) => respondJson(c, async () => ({ sessions: await deps.listSessions(c) })));
 
-  app.get('/sessions/:id', async (c) => respond(c, async () => ({
+  app.get('/sessions/:id', async (c) => respondJson(c, async () => ({
     session: await deps.authorizeSession(c, c.req.param('id')),
   })));
 
-  app.patch('/sessions/:id', async (c) => respond(c, async () => {
+  app.patch('/sessions/:id', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -68,25 +68,25 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { session };
   }));
 
-  app.get('/sessions/:id/skills', async (c) => respond(c, async () => {
+  app.get('/sessions/:id/skills', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     return { skills: (await runtime.listSessionSkills(id)).map(deps.serializeSkill) };
   }));
 
-  app.get('/sessions/:id/children', async (c) => respond(c, async () => {
+  app.get('/sessions/:id/children', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     return { children: runtime.listChildSessions(id).map(deps.serializeChild) };
   }));
 
-  app.get('/sessions/:id/children/:toolCallId', async (c) => respond(c, async () => {
+  app.get('/sessions/:id/children/:toolCallId', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     return { child: deps.serializeChild(runtime.getChildSession(id, c.req.param('toolCallId'))) };
   }));
 
-  app.post('/sessions/:id/children/:toolCallId/abort', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/children/:toolCallId/abort', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -94,7 +94,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { child: deps.serializeChild(await runtime.abortChild(id, c.req.param('toolCallId'), reason)) };
   }));
 
-  app.get('/sessions/:id/children/:toolCallId/wait', async (c) => respond(c, async () => {
+  app.get('/sessions/:id/children/:toolCallId/wait', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const child = await runtime.waitForChild(
@@ -105,7 +105,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { child: deps.serializeChild(child) };
   }));
 
-  app.post('/sessions/:id/prompt', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/prompt', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -113,7 +113,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, session: runtime.getSession(id) };
   }));
 
-  app.post('/sessions/:id/steer', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/steer', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -121,7 +121,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, session: runtime.getSession(id) };
   }));
 
-  app.post('/sessions/:id/follow-up', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/follow-up', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -139,7 +139,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, admission, session: runtime.getSession(id) };
   }));
 
-  app.post('/sessions/:id/follow-up/:inputId/cancel', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/follow-up/:inputId/cancel', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -156,7 +156,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, session: runtime.getSession(id) };
   }));
 
-  app.post('/sessions/:id/resume', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/resume', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -164,7 +164,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, session: runtime.getSession(id) };
   }));
 
-  app.post('/sessions/:id/abort', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/abort', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -172,7 +172,7 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, session: runtime.getSession(id) };
   }));
 
-  app.post('/sessions/:id/answer', async (c) => respond(c, async () => {
+  app.post('/sessions/:id/answer', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     const body = await readOptionalJson(c);
@@ -185,23 +185,10 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
     return { ok: true, session: runtime.getSession(id) };
   }));
 
-  app.delete('/sessions/:id', async (c) => respond(c, async () => {
+  app.delete('/sessions/:id', async (c) => respondJson(c, async () => {
     const id = c.req.param('id');
     await deps.authorizeSession(c, id);
     await runtime.deleteSession(id);
     return { ok: true };
   }));
-}
-
-async function respond(
-  c: Context,
-  handler: () => unknown | Promise<unknown>,
-  status: 200 | 201 = 200,
-): Promise<Response> {
-  try {
-    return c.json(await handler(), status);
-  } catch (error) {
-    const response = errorResponse(error);
-    return c.json(response.body, response.status);
-  }
 }

@@ -752,7 +752,7 @@ interface RuntimeSessionUpdateRequest {
 错误：
 
 - `toolCallId` 或 `response` 不是字符串：`invalid_request`。
-- 没有匹配的 pending question：`invalid_request`。
+- 没有匹配的 pending question，或请求已被回答/过期：`conflict`（HTTP 409）。
 
 说明：
 

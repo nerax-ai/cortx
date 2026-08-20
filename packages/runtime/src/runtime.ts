@@ -468,10 +468,7 @@ export class CortxRuntime {
       onFailure: (sessionId, error) => this.markDurabilityFailure(sessionId, error),
       onRetention: (sessionId, retention) => {
         const session = this.sessionRegistry.get(sessionId);
-        if (session) {
-          session.eventRetention = retention;
-          this.sessionRegistry.changed(session);
-        }
+        if (session) session.eventRetention = retention;
       },
     });
     this.skillPackRegistryPath = options.skillPackRegistryPath;
@@ -525,7 +522,6 @@ export class CortxRuntime {
         maxIterations,
         contextWindowTokens,
         contextWindowSource,
-        toolMode,
         toolProfile,
         approvalMode,
         requestedCapabilities,
@@ -1031,6 +1027,13 @@ export class CortxRuntime {
   private async resumeNow(sessionId: string): Promise<void> {
     const session = this.requireSession(sessionId);
     this.assertSessionMutable(session);
+    if (session.runPhase !== 'interrupted' || !session.resumable) {
+      throw new RuntimeError('conflict', 'Session is not resumable', {
+        sessionId,
+        runPhase: session.runPhase,
+        resumable: session.resumable,
+      });
+    }
     await this.runCoordinator.start(session, () => session.cortx.continue());
   }
 
@@ -1255,7 +1258,6 @@ export class CortxRuntime {
       maxIterations: session.maxIterations,
       contextWindowTokens: configuration.contextWindowTokens,
       contextWindowSource: configuration.contextWindowSource,
-      toolMode: configuration.toolMode,
       toolProfile: configuration.toolProfile,
       approvalMode: configuration.approvalMode,
       requestedCapabilities: configuration.requestedCapabilities,
@@ -1344,7 +1346,6 @@ export class CortxRuntime {
         const subAgent = session.agentSessions.snapshot(enrichedEvent.toolCallId);
         if (subAgent) await this.persistRuntimeSession(session, undefined, subAgent);
       }
-      this.sessionRegistry.changed(session);
       return;
     }
     const envelope: RuntimeAgentEventEnvelope = {
@@ -1366,16 +1367,22 @@ export class CortxRuntime {
     if (session.eventEnvelopes.length > this.maxEventsPerSession) {
       session.eventEnvelopes.splice(0, session.eventEnvelopes.length - this.maxEventsPerSession);
     }
-    session.eventRetention = {
-      oldestAvailableSequence: session.eventRetention.oldestAvailableSequence ?? envelope.sequence,
-      lastAvailableSequence: envelope.sequence,
-    };
+    session.eventRetention = this.runtimeDurableStore()
+      ? {
+          oldestAvailableSequence: session.eventRetention.oldestAvailableSequence ?? envelope.sequence,
+          lastAvailableSequence: envelope.sequence,
+        }
+      : {
+          oldestAvailableSequence: session.eventEnvelopes[0]?.sequence ?? null,
+          lastAvailableSequence: session.eventEnvelopes.at(-1)?.sequence ?? 0,
+        };
     const subAgentSnapshot =
       enrichedEvent.type === 'agent_started' ||
       enrichedEvent.type === 'agent_completed'
         ? session.agentSessions.snapshot(enrichedEvent.toolCallId)
         : undefined;
     const persistence = this.persistRuntimeSession(session, envelope, subAgentSnapshot);
+    await persistence;
     this.sessionRegistry.changed(session);
     for (const subscriber of session.subscribers) {
       this.safeNotify(() => subscriber(enrichedEvent));
@@ -1386,7 +1393,6 @@ export class CortxRuntime {
     for (const subscriber of session.streamSubscribers) {
       this.safeNotify(() => subscriber(envelope));
     }
-    await persistence;
   }
 
   private resetIdleTimer(session: ManagedRuntimeSession): void {

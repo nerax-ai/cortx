@@ -4,7 +4,7 @@ import type {
   RuntimeAgentStreamFrameEnvelope,
 } from '@cortx/sdk';
 import { AgentStore, type AgentStoreEventInput } from '@cortx/store';
-import { CortxApiClient, isRuntimeEnvelope } from '../client/api-client';
+import { CortxApiClient, CortxApiError, isRuntimeEnvelope, sessionPath } from '../client/api-client';
 import { FetchSseTransport, type SseSubscription } from '../client/sse-transport';
 import type {
   SessionControllerSnapshot,
@@ -51,6 +51,7 @@ export class SessionController {
   #storeUnsubscribe?: () => void;
   #lifecycleGeneration = 0;
   #activeGeneration = 0;
+  #summaryGeneration = 0;
   #started = false;
   #closed = false;
   #loadedEnvelopes: RuntimeAgentEventEnvelope[] = [];
@@ -316,17 +317,21 @@ export class SessionController {
 
   async loadOlderHistory(): Promise<void> {
     const sessionId = this.#snapshot.activeSessionId;
+    const generation = this.#activeGeneration;
     const before = this.#loadedEnvelopes[0]?.sequence;
     if (!sessionId || before === undefined || this.#snapshot.history.loadingOlder) return;
     this.#patch({ history: { ...this.#snapshot.history, loadingOlder: true } });
     try {
       const response = await this.api.getEventHistory(sessionId, { before, limit: HISTORY_PAGE_SIZE });
+      if (!this.#isCurrent(generation, sessionId)) return;
       const older = normalizeEnvelopes(response.events, sessionId);
       this.#loadedEnvelopes = mergeEnvelopes(older, this.#loadedEnvelopes).slice(-MAX_HISTORY_WINDOW);
       this.#replayHistory(this.#requireActiveSession());
       this.#patch({ history: historyState(sessionId, this.#loadedEnvelopes, response, false) });
     } finally {
-      this.#patch({ history: { ...this.#snapshot.history, loadingOlder: false } });
+      if (this.#isCurrent(generation, sessionId)) {
+        this.#patch({ history: { ...this.#snapshot.history, loadingOlder: false } });
+      }
     }
   }
 
@@ -336,6 +341,7 @@ export class SessionController {
     this.#started = false;
     this.#lifecycleGeneration++;
     this.#activeGeneration++;
+    this.#summaryGeneration++;
     clearTimeout(this.#reconnectTimer);
     clearTimeout(this.#summaryReconnectTimer);
     this.#stopSessionStream();
@@ -351,22 +357,37 @@ export class SessionController {
   }
 
   async #startSummaryFeed(): Promise<void> {
+    const generation = ++this.#summaryGeneration;
     clearTimeout(this.#summaryReconnectTimer);
     this.#summaryStream?.close();
     const baseline = await this.api.getSessionBaseline();
-    if (this.#closed) return;
+    if (!this.#isSummaryCurrent(generation)) return;
+    const missing = await Promise.all(baseline.sessions
+      .filter((summary) => !this.#sessions.has(summary.id))
+      .map(async (summary) => {
+        try {
+          return normalizeSession(await this.api.getSession(summary.id));
+        } catch (error) {
+          if (error instanceof CortxApiError && error.status === 404) return undefined;
+          throw error;
+        }
+      }));
+    if (!this.#isSummaryCurrent(generation)) return;
     const visibleIds = new Set(baseline.sessions.map((summary) => summary.id));
     for (const id of [...this.#sessions.keys()]) {
       if (!visibleIds.has(id)) this.#sessions.delete(id);
     }
+    for (const session of missing) if (session) this.#sessions.set(session.id, session);
     for (const summary of baseline.sessions) this.#mergeSummary(summary);
     this.#patch({ runtimeIncarnation: baseline.runtimeIncarnation, sessions: this.#sortedSessions() });
     this.#summaryStream = this.transport.connect(
       `/sessions/feed?after=${encodeURIComponent(baseline.cursor)}`,
       {
-        onFrame: (value) => this.#handleSummaryFrame(value),
+        onFrame: (value) => {
+          if (this.#isSummaryCurrent(generation)) this.#handleSummaryFrame(value);
+        },
         onDisconnect: () => {
-          if (this.#closed) return;
+          if (!this.#isSummaryCurrent(generation)) return;
           clearTimeout(this.#summaryReconnectTimer);
           this.#summaryReconnectTimer = setTimeout(() => {
             if (!this.#closed) {
@@ -406,6 +427,10 @@ export class SessionController {
         void this.api.getSession(sessionId).then((session) => this.#acceptProjection(session)).catch(() => undefined);
       }
     }
+  }
+
+  #isSummaryCurrent(generation: number): boolean {
+    return !this.#closed && generation === this.#summaryGeneration;
   }
 
   #openSessionStream(generation: number, sessionId: string): void {
@@ -778,10 +803,6 @@ function historyState(
 
 function latestSession(sessions: WebRuntimeSessionInfo[]): WebRuntimeSessionInfo | undefined {
   return [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
-}
-
-function sessionPath(sessionId: string): string {
-  return `/sessions/${encodeURIComponent(sessionId)}`;
 }
 
 function mutationKey(sessionId: string, ...parts: string[]): string {

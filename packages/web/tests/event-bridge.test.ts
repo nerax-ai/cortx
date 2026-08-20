@@ -90,6 +90,40 @@ describe('SessionController', () => {
     controller.close();
   });
 
+  test('ignores older-history responses after the active session changes', async () => {
+    const api = new FakeApi([session('a'), session('b')]);
+    const olderA = deferred<WebEventHistoryResponse>();
+    api.history = (sessionId, options) => {
+      if (sessionId === 'a' && options.before === 2) return olderA.promise;
+      if (sessionId === 'a') return history([envelope('a', 2, { type: 'text', content: 'current-a' })]);
+      return history([envelope('b', 1, { type: 'text', content: 'current-b' })]);
+    };
+    const controller = new SessionController({ api, transport: new FakeTransport() });
+    await controller.start();
+
+    const loadingOlder = controller.loadOlderHistory();
+    await waitFor(() => controller.getSnapshot().history.loadingOlder);
+    await controller.activate('b');
+    olderA.resolve(history([envelope('a', 1, { type: 'text', content: 'older-a' })]));
+    await loadingOlder;
+
+    expect(controller.getSnapshot().activeSessionId).toBe('b');
+    expect(controller.getSnapshot().history).toMatchObject({ sessionId: 'b', firstSequence: 1, lastSequence: 1 });
+    expect(controller.getSnapshot().agent.messages.currentText).toBe('current-b');
+    controller.close();
+  });
+
+  test('hydrates sessions that appear in the atomic baseline but not the initial list', async () => {
+    const api = new FakeApi([session('a'), session('b')]);
+    api.listSessionsOverride = async () => [api.require('a')];
+    const controller = new SessionController({ api, transport: new FakeTransport() });
+
+    await controller.start();
+
+    expect(controller.getSnapshot().sessions.map((value) => value.id).sort()).toEqual(['a', 'b']);
+    controller.close();
+  });
+
   test('submits running input to the Runtime queue and cancels it through the command boundary', async () => {
     const running = session('run', {
       isRunning: true,
@@ -185,9 +219,10 @@ class FakeApi extends CortxApiClient {
   readonly prompts: Array<{ message: string; command: WebCommandMetadata }> = [];
   readonly cancelledInputs: string[] = [];
   failNextPrompt = false;
-  history: (sessionId: string, options: { after?: number; before?: number; limit?: number }) => WebEventHistoryResponse =
+  history: (sessionId: string, options: { after?: number; before?: number; limit?: number }) => WebEventHistoryResponse | Promise<WebEventHistoryResponse> =
     () => history([]);
   getSessionOverride?: (id: string) => Promise<WebRuntimeSessionInfo>;
+  listSessionsOverride?: () => Promise<WebRuntimeSessionInfo[]>;
 
   constructor(sessions: WebRuntimeSessionInfo[]) {
     super('fake');
@@ -201,7 +236,7 @@ class FakeApi extends CortxApiClient {
   }
 
   override async listSessions() {
-    return [...this.sessions.values()];
+    return this.listSessionsOverride ? this.listSessionsOverride() : [...this.sessions.values()];
   }
 
   override async listModels() {
@@ -251,7 +286,7 @@ class FakeApi extends CortxApiClient {
     options: { after?: number; before?: number; limit?: number } = {},
   ) {
     this.historyCalls.push({ sessionId, options });
-    return this.history(sessionId, options);
+    return await this.history(sessionId, options);
   }
 
   override async createSession() {

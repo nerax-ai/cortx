@@ -208,40 +208,47 @@ async function main() {
     maxEventsPerSession,
     idleTimeoutMs,
   });
-  await handle.runtime.restoreDurableSessions({ autoResume: false });
+  try {
+    await handle.runtime.restoreDurableSessions({ autoResume: false });
 
-  const server = Bun.serve({
-    hostname: host,
-    port,
-    idleTimeout: 255,
-    fetch(request, server) {
-      return handle.app.fetch(request, { remoteAddress: server.requestIP(request)?.address ?? null });
-    },
-  });
-  const topology = createStandaloneCortxTopology({
-    projectDomain,
-    synax,
-    runtime: handle,
-    logger: { close: async () => void (await log.close()) },
-  });
+    const server = Bun.serve({
+      hostname: host,
+      port,
+      idleTimeout: 255,
+      fetch(request, server) {
+        return handle.app.fetch(request, { remoteAddress: server.requestIP(request)?.address ?? null });
+      },
+    });
+    const topology = createStandaloneCortxTopology({
+      projectDomain,
+      synax,
+      runtime: handle,
+      logger: { close: async () => void (await log.close()) },
+    });
 
-  console.log(`Cortx Server: http://${host}:${port}`);
-  console.log(`Model: ${config.model}`);
-  console.log(`Workspace: ${defaultWorkingDirectory}`);
-  console.log(`Runtime domain: ${identity.runtimeDomainId}`);
+    console.log(`Cortx Server: http://${host}:${port}`);
+    console.log(`Model: ${config.model}`);
+    console.log(`Workspace: ${defaultWorkingDirectory}`);
+    console.log(`Runtime domain: ${identity.runtimeDomainId}`);
 
-  await new Promise<void>((resolveShutdown) => {
-    let closing = false;
-    const close = async () => {
-      if (closing) return;
-      closing = true;
-      server.stop();
-      await topology.close();
-      resolveShutdown();
-    };
-    process.on('SIGINT', close);
-    process.on('SIGTERM', close);
-  });
+    await new Promise<void>((resolveShutdown) => {
+      let closing = false;
+      const close = async () => {
+        if (closing) return;
+        closing = true;
+        server.stop();
+        await topology.close();
+        resolveShutdown();
+      };
+      process.on('SIGINT', close);
+      process.on('SIGTERM', close);
+    });
+  } catch (error) {
+    await handle.close().catch((closeError) => {
+      log.error(closeError);
+    });
+    throw error;
+  }
 }
 
 main().catch(async (error) => {

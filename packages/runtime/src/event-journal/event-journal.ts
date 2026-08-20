@@ -5,6 +5,7 @@ import type {
   RuntimeSubAgentSessionSnapshot,
 } from '../durable/types.js';
 import type { RuntimeEventRetention } from '../session.js';
+import { asError } from '../errors.js';
 
 interface SessionWriterState {
   tail: Promise<void>;
@@ -115,8 +116,4 @@ export class RuntimeEventJournal {
     }
     return state;
   }
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

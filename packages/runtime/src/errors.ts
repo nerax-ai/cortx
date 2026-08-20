@@ -42,3 +42,7 @@ export function toRuntimeError(error: unknown): RuntimeError {
   if (error instanceof Error) return new RuntimeError('runtime_failure', error.message);
   return new RuntimeError('runtime_failure', String(error));
 }
+
+export function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}

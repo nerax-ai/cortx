@@ -17,6 +17,7 @@ import type {
   RuntimeSessionSnapshot,
   RuntimeSubAgentSessionSnapshot,
 } from './types.js';
+import type { RuntimeEventRetention } from '../session.js';
 
 export interface FileDurableRunStoreOptions {
   root: string;
@@ -29,6 +30,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   private readonly root: string;
   private readonly maxEventEnvelopesPerSession: number;
   private readonly subAgentWrites = new Map<string, Promise<void>>();
+  private readonly eventRetention = new Map<string, RuntimeEventRetention>();
   private readonly ownerToken = randomUUID();
   private ownsRoot = false;
 
@@ -152,7 +154,7 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   async saveEventEnvelope(snapshot: RuntimeEventEnvelopeSnapshot): Promise<void> {
     this.acquireOwnership();
     await writeJson(this.eventEnvelopePath(snapshot.sessionId, snapshot.sequence), serializeRuntimeEventEnvelopeSnapshot(snapshot));
-    await this.pruneEventEnvelopes(snapshot.sessionId);
+    this.eventRetention.set(snapshot.sessionId, await this.pruneEventEnvelopes(snapshot.sessionId));
   }
 
   async listEventEnvelopes(sessionId: string): Promise<RuntimeEventEnvelopeSnapshot[]> {
@@ -163,14 +165,15 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
   async deleteEventEnvelopes(sessionId: string): Promise<void> {
     this.acquireOwnership();
     await rm(join(this.root, 'events', encodeId(sessionId)), { recursive: true, force: true });
+    this.eventRetention.delete(sessionId);
   }
 
-  async getEventEnvelopeRetention(sessionId: string) {
-    const records = await this.listEventEnvelopes(sessionId);
-    return {
-      oldestAvailableSequence: records[0]?.sequence ?? null,
-      lastAvailableSequence: records.at(-1)?.sequence ?? 0,
-    };
+  async getEventEnvelopeRetention(sessionId: string): Promise<RuntimeEventRetention> {
+    const cached = this.eventRetention.get(sessionId);
+    if (cached) return { ...cached };
+    const retention = await this.readEventEnvelopeRetention(sessionId);
+    this.eventRetention.set(sessionId, retention);
+    return { ...retention };
   }
 
   private checkpointPath(sessionId: string): string {
@@ -193,17 +196,45 @@ export class FileDurableRunStore implements RuntimeDurableRunStore {
     return join(this.root, 'events', encodeId(sessionId), `${String(sequence).padStart(16, '0')}.json`);
   }
 
-  private async pruneEventEnvelopes(sessionId: string): Promise<void> {
+  private async pruneEventEnvelopes(sessionId: string): Promise<RuntimeEventRetention> {
     const dir = join(this.root, 'events', encodeId(sessionId));
     let files: string[];
     try {
       files = (await readdir(dir)).filter((file) => file.endsWith('.json')).sort();
     } catch {
-      return;
+      return { oldestAvailableSequence: null, lastAvailableSequence: 0 };
     }
     const stale = files.slice(0, Math.max(0, files.length - this.maxEventEnvelopesPerSession));
     await Promise.all(stale.map((file) => rm(join(dir, file), { force: true })));
+    return retentionFromEventFiles(files.slice(stale.length));
   }
+
+  private async readEventEnvelopeRetention(sessionId: string): Promise<RuntimeEventRetention> {
+    try {
+      const files = (await readdir(join(this.root, 'events', encodeId(sessionId))))
+        .filter((file) => file.endsWith('.json'))
+        .sort();
+      return retentionFromEventFiles(files);
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') {
+        return { oldestAvailableSequence: null, lastAvailableSequence: 0 };
+      }
+      throw error;
+    }
+  }
+}
+
+function retentionFromEventFiles(files: string[]): RuntimeEventRetention {
+  return {
+    oldestAvailableSequence: eventSequenceFromFile(files[0]),
+    lastAvailableSequence: eventSequenceFromFile(files.at(-1)) ?? 0,
+  };
+}
+
+function eventSequenceFromFile(file: string | undefined): number | null {
+  if (!file) return null;
+  const sequence = Number(file.slice(0, -'.json'.length));
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : null;
 }
 
 function normalizeEventLimit(value: number | undefined): number {

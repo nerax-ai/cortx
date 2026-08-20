@@ -20,6 +20,7 @@ import type {
 } from '@cortx/sdk';
 import type {
   RuntimeDurableRunStore,
+  RuntimeEventEnvelopeSnapshot,
   RuntimeSessionSnapshot,
   RuntimeSubAgentSessionSnapshot,
 } from '../src/index';
@@ -113,9 +114,14 @@ class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
   activeRuntimeSaves = 0;
   blockedRuntimeSaves = 0;
   private nextRuntimeSaveError: Error | undefined;
+  private nextEventEnvelopeSaveError: Error | undefined;
 
   failNextRuntimeSessionSave(error = new Error('initial runtime snapshot failed')): void {
     this.nextRuntimeSaveError = error;
+  }
+
+  failNextEventEnvelopeSave(error = new Error('event envelope save failed')): void {
+    this.nextEventEnvelopeSaveError = error;
   }
 
   delayRuntimeSessionSaves(): void {
@@ -207,6 +213,13 @@ class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
 
   deleteSubAgentSessions(parentSessionId: string): void {
     this.subAgents.delete(parentSessionId);
+  }
+
+  saveEventEnvelope(_snapshot: RuntimeEventEnvelopeSnapshot): void {
+    if (!this.nextEventEnvelopeSaveError) return;
+    const error = this.nextEventEnvelopeSaveError;
+    this.nextEventEnvelopeSaveError = undefined;
+    throw error;
   }
 }
 
@@ -611,6 +624,10 @@ describe('CortxRuntime sessions', () => {
     expect(history.map((event) => event.sequence)).toEqual(
       [...history].map((event) => event.sequence).sort((a, b) => a - b),
     );
+    expect(runtime.getSession(session.id).eventRetention).toEqual({
+      oldestAvailableSequence: history[0]?.sequence,
+      lastAvailableSequence: history.at(-1)?.sequence,
+    });
 
     const replayed: RuntimeAgentEventEnvelope[] = [];
     runtime.subscribeEnvelopes(session.id, (event) => replayed.push(event));
@@ -794,6 +811,31 @@ describe('CortxRuntime sessions', () => {
     await runtime.close();
   });
 
+  test('does not publish durable events before the journal commit succeeds', async () => {
+    const durableStore = new DelayedRuntimeSessionStore();
+    const runtime = new CortxRuntime({
+      language: delayedLanguage(1),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore,
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'failed-event-commit' });
+    const published: RuntimeAgentEventEnvelope[] = [];
+    runtime.subscribeEnvelopes(session.id, (event) => published.push(event), { replay: false });
+    durableStore.failNextEventEnvelopeSave();
+
+    await expect(runtime.prompt(session.id, 'must stay private')).rejects.toThrow(
+      'Failed to persist run admission for session "failed-event-commit"',
+    );
+
+    expect(published).toEqual([]);
+    expect(runtime.getSession(session.id).sessionHealth).toBe('durability_failed');
+    await runtime.close();
+  });
+
   test('routes steer, follow-up and resume through the hosted controller', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(100),
@@ -824,7 +866,7 @@ describe('CortxRuntime sessions', () => {
     expect(events.filter((event) => event.type === 'user_answer')).toHaveLength(0);
     expect(events.map((event) => event.type)).not.toContain('user_response');
     await runtime.abort(session.id);
-    await runtime.resume(session.id);
+    await expect(runtime.resume(session.id)).rejects.toMatchObject({ kind: 'conflict', status: 409 });
     await runtime.close();
   });
 

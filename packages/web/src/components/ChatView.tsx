@@ -45,6 +45,7 @@ interface ChatViewProps {
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
   canChangeModes?: boolean;
+  canResume?: boolean;
   onSend: (message: string) => void | Promise<void>;
   onAbort: () => void;
   onResume: () => void;
@@ -137,6 +138,7 @@ export function ChatView({
   toolMode,
   approvalMode,
   canChangeModes = status !== 'awaiting_user',
+  canResume = false,
   onSend,
   onAbort,
   onResume,
@@ -279,7 +281,7 @@ export function ChatView({
         )}
       </div>
 
-      {status === 'error' && (
+      {canResume && (
         <div className="flex justify-end border-t border-zinc-200 bg-white px-4 py-2">
           <button
             type="button"
@@ -309,6 +311,7 @@ export function ChatView({
         contextUsage={contextUsage}
         tokenUsage={tokenUsage}
         canChangeModes={canChangeModes}
+        canResume={canResume}
         onAbort={onAbort}
         onResume={onResume}
         onSteerQueuedPrompt={onSteerQueuedPrompt}

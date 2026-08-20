@@ -33,7 +33,6 @@ import type {
 } from '../session.js';
 import type { RuntimeInputSource } from '../sessions/runtime-input-source.js';
 import { createWorkspaceToolPluginEntries } from '../tool-mount.js';
-import type { WorkspaceToolMode } from '../workspace-tool-mode.js';
 
 export interface RuntimeHostFactoryInput {
   id: string;
@@ -44,7 +43,6 @@ export interface RuntimeHostFactoryInput {
   maxIterations?: number;
   contextWindowTokens?: number;
   contextWindowSource?: ContextUsageSource;
-  toolMode: WorkspaceToolMode;
   toolProfile: string;
   approvalMode: RuntimeApprovalMode;
   requestedCapabilities: RuntimeDefaultCapabilities;
