@@ -37,6 +37,7 @@ export function parseRuntimeSessionSnapshot(value: unknown): RuntimeSessionSnaps
           contributions: contributionArray(value.contributions),
           pendingInteraction: parsePendingInteraction(value.pendingInteraction),
           queuedInputs: parseQueuedInputs(value.queuedInputs),
+          commandReceipts: parseCommandReceipts(value.commandReceipts) ?? [],
           eventRetention: parseEventRetention(value.eventRetention, value.nextEventSequence as number),
         } as unknown as RuntimeSessionSnapshot)
       : undefined;
@@ -127,6 +128,7 @@ function migrateLegacyRuntimeSessionSnapshot(value: Record<string, unknown>): Ru
     resumable: value.resumable === true,
     pendingInteraction: parsePendingInteraction(value.pendingInteraction),
     queuedInputs: parseQueuedInputs(value.queuedInputs) ?? [],
+    commandReceipts: parseCommandReceipts(value.commandReceipts) ?? [],
     eventRetention: parseEventRetention(
       value.eventRetention,
       typeof value.nextEventSequence === 'number' ? value.nextEventSequence : 0,
@@ -220,8 +222,33 @@ function isCurrentRuntimeSessionSnapshot(value: Record<string, unknown>): boolea
     typeof value.resumable === 'boolean' &&
     (value.pendingInteraction === undefined || parsePendingInteraction(value.pendingInteraction) !== undefined) &&
     parseQueuedInputs(value.queuedInputs) !== undefined &&
+    (value.commandReceipts === undefined || parseCommandReceipts(value.commandReceipts) !== undefined) &&
     isEventRetention(value.eventRetention)
   );
+}
+
+function parseCommandReceipts(value: unknown): RuntimeSessionSnapshot['commandReceipts'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const receipts: NonNullable<RuntimeSessionSnapshot['commandReceipts']> = [];
+  for (const receipt of value) {
+    if (
+      !isObject(receipt) ||
+      typeof receipt.commandId !== 'string' ||
+      typeof receipt.kind !== 'string' ||
+      typeof receipt.payloadHash !== 'string' ||
+      typeof receipt.acceptedAt !== 'number'
+    ) {
+      return undefined;
+    }
+    receipts.push({
+      commandId: receipt.commandId,
+      kind: receipt.kind,
+      payloadHash: receipt.payloadHash,
+      acceptedAt: receipt.acceptedAt,
+      ...(receipt.result === undefined ? {} : { result: structuredClone(receipt.result) }),
+    });
+  }
+  return receipts;
 }
 
 function parseQueuedInputs(value: unknown): RuntimeSessionSnapshot['queuedInputs'] | undefined {

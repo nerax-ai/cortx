@@ -9,6 +9,28 @@ export type {
   SubscribeOptions,
 } from './runtime.js';
 export { CortxHostScope } from './host-scope.js';
+export { RuntimeHostFactory } from './host/runtime-host-factory.js';
+export type {
+  RuntimeHost,
+  RuntimeHostFactoryInput,
+  RuntimeHostFactoryOptions,
+} from './host/runtime-host-factory.js';
+export { SessionCommandQueue } from './runs/session-command-queue.js';
+export { RuntimeRunCoordinator } from './runs/runtime-run-coordinator.js';
+export type {
+  RuntimeRunAbortOptions,
+  RuntimeRunCoordinatorEffects,
+  RuntimeRunCoordinatorOptions,
+} from './runs/runtime-run-coordinator.js';
+export { RuntimeInputSource } from './sessions/runtime-input-source.js';
+export { RuntimeCommandLedger } from './sessions/runtime-command-ledger.js';
+export { RuntimeSessionRegistry, summarizeSessionProjection } from './sessions/session-registry.js';
+export type {
+  RuntimeSessionRegistryOptions,
+  SessionSummaryBaseline,
+  SessionSummaryChange,
+  SessionSummaryProjection,
+} from './sessions/session-registry.js';
 export { ProjectDomain, createFilesystemProjectDomain } from './project-domain.js';
 export type {
   CreateAgentExtensionsContext,
@@ -117,6 +139,8 @@ export type {
   RuntimeApprovalMode,
   RuntimeEventRetention,
   RuntimeFollowUpAdmission,
+  RuntimeCommandOptions,
+  RuntimeCommandReceipt,
   RuntimePendingInteraction,
   RuntimeRunPhase,
   RuntimeSessionHealth,

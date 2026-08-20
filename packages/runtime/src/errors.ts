@@ -3,6 +3,7 @@ export type RuntimeErrorKind =
   | 'permission_denied'
   | 'session_not_found'
   | 'session_busy'
+  | 'conflict'
   | 'capacity_exceeded'
   | 'invalid_request'
   | 'runtime_failure';
@@ -12,6 +13,7 @@ const STATUS_BY_KIND: Record<RuntimeErrorKind, number> = {
   permission_denied: 403,
   session_not_found: 404,
   session_busy: 409,
+  conflict: 409,
   capacity_exceeded: 429,
   invalid_request: 400,
   runtime_failure: 500,

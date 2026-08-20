@@ -3,7 +3,15 @@ export { CortxSession } from './session.js';
 export type { CortxState } from './session.js';
 export { agentLoop } from './loop.js';
 export { AgentLoopController } from './types.js';
-export type { CortxConfig, AgentEvent, AgentController, DeliveryMode } from './types.js';
+export type {
+  AgentController,
+  AgentEvent,
+  AgentFollowUpDelivery,
+  AgentFollowUpSource,
+  AgentLoopControllerOptions,
+  CortxConfig,
+  DeliveryMode,
+} from './types.js';
 export type {
   AgentRuntimeExtensions,
   AgentContextOverflowContribution,

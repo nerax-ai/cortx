@@ -1322,7 +1322,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     try {
       await getAuthorizedSession(runtime, c, config, id);
       const body = await readOptionalJson(c);
-      runtime.steer(id, readMessage(body));
+      await runtime.steer(id, readMessage(body));
       return c.json({ ok: true });
     } catch (error) {
       const response = errorResponse(error);
@@ -1335,7 +1335,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     try {
       await getAuthorizedSession(runtime, c, config, id);
       const body = await readOptionalJson(c);
-      runtime.followUp(id, readMessage(body));
+      await runtime.followUp(id, readMessage(body));
       return c.json({ ok: true });
     } catch (error) {
       const response = errorResponse(error);
@@ -1377,7 +1377,7 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
       if (typeof body.toolCallId !== 'string' || typeof body.response !== 'string') {
         throw new RuntimeError('invalid_request', 'toolCallId and response are required');
       }
-      const answered = runtime.answer(id, body.toolCallId, body.response);
+      const answered = await runtime.answer(id, body.toolCallId, body.response);
       if (!answered) {
         throw new RuntimeError('invalid_request', 'No pending user question matches toolCallId', {
           toolCallId: body.toolCallId,

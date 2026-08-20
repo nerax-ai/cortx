@@ -157,20 +157,20 @@ class LocalRuntimeSessionAdapter implements TuiSessionAdapter {
     return this.runtime.prompt(this.sessionId, message);
   }
 
-  steer(message: string): void {
-    this.runtime.steer(this.sessionId, message);
+  async steer(message: string): Promise<void> {
+    await Promise.resolve(this.runtime.steer(this.sessionId, message));
   }
 
-  followUp(message: string): void {
-    this.runtime.followUp(this.sessionId, message);
+  async followUp(message: string): Promise<void> {
+    await this.runtime.followUp(this.sessionId, message);
   }
 
   resume(): Promise<void> {
     return this.runtime.resume(this.sessionId);
   }
 
-  answerUser(toolCallId: string, response: string): void {
-    this.runtime.answer(this.sessionId, toolCallId, response);
+  async answerUser(toolCallId: string, response: string): Promise<void> {
+    await this.runtime.answer(this.sessionId, toolCallId, response);
   }
 
   abort(): Promise<void> {

@@ -1,5 +1,5 @@
 import type { LanguageTokenUsage } from '@synax-ai/sdk';
-import type { AgentDoneUsage, AgentEvent } from '../types.js';
+import type { AgentDoneUsage, AgentEvent, AgentFollowUpDelivery } from '../types.js';
 import type { LanguageMessage } from '@cortx/sdk';
 import { messageText } from '../message-helpers.js';
 import { emitPhaseEvent, type AgentLoopPhaseInput } from './pipeline.js';
@@ -68,9 +68,16 @@ export async function* runCompletionPhase(
   }
 
   if (controller?.hasFollowUps) {
-    for (const message of controller.consumeFollowUps()) {
+    const deliveries: AgentFollowUpDelivery[] = controller.consumeFollowUpDeliveries?.() ??
+      controller.consumeFollowUps().map((message) => ({ message }));
+    for (const delivery of deliveries) {
+      const message = delivery.message;
       messages.push(message);
-      const event: AgentEvent = { type: 'follow_up', message: messageText(message) || 'follow-up' };
+      const event: AgentEvent = {
+        type: 'follow_up',
+        message: messageText(message) || 'follow-up',
+        ...(delivery.inputId ? { inputId: delivery.inputId } : {}),
+      };
       yield await emitPhaseEvent(runtime, 'completion', iteration, event);
     }
     const turnEnd: AgentEvent = { type: 'turn_end', iteration, toolCallCount: 0 };

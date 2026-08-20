@@ -15,6 +15,20 @@ export type { AgentDoneUsage, AgentEvent, ErrorCode };
 
 export type DeliveryMode = 'all' | 'one-at-a-time';
 
+export interface AgentFollowUpDelivery {
+  message: LanguageMessage;
+  inputId?: string;
+}
+
+export interface AgentFollowUpSource {
+  readonly hasFollowUps: boolean;
+  consumeFollowUps(mode: DeliveryMode): AgentFollowUpDelivery[];
+}
+
+export interface AgentLoopControllerOptions {
+  followUpSource?: AgentFollowUpSource;
+}
+
 export interface AgentController {
   steer(message: string | LanguageMessage): void;
   followUp(message: string | LanguageMessage): void;
@@ -29,6 +43,7 @@ export interface AgentController {
   followUpMode: DeliveryMode;
   consumeSteering(): LanguageMessage[];
   consumeFollowUps(): LanguageMessage[];
+  consumeFollowUpDeliveries?(): AgentFollowUpDelivery[];
   onAbort?(listener: (reason?: string) => void): () => void;
 }
 
@@ -42,8 +57,13 @@ export class AgentLoopController implements AgentController {
     { resolve: (response: string) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }
   >();
   private _abortListeners = new Set<(reason?: string) => void>();
+  private readonly _followUpSource?: AgentFollowUpSource;
   steeringMode: DeliveryMode = 'one-at-a-time';
   followUpMode: DeliveryMode = 'one-at-a-time';
+
+  constructor(options: AgentLoopControllerOptions = {}) {
+    this._followUpSource = options.followUpSource;
+  }
 
   private toMsg(m: string | LanguageMessage): LanguageMessage {
     return typeof m === 'string' ? { role: 'user', content: [{ type: 'text' as const, text: m }] } : m;
@@ -79,7 +99,7 @@ export class AgentLoopController implements AgentController {
     return this._abortReason;
   }
   get hasFollowUps(): boolean {
-    return this._followUps.length > 0;
+    return Boolean(this._followUpSource?.hasFollowUps) || this._followUps.length > 0;
   }
 
   /**
@@ -129,11 +149,19 @@ export class AgentLoopController implements AgentController {
       : this._steer.splice(0);
   }
   consumeFollowUps(): LanguageMessage[] {
-    return this.followUpMode === 'one-at-a-time'
-      ? this._followUps.length
-        ? [this._followUps.shift()!]
-        : []
-      : this._followUps.splice(0);
+    return this.consumeFollowUpDeliveries().map((delivery) => delivery.message);
+  }
+
+  consumeFollowUpDeliveries(): AgentFollowUpDelivery[] {
+    const owned = this._followUpSource?.consumeFollowUps(this.followUpMode) ?? [];
+    if (this.followUpMode === 'one-at-a-time') {
+      return owned.length
+        ? owned.slice(0, 1)
+        : this._followUps.length
+          ? [{ message: this._followUps.shift()! }]
+          : [];
+    }
+    return [...owned, ...this._followUps.splice(0).map((message) => ({ message }))];
   }
 
   onAbort(listener: (reason?: string) => void): () => void {
@@ -169,4 +197,5 @@ export interface CortxConfig {
   toolResultBudget?: number;
   maxConcurrentTools?: number;
   maxConcurrentAgents?: number;
+  followUpSource?: AgentFollowUpSource;
 }

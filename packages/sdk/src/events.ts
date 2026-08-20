@@ -117,7 +117,7 @@ export type AgentEvent =
   | { type: 'tool_progress'; toolCallId: string; text: string }
   | { type: 'tool_result'; toolCallId: string; result: unknown; isError?: boolean; details?: unknown }
   | { type: 'steered'; message: string }
-  | { type: 'follow_up'; message: string }
+  | { type: 'follow_up'; message: string; inputId?: string }
   | { type: 'context_overflow'; messages: LanguageMessage[] }
   | { type: 'error'; error: Error; code?: ErrorCode }
   | { type: 'done'; usage?: AgentDoneUsage }

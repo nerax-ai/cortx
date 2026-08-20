@@ -31,6 +31,102 @@ async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
 }
 
 describe('runtime session projection', () => {
+  test('does not publish a registry entry when initial Host creation fails', async () => {
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop' };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const brokenTool = {
+      name: 'broken',
+      inputSchema: {},
+      execute: async () => ({ success: true }),
+    } as Tool;
+    Object.defineProperty(brokenTool, 'sideEffects', {
+      get() {
+        throw new Error('host assembly failed');
+      },
+    });
+
+    await expect(runtime.createSession({ id: 'broken-host', tools: [brokenTool] })).rejects.toThrow('host assembly failed');
+    expect(runtime.listSessions()).toEqual([]);
+    expect(runtime.getSessionSummaryBaseline().sessions).toEqual([]);
+    await runtime.close();
+  });
+
+  test('exposes a detail-free summary baseline and no-window facade change feed', async () => {
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const first = await runtime.createSession({ id: 'feed:first' });
+    const baseline = runtime.getSessionSummaryBaseline();
+    const changes: ReturnType<CortxRuntime['getSessionSummaryChanges']> = [];
+    const unsubscribe = runtime.subscribeSessionSummaries(baseline.cursor, (change) => changes.push(change));
+
+    const second = await runtime.createSession({ id: 'feed:second' });
+    await runtime.updateSession(first.id, { model: 'updated-model' });
+    await runtime.deleteSession(second.id);
+
+    expect(baseline.sessions).toEqual([
+      expect.objectContaining({ id: first.id, pluginGeneration: expect.any(String) }),
+    ]);
+    expect(baseline.sessions[0]).not.toHaveProperty('queuedInputs');
+    expect(baseline.sessions[0]).not.toHaveProperty('pendingInteraction');
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'added', sessionId: second.id }),
+      expect.objectContaining({ type: 'updated', sessionId: first.id }),
+      expect.objectContaining({ type: 'removed', sessionId: second.id }),
+    ]));
+    expect(runtime.getSessionSummaryChanges(baseline.cursor)).toEqual(changes);
+
+    unsubscribe();
+    await runtime.close();
+  });
+
+  test('keeps plugin generation stable across runs and changes it only when the capability assembly changes', async () => {
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop' };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      approvalMode: 'interactive',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'stable-plugin-generation' });
+    const initial = session.pluginGeneration;
+
+    await runtime.prompt(session.id, 'first');
+    await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
+    await runtime.prompt(session.id, 'second');
+    await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
+    expect(runtime.getSession(session.id).pluginGeneration).toBe(initial);
+
+    const updated = await runtime.updateSession(session.id, { approvalMode: 'deny' });
+    expect(updated.pluginGeneration).not.toBe(initial);
+    await runtime.close();
+  });
+
   test('projects idle/running phase and stable running-only follow-up admission', async () => {
     const gate = deferred();
     const runtime = new CortxRuntime({
@@ -57,21 +153,117 @@ describe('runtime session projection', () => {
       acceptsPrompt: true,
       isRunning: false,
     });
-    expect(() => runtime.followUp(session.id, 'too early', 'input:idle')).toThrow(/running session/i);
+    await expect(runtime.followUp(session.id, 'too early', 'input:idle')).rejects.toThrow(/running session/i);
 
     await runtime.prompt(session.id, 'start');
     expect(runtime.getSession(session.id)).toMatchObject({ runPhase: 'running', acceptsPrompt: false, isRunning: true });
 
-    const first = runtime.followUp(session.id, 'continue', 'input:stable');
-    const retry = runtime.followUp(session.id, 'continue', 'input:stable');
+    const first = await runtime.followUp(session.id, 'continue', 'input:stable');
+    const retry = await runtime.followUp(session.id, 'continue', 'input:stable');
     expect(retry).toEqual(first);
+    expect(runtime.getSession(session.id).promptHistory).toEqual(['start', 'continue']);
     expect(first).toMatchObject({ inputId: 'input:stable', message: 'continue' });
     expect(first.admissionSequence).toBeGreaterThan(0);
-    expect(() => runtime.followUp(session.id, 'different', 'input:stable')).toThrow(/different payload/i);
+    await expect(runtime.followUp(session.id, 'different', 'input:stable')).rejects.toThrow(/different payload/i);
 
     gate.resolve();
     await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
     await runtime.close();
+  });
+
+  test('deduplicates accepted mutations by command id and rejects conflicting retries', async () => {
+    const gate = deferred();
+    const runtime = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          await gate.promise;
+          yield { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'command-idempotency' });
+    const options = {
+      commandId: 'command:prompt:1',
+      expectedRuntimeIncarnation: runtime.runtimeIncarnation,
+    };
+
+    await Promise.all([
+      runtime.prompt(session.id, 'start once', options),
+      runtime.prompt(session.id, 'start once', options),
+    ]);
+    await runtime.prompt(session.id, 'start once', options);
+
+    expect(runtime.getSession(session.id).promptHistory).toEqual(['start once']);
+    expect(runtime.getEventHistory(session.id).filter((event) => event.type === 'user_message')).toHaveLength(1);
+    await expect(runtime.prompt(session.id, 'different payload', options)).rejects.toMatchObject({ kind: 'conflict' });
+    await expect(runtime.followUp(session.id, 'continue', 'input:stale', {
+      commandId: 'command:follow-up:stale',
+      expectedRuntimeIncarnation: 'runtime:stale',
+    })).rejects.toMatchObject({ kind: 'conflict' });
+
+    gate.resolve();
+    await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
+    await runtime.close();
+  });
+
+  test('persists command receipts while fencing retries from an older runtime incarnation', async () => {
+    const durableDir = join(tmpDir, 'command-receipts');
+    const firstStore = new FileDurableRunStore(durableDir);
+    const first = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop' };
+        },
+      } as unknown as LanguageClient,
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      durableStore: firstStore,
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await first.createSession({ id: 'durable-command-receipt' });
+    const oldIncarnation = first.runtimeIncarnation;
+    const options = {
+      commandId: 'command:update:1',
+      expectedRuntimeIncarnation: oldIncarnation,
+    };
+    await first.updateSession(session.id, { model: 'updated-model' }, options);
+    expect((await firstStore.loadRuntimeSession(session.id))?.commandReceipts).toEqual([
+      expect.objectContaining({ commandId: options.commandId, kind: 'update_session' }),
+    ]);
+    firstStore.releaseOwnership();
+
+    const secondStore = new FileDurableRunStore(durableDir);
+    const second = new CortxRuntime({
+      language: {
+        stream: async function* () {
+          yield { type: 'finish', finishReason: 'stop' };
+        },
+      } as unknown as LanguageClient,
+      model: 'fallback-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      durableStore: secondStore,
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    await second.restoreDurableSessions();
+
+    expect((await secondStore.loadRuntimeSession(session.id))?.commandReceipts).toEqual([
+      expect.objectContaining({ commandId: options.commandId, kind: 'update_session' }),
+    ]);
+    await expect(second.updateSession(session.id, { model: 'updated-model' }, options)).rejects.toMatchObject({
+      kind: 'conflict',
+    });
+
+    await second.close();
+    await first.close();
   });
 
   test('rejects reconfiguration while running without staging a divergent host', async () => {
@@ -171,9 +363,9 @@ describe('runtime session projection', () => {
       kind: 'approval',
       runtimeIncarnation: runtime.runtimeIncarnation,
     });
-    expect(runtime.answer(session.id, 'other-call', 'yes')).toBe(false);
+    expect(await runtime.answer(session.id, 'other-call', 'yes')).toBe(false);
     expect(runtime.getSession(session.id).runPhase).toBe('waiting_approval');
-    expect(runtime.answer(session.id, 'write-call', 'yes')).toBe(true);
+    expect(await runtime.answer(session.id, 'write-call', 'yes')).toBe(true);
 
     await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
     expect(runtime.getSession(session.id).pendingInteraction).toBeNull();

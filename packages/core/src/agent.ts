@@ -17,7 +17,7 @@ export class Cortx {
   private _messages: LanguageMessage[] = [];
   private readonly _sessionId: string;
   private _runId: number | undefined;
-  private _controller = new AgentLoopController();
+  private _controller: AgentLoopController;
   onAgentEvent?: (event: AgentEvent) => void;
 
   constructor(language: LanguageClient, config: CortxConfig) {
@@ -25,6 +25,7 @@ export class Cortx {
     this.config = config;
     this._sessionId = config.sessionId ?? `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     this._runId = config.runId;
+    this._controller = new AgentLoopController({ followUpSource: config.followUpSource });
     for (const t of config.tools ?? []) this.tools.set(t.name, t);
   }
 
@@ -142,6 +143,8 @@ export class Cortx {
   }
 
   private resetControllerIfAborted(): void {
-    if (this._controller.isAborted) this._controller = new AgentLoopController();
+    if (this._controller.isAborted) {
+      this._controller = new AgentLoopController({ followUpSource: this.config.followUpSource });
+    }
   }
 }

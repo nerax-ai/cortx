@@ -4,6 +4,7 @@ import type {
   RuntimeApprovalMode,
   RuntimeEventRetention,
   RuntimeFollowUpAdmission,
+  RuntimeCommandReceipt,
   RuntimePendingInteraction,
   RuntimeRunPhase,
   RuntimeSessionHealth,
@@ -46,6 +47,7 @@ export interface RuntimeSessionSnapshot {
   resumable: boolean;
   pendingInteraction?: RuntimePendingInteraction;
   queuedInputs: RuntimeFollowUpAdmission[];
+  commandReceipts?: RuntimeCommandReceipt[];
   eventRetention: RuntimeEventRetention;
   metadata?: RuntimeSessionMetadata;
 }

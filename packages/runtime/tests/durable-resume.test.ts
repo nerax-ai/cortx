@@ -553,7 +553,7 @@ describe('runtime durable resume', () => {
     });
     const session = await first.createSession({ id: 'queued-session' });
     await first.prompt(session.id, 'start');
-    first.followUp(session.id, 'queued after restart', 'input:queued');
+    await first.followUp(session.id, 'queued after restart', 'input:queued');
     await waitForDurableSession(firstStore, session.id, (value) => value.queuedInputs.length === 1);
     firstStore.releaseOwnership();
 

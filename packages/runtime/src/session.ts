@@ -4,6 +4,8 @@ import type { RuntimeDefaultCapabilities } from './default-capabilities.js';
 import type { SubAgentSessionStore } from './capabilities/sub-agent/session-store.js';
 import type { CortxHostScope } from './host-scope.js';
 import type { WorkspaceToolMode } from './workspace-tool-mode.js';
+import type { RuntimeInputSource } from './sessions/runtime-input-source.js';
+import type { RuntimeCommandLedger } from './sessions/runtime-command-ledger.js';
 
 export interface RuntimeSessionMetadata {
   [key: string]: unknown;
@@ -27,6 +29,19 @@ export interface RuntimeFollowUpAdmission {
   acceptedAt: number;
   admissionSequence: number;
   state: 'queued' | 'delivered' | 'interrupted';
+}
+
+export interface RuntimeCommandOptions {
+  commandId?: string;
+  expectedRuntimeIncarnation?: string;
+}
+
+export interface RuntimeCommandReceipt {
+  commandId: string;
+  kind: string;
+  payloadHash: string;
+  acceptedAt: number;
+  result?: unknown;
 }
 
 export interface RuntimeEventRetention {
@@ -60,6 +75,8 @@ export interface RuntimeSessionInfo {
   toolMode: WorkspaceToolMode;
   /** Canonical runtime.toolProfile contribution reference used by the Host. */
   toolProfile: string;
+  /** Opaque identity of the capability/plugin assembly used by the current Host. */
+  pluginGeneration: string;
   approvalMode: RuntimeApprovalMode;
   capabilities: RuntimeDefaultCapabilities;
   skillPaths?: string[];
@@ -138,6 +155,7 @@ export interface ManagedRuntimeSession {
   contextWindowSource?: ContextUsageSource;
   toolMode: WorkspaceToolMode;
   toolProfile: string;
+  pluginGeneration: string;
   approvalMode: RuntimeApprovalMode;
   requestedCapabilities: RuntimeDefaultCapabilities;
   capabilities: RuntimeDefaultCapabilities;
@@ -161,7 +179,8 @@ export interface ManagedRuntimeSession {
   sessionHealth: RuntimeSessionHealth;
   pendingInteraction?: RuntimePendingInteraction;
   resumable: boolean;
-  followUpAdmissions: Map<string, RuntimeFollowUpAdmission>;
+  inputSource: RuntimeInputSource;
+  commandLedger: RuntimeCommandLedger;
   runPromise?: Promise<void>;
   runId: number;
   nextEventSequence: number;

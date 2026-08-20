@@ -141,7 +141,7 @@ describe('runtime approval capability', () => {
 
     await runtime.prompt(session.id, 'write');
     await waitForEvent(events, 'user_question');
-    runtime.answer(session.id, 'write-call', 'yes');
+    await runtime.answer(session.id, 'write-call', 'yes');
     await waitForEvent(events, 'done');
 
     expect(executed).toBe(true);

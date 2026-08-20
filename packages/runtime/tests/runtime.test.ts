@@ -76,6 +76,14 @@ async function waitForEvent(events: AgentEvent[], type: AgentEvent['type'], time
   throw new Error(`Timed out waiting for ${type}`);
 }
 
+async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started >= timeoutMs) throw new Error('Timed out waiting for condition');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 async function waitForEnvelope(
   events: RuntimeAgentEventEnvelope[],
   type: AgentEvent['type'],
@@ -104,6 +112,11 @@ class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
   private releaseSaveGate: (() => void) | undefined;
   activeRuntimeSaves = 0;
   blockedRuntimeSaves = 0;
+  private nextRuntimeSaveError: Error | undefined;
+
+  failNextRuntimeSessionSave(error = new Error('initial runtime snapshot failed')): void {
+    this.nextRuntimeSaveError = error;
+  }
 
   delayRuntimeSessionSaves(): void {
     if (this.saveGate) return;
@@ -151,6 +164,11 @@ class DelayedRuntimeSessionStore implements RuntimeDurableRunStore {
   async saveRuntimeSession(snapshot: RuntimeSessionSnapshot): Promise<void> {
     this.activeRuntimeSaves++;
     try {
+      if (this.nextRuntimeSaveError) {
+        const error = this.nextRuntimeSaveError;
+        this.nextRuntimeSaveError = undefined;
+        throw error;
+      }
       if (this.saveGate) {
         this.blockedRuntimeSaves++;
         await this.saveGate;
@@ -676,7 +694,35 @@ describe('CortxRuntime sessions', () => {
     await runtime.close();
   });
 
-  test('runtime owns the active run promise until the session finishes', async () => {
+  test('orders follow-up admission against abort and clears every unconsumed input', async () => {
+    const runtime = new CortxRuntime({
+      language: delayedLanguage(200),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+    const session = await runtime.createSession({ id: 'follow-up-abort-race' });
+    await runtime.prompt(session.id, 'start');
+
+    const admitted = runtime.followUp(session.id, 'accepted before abort', 'input:before-abort');
+    const aborting = runtime.abort(session.id);
+    await admitted;
+    await aborting;
+    expect(runtime.getSession(session.id).queuedInputs).toEqual([]);
+
+    await runtime.prompt(session.id, 'start again');
+    const abortFirst = runtime.abort(session.id);
+    await expect(runtime.followUp(session.id, 'too late', 'input:after-abort')).rejects.toMatchObject({
+      kind: 'invalid_request',
+    });
+    await abortFirst;
+    expect(runtime.getSession(session.id).queuedInputs).toEqual([]);
+    await runtime.close();
+  });
+
+  test('runtime projects the active run until coordinator settlement finishes', async () => {
     const runtime = new CortxRuntime({
       language: delayedLanguage(20),
       model: 'test-model',
@@ -690,13 +736,11 @@ describe('CortxRuntime sessions', () => {
     runtime.subscribe(session.id, (event) => events.push(event));
 
     await runtime.prompt(session.id, 'track this run');
-    const internal = (runtime as unknown as { sessions: Map<string, { runPromise?: Promise<void> }> }).sessions.get(session.id);
-    expect(internal?.runPromise).toBeInstanceOf(Promise);
+    expect(runtime.getSession(session.id)).toMatchObject({ runPhase: 'running', isRunning: true });
     await waitForEvent(events, 'done');
-    await internal?.runPromise;
+    await waitFor(() => runtime.getSession(session.id).runPhase === 'idle');
 
-    expect(internal?.runPromise).toBeUndefined();
-    expect(runtime.getSession(session.id).isRunning).toBe(false);
+    expect(runtime.getSession(session.id)).toMatchObject({ runPhase: 'idle', isRunning: false });
     await runtime.close();
   });
 
@@ -717,13 +761,36 @@ describe('CortxRuntime sessions', () => {
     const prompting = runtime.prompt(session.id, 'delete me');
     await durableStore.waitForBlockedRuntimeSave();
     const deleting = runtime.deleteSession(session.id);
+    await expect(runtime.prompt(session.id, 'must not enter behind delete')).rejects.toThrow(/closed/i);
     durableStore.releaseRuntimeSessionSaves();
-    await expect(prompting).rejects.toMatchObject({ kind: 'session_not_found' });
+    await prompting;
     await deleting;
     expect(durableStore.listRuntimeSessions()).toEqual([]);
     await durableStore.waitForRuntimeSavesToDrain();
     expect(durableStore.listRuntimeSessions()).toEqual([]);
     await expect(runtime.restoreDurableSessions()).resolves.toEqual([]);
+    await runtime.close();
+  });
+
+  test('does not publish a session when its initial durable snapshot fails', async () => {
+    const durableStore = new DelayedRuntimeSessionStore();
+    durableStore.failNextRuntimeSessionSave();
+    const runtime = new CortxRuntime({
+      language: delayedLanguage(1),
+      model: 'test-model',
+      defaultWorkingDirectory: tmpDir,
+      allowedWorkspaceRoots: [tmpDir],
+      toolMode: 'none',
+      durableStore,
+      capabilities: { skills: false, subAgents: false, approval: false },
+    });
+
+    await expect(runtime.createSession({ id: 'failed-initial-snapshot' })).rejects.toThrow(
+      'initial runtime snapshot failed',
+    );
+    expect(runtime.listSessions()).toEqual([]);
+    expect(runtime.getSessionSummaryBaseline().sessions).toEqual([]);
+    expect(durableStore.listRuntimeSessions()).toEqual([]);
     await runtime.close();
   });
 
@@ -745,15 +812,15 @@ describe('CortxRuntime sessions', () => {
       runId: 1,
       event: { type: 'user_message', message: 'start', source: 'prompt' },
     });
-    runtime.steer(session.id, 'use this instead');
-    runtime.followUp(session.id, 'then continue');
+    await runtime.steer(session.id, 'use this instead');
+    await runtime.followUp(session.id, 'then continue');
     expect(events.find((event) => event.type === 'user_message' && event.message === 'then continue')).toMatchObject({
       source: 'follow_up',
     });
     expect(runtime.getSession(session.id).promptHistory).toEqual(['start', 'then continue']);
     expect(runtime.getSession(session.id).isRunning).toBe(true);
     await expect(runtime.prompt(session.id, 'parallel')).rejects.toMatchObject({ kind: 'session_busy' });
-    expect(runtime.answer(session.id, 'question-1', 'yes')).toBe(false);
+    expect(await runtime.answer(session.id, 'question-1', 'yes')).toBe(false);
     expect(events.filter((event) => event.type === 'user_answer')).toHaveLength(0);
     expect(events.map((event) => event.type)).not.toContain('user_response');
     await runtime.abort(session.id);
@@ -1007,18 +1074,17 @@ describe('CortxRuntime sessions', () => {
       toolMode: 'none',
     });
     const created = await runtime.createSession({ id: 'candidate-failure' });
-    const current = (runtime as unknown as { sessions: Map<string, { cortx: unknown; scope: unknown }> })
-      .sessions.get(created.id)!;
-    const previousCortx = current.cortx;
-    const previousScope = current.scope;
 
     await expect(
       runtime.updateSession(created.id, { toolMode: '@missing/workspace-profile/not-found' }),
     ).rejects.toMatchObject({ kind: 'invalid_request' });
 
     expect(runtime.getSession(created.id)).toMatchObject({ model: 'stable-model', toolMode: 'none' });
-    expect(current.cortx).toBe(previousCortx);
-    expect(current.scope).toBe(previousScope);
+    const events: AgentEvent[] = [];
+    runtime.subscribe(created.id, (event) => events.push(event), { replay: false });
+    await runtime.prompt(created.id, 'still works');
+    await waitForEvent(events, 'done');
+    expect(events.some((event) => event.type === 'text' && event.content === 'ok')).toBe(true);
     await runtime.close();
   });
 });

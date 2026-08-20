@@ -43,6 +43,26 @@ describe('AgentLoopController', () => {
     expect(c.hasFollowUps).toBe(false);
   });
 
+  test('can consume follow-ups from an injected owner without copying them into Core', () => {
+    const pending = [
+      { role: 'user' as const, content: [{ type: 'text' as const, text: 'runtime-owned' }] },
+    ];
+    const c = new AgentLoopController({
+      followUpSource: {
+        get hasFollowUps() {
+          return pending.length > 0;
+        },
+        consumeFollowUps: () => pending.splice(0).map((message) => ({ message, inputId: 'runtime:one' })),
+      },
+    });
+
+    expect(c.hasFollowUps).toBe(true);
+    expect(c.consumeFollowUps()).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'runtime-owned' }] },
+    ]);
+    expect(c.hasFollowUps).toBe(false);
+  });
+
   test('abort', () => {
     const c = new AgentLoopController();
     c.abort('reason');
