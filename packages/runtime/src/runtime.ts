@@ -1052,7 +1052,7 @@ export class CortxRuntime {
   followUp(
     sessionId: string,
     message: string,
-    inputId = crypto.randomUUID(),
+    inputId: string = crypto.randomUUID(),
     options: RuntimeCommandOptions = {},
   ): Promise<RuntimeFollowUpAdmission> {
     return this.runSessionCommand(

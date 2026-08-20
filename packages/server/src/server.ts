@@ -1,11 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import {
   parseCortxContributionReference,
   noopLogger,
@@ -36,6 +35,7 @@ import {
   type RuntimeSessionCreateRequest,
   type RuntimeSessionInfo,
   type RuntimeSessionUpdateRequest,
+  type SessionSummaryProjection,
   type WorkspaceToolMode,
 } from '@cortx/runtime';
 import type { PluginAdminService } from '@synax-ai/sdk';
@@ -58,6 +58,10 @@ import {
   isAllowedOrigin,
   pluginAdminGrantIsCurrent,
 } from './security.js';
+import { assertOptionalString } from './http.js';
+import { mountCatalogRoutes } from './routes/catalog-routes.js';
+import { mountEventRoutes } from './routes/event-routes.js';
+import { mountSessionRoutes } from './routes/session-routes.js';
 
 export interface ServerRuntimeHandle {
   app: Hono;
@@ -461,66 +465,6 @@ function listServerModels(config: ServerConfig): WebModelInfo[] {
   return [...byId.values()];
 }
 
-function parseOptionalSequence(value: string | undefined, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new RuntimeError('invalid_request', `${name} must be a non-negative integer`);
-  }
-  return parsed;
-}
-
-function parseOptionalLimit(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new RuntimeError('invalid_request', 'limit must be a positive integer');
-  }
-  return Math.min(parsed, 2_000);
-}
-
-function parseOptionalTimeout(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 60_000) {
-    throw new RuntimeError('invalid_request', 'timeoutMs must be an integer between 1 and 60000');
-  }
-  return parsed;
-}
-
-function errorResponse(error: unknown): {
-  body: { error: string; kind?: string; details?: Record<string, unknown> };
-  status: ContentfulStatusCode;
-} {
-  if (isRuntimeError(error)) {
-    return {
-      body: { error: error.message, kind: error.kind, details: error.details },
-      status: error.status as ContentfulStatusCode,
-    };
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return { body: { error: message }, status: 500 as ContentfulStatusCode };
-}
-
-async function readOptionalJson(c: Context): Promise<Record<string, unknown>> {
-  const text = await c.req.text();
-  if (!text.trim()) return {};
-  try {
-    const value = JSON.parse(text);
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
-    throw new RuntimeError('invalid_request', 'JSON body must be an object');
-  } catch (error) {
-    if (isRuntimeError(error)) throw error;
-    throw new RuntimeError('invalid_request', 'Invalid JSON body');
-  }
-}
-
-function readMessage(body: Record<string, unknown>): string {
-  if (body.message === undefined) return '';
-  if (typeof body.message !== 'string') throw new RuntimeError('invalid_request', 'message must be a string');
-  return body.message;
-}
-
 function getDefaultWorkingDirectory(config: ServerConfig): string {
   return config.defaultWorkingDirectory ?? process.cwd();
 }
@@ -591,12 +535,6 @@ async function authorizeWorkspace(
     }
     throw error;
   }
-}
-
-function assertOptionalString(value: unknown, field: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string') throw new RuntimeError('invalid_request', `${field} must be a string`);
-  return value;
 }
 
 const APPROVAL_MODE_RANK: Record<RuntimeApprovalMode, number> = {
@@ -823,6 +761,22 @@ async function listAuthorizedSessions(runtime: CortxRuntime, c: Context, config:
     }
   }
   return visible;
+}
+
+function canReadSessionSummary(
+  c: Context,
+  config: ServerConfig,
+  summary: SessionSummaryProjection,
+): boolean {
+  const principal = getAuthPrincipal(c);
+  if (!principal?.isAdmin && (!summary.creatorPrincipalId || summary.creatorPrincipalId !== principal?.id)) {
+    return false;
+  }
+  const workingDirectory = resolve(summary.workingDirectory);
+  return getPrincipalAllowedWorkspaceRoots(config, principal).some((root) => {
+    const pathFromRoot = relative(resolve(root), workingDirectory);
+    return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot));
+  });
 }
 
 async function listAuthorizedAgentSpecs(c: Context, config: ServerConfig): Promise<DiscoveredAgentSpec[]> {
@@ -1119,433 +1073,43 @@ export function createServerRuntime(config: ServerConfig): ServerRuntimeHandle {
     });
   });
 
-  app.get('/models', (c) => {
-    try {
-      return c.json({ models: listServerModels(config) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
+  mountEventRoutes(app, {
+    runtime,
+    authorizeSession: (c, sessionId) => getAuthorizedSession(runtime, c, config, sessionId),
+    canReadSummary: (c, summary) => canReadSessionSummary(c, config, summary),
+    serializeEvent,
+    serializeEnvelope,
+    serializeEventData,
+    serializeEnvelopeData,
+    hydrateHistory: hydrateHistoricalFileEditDetails,
+    limits: config.sessionFeeds,
   });
-
-  // Create session
-  app.post('/sessions', async (c) => {
-    try {
-      const body = await readOptionalJson(c);
-      const session = await runtime.createSession(
-        await buildAuthorizedSessionRequest(c, config, body, await runtime.listToolProfiles()),
-      );
-      return c.json({ sessionId: session.id, session }, 201);
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
+  mountSessionRoutes(app, {
+    runtime,
+    authorizeSession: (c, sessionId) => getAuthorizedSession(runtime, c, config, sessionId),
+    listSessions: (c) => listAuthorizedSessions(runtime, c, config),
+    buildCreateRequest: async (c, body) =>
+      buildAuthorizedSessionRequest(c, config, body, await runtime.listToolProfiles()),
+    buildUpdateRequest: async (c, body) =>
+      buildAuthorizedSessionUpdateRequest(c, config, body, await runtime.listToolProfiles()),
+    serializeSkill: serializeSkillInfo,
+    serializeChild: serializeChildSession,
   });
-
-  app.post('/agent-specs/launch', async (c) => {
-    try {
-      const body = await readOptionalJson(c);
-      const specPath = body.path;
-      const session =
-        typeof specPath === 'string'
-          ? await launchAgentSpecPath(runtime, config, c, specPath)
-          : await launchInlineAgentSpec(runtime, config, c, body.spec ?? body);
-      return c.json({ sessionId: session.id, session }, 201);
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/agent-specs', async (c) => {
-    try {
-      return c.json({ agentSpecs: await listAuthorizedAgentSpecs(c, config) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/tool-profiles', async (c) => {
-    try {
-      const profiles = filterToolProfilesForPrincipal(await runtime.listToolProfiles(), getAuthPrincipal(c));
-      return c.json({ toolProfiles: profiles });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/skill-packs', async (c) => {
-    try {
-      return c.json({ skillPacks: await listAuthorizedSkillPacks(c, config) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.post('/skill-packs/install', async (c) => {
-    try {
-      const body = await readOptionalJson(c);
-      const skillPack = await installSkillPackFromBody(c, config, body);
-      return c.json({ skillPack }, 201);
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/workspaces/directories', async (c) => {
-    try {
-      return c.json(await listWorkspaceDirectories(c, config));
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // List sessions
-  app.get('/sessions', async (c) => {
-    try {
-      return c.json({ sessions: await listAuthorizedSessions(runtime, c, config) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // Get session info
-  app.get('/sessions/:id', async (c) => {
-    const id = c.req.param('id');
-    try {
-      return c.json({ session: await getAuthorizedSession(runtime, c, config, id) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.patch('/sessions/:id', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const body = await readOptionalJson(c);
-      const session = await runtime.updateSession(
-        id,
-        buildAuthorizedSessionUpdateRequest(c, config, body, await runtime.listToolProfiles()),
-      );
-      return c.json({ session });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/sessions/:id/skills', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const skills = await runtime.listSessionSkills(id);
-      return c.json({ skills: skills.map(serializeSkillInfo) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/sessions/:id/children', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      return c.json({ children: runtime.listChildSessions(id).map(serializeChildSession) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/sessions/:id/children/:toolCallId', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      return c.json({ child: serializeChildSession(runtime.getChildSession(id, c.req.param('toolCallId'))) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.post('/sessions/:id/children/:toolCallId/abort', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const body = await readOptionalJson(c);
-      const reason = assertOptionalString(body.reason, 'reason') ?? 'Child aborted via Server';
-      const child = await runtime.abortChild(id, c.req.param('toolCallId'), reason);
-      return c.json({ child: serializeChildSession(child) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.get('/sessions/:id/children/:toolCallId/wait', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const timeoutMs = parseOptionalTimeout(c.req.query('timeoutMs'));
-      const child = await runtime.waitForChild(id, c.req.param('toolCallId'), timeoutMs);
-      return c.json({ child: serializeChildSession(child) });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // Send prompt
-  app.post('/sessions/:id/prompt', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const body = await readOptionalJson(c);
-      await runtime.prompt(id, readMessage(body));
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.post('/sessions/:id/steer', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const body = await readOptionalJson(c);
-      await runtime.steer(id, readMessage(body));
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.post('/sessions/:id/follow-up', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const body = await readOptionalJson(c);
-      await runtime.followUp(id, readMessage(body));
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  app.post('/sessions/:id/resume', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      await runtime.resume(id);
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // Abort session
-  app.post('/sessions/:id/abort', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      await runtime.abort(id);
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // Answer askUser question
-  app.post('/sessions/:id/answer', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      const body = await readOptionalJson(c);
-      if (typeof body.toolCallId !== 'string' || typeof body.response !== 'string') {
-        throw new RuntimeError('invalid_request', 'toolCallId and response are required');
-      }
-      const answered = await runtime.answer(id, body.toolCallId, body.response);
-      if (!answered) {
-        throw new RuntimeError('invalid_request', 'No pending user question matches toolCallId', {
-          toolCallId: body.toolCallId,
-        });
-      }
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // Bounded event history as one JSON payload. Web clients use this for fast
-  // session switching, then open SSE for live updates only.
-  app.get('/sessions/:id/events/history', async (c) => {
-    const id = c.req.param('id');
-    try {
-      const session = await getAuthorizedSession(runtime, c, config, id);
-      const useEnvelope = c.req.query('format') === 'envelope';
-      const afterSequence = parseOptionalSequence(c.req.query('after'), 'after');
-      const beforeSequence = parseOptionalSequence(c.req.query('before'), 'before');
-      const limit = parseOptionalLimit(c.req.query('limit'));
-
-      if (useEnvelope) {
-        const page = await runtime.getEventEnvelopeHistoryPage(id, { afterSequence, beforeSequence, limit });
-        const events = (await hydrateHistoricalFileEditDetails(page.events, session.workingDirectory)).map(serializeEnvelopeData);
-        return c.json({
-          events,
-          page: {
-            hasMoreBefore: page.hasMoreBefore,
-            hasMoreAfter: page.hasMoreAfter,
-            firstSequence: page.events[0]?.sequence,
-            lastSequence: page.events.at(-1)?.sequence,
-          },
-        });
-      }
-
-      const events = runtime.getEventHistory(id).map(serializeEventData);
-      return c.json({ events });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-  });
-
-  // SSE event stream
-  app.get('/sessions/:id/events', async (c) => {
-    const id = c.req.param('id');
-    let useEnvelope = false;
-    let replay = true;
-    let afterSequence: number | undefined;
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      useEnvelope = c.req.query('format') === 'envelope';
-      replay = c.req.query('replay') !== 'false';
-      afterSequence = parseOptionalSequence(c.req.query('after'), 'after');
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
-
-    return streamSSE(c, async (stream) => {
-      let unsub: (() => void) | undefined;
-      stream.onAbort(() => {
-        unsub?.();
-      });
-
-      try {
-        if (useEnvelope) {
-          let live = false;
-          let writeQueue = Promise.resolve();
-          const buffered: RuntimeAgentStreamEnvelope[] = [];
-          const writeEnvelope = (event: RuntimeAgentStreamEnvelope) =>
-            stream.writeSSE({
-              data: serializeEnvelope(event),
-              id: 'sequence' in event ? `e:${event.sequence}` : `f:${event.runId}:${event.offset}`,
-            });
-          const enqueueEnvelope = (event: RuntimeAgentStreamEnvelope) => {
-            writeQueue = writeQueue.then(() => writeEnvelope(event)).catch(() => undefined);
-          };
-
-          unsub = runtime.subscribeStream(
-            id,
-            (event: RuntimeAgentStreamEnvelope) => {
-              if (live) {
-                enqueueEnvelope(event);
-              } else {
-                buffered.push(event);
-              }
-            },
-            { replay: false },
-          );
-
-          const snapshot = runtime.getEventEnvelopeHistory(id).filter((event) => {
-            if (afterSequence !== undefined && event.sequence <= afterSequence) return false;
-            return replay || afterSequence !== undefined;
-          });
-          let lastSequence = afterSequence ?? 0;
-          for (const event of snapshot) {
-            await writeEnvelope(event);
-            lastSequence = Math.max(lastSequence, event.sequence);
-          }
-
-          live = true;
-          for (const event of buffered) {
-            if ('sequence' in event && event.sequence <= lastSequence) continue;
-            await writeEnvelope(event);
-            if ('sequence' in event) lastSequence = Math.max(lastSequence, event.sequence);
-          }
-          await writeQueue;
-          await stream.writeSSE({ data: '{}' });
-        } else {
-          const buffered: AgentEvent[] = [];
-          let live = false;
-          let sequence = 0;
-          let writeQueue = Promise.resolve();
-          const writeEvent = (event: AgentEvent) => stream.writeSSE({ data: serializeEvent(event), id: String(++sequence) });
-          const enqueueEvent = (event: AgentEvent) => {
-            writeQueue = writeQueue.then(() => writeEvent(event)).catch(() => undefined);
-          };
-
-          unsub = runtime.subscribe(
-            id,
-            (event: AgentEvent) => {
-              if (live) {
-                enqueueEvent(event);
-              } else {
-                buffered.push(event);
-              }
-            },
-            { replay: false },
-          );
-
-          const snapshot = replay ? runtime.getEventHistory(id) : [];
-          for (const event of snapshot) await writeEvent(event);
-          live = true;
-          for (const event of buffered) {
-            if (snapshot.includes(event)) continue;
-            await writeEvent(event);
-          }
-          await writeQueue;
-          await stream.writeSSE({ data: '{}' });
-        }
-
-        // Keep connection alive with periodic heartbeats
-        while (true) {
-          await stream.sleep(15000);
-          await stream.writeSSE({ data: '{}' });
-        }
-      } catch {
-        // Stream closed or timed out
-      } finally {
-        unsub?.();
-      }
-    });
-  });
-
-  // Delete session
-  app.delete('/sessions/:id', async (c) => {
-    const id = c.req.param('id');
-    try {
-      await getAuthorizedSession(runtime, c, config, id);
-      await runtime.deleteSession(id);
-      return c.json({ ok: true });
-    } catch (error) {
-      const response = errorResponse(error);
-      return c.json(response.body, response.status);
-    }
+  mountCatalogRoutes(app, {
+    listModels: () => ({ models: listServerModels(config) }),
+    launchAgentSpec: async (c, body) => {
+      const session = typeof body.path === 'string'
+        ? await launchAgentSpecPath(runtime, config, c, body.path)
+        : await launchInlineAgentSpec(runtime, config, c, body.spec ?? body);
+      return { sessionId: session.id, session };
+    },
+    listAgentSpecs: async (c) => ({ agentSpecs: await listAuthorizedAgentSpecs(c, config) }),
+    listToolProfiles: async (c) => ({
+      toolProfiles: filterToolProfilesForPrincipal(await runtime.listToolProfiles(), getAuthPrincipal(c)),
+    }),
+    listSkillPacks: async (c) => ({ skillPacks: await listAuthorizedSkillPacks(c, config) }),
+    installSkillPack: async (c, body) => ({ skillPack: await installSkillPackFromBody(c, config, body) }),
+    listWorkspaceDirectories: (c) => listWorkspaceDirectories(c, config),
   });
 
   let closePromise: Promise<void> | undefined;

@@ -182,6 +182,38 @@ describe('U8 Server contracts', () => {
     await handle.close();
   });
 
+  test('filters the global session baseline before serialization', async () => {
+    const projectDomain = await createProjectDomain();
+    const handle = createServerRuntime(serverConfig(projectDomain));
+    const a = await request(handle, '/sessions', {
+      method: 'POST',
+      headers: principalHeaders('key-a'),
+    });
+    const b = await request(handle, '/sessions', {
+      method: 'POST',
+      headers: principalHeaders('key-b'),
+    });
+    const aId = ((await a.json()) as { sessionId: string }).sessionId;
+    const bId = ((await b.json()) as { sessionId: string }).sessionId;
+
+    const scoped = await requestJson(handle, '/sessions/feed/baseline', principalHeaders('key-a')) as {
+      runtimeIncarnation: string;
+      cursor: string;
+      sessions: Array<Record<string, unknown>>;
+    };
+    expect(scoped.runtimeIncarnation).toBeString();
+    expect(scoped.cursor).toBeString();
+    expect(scoped.sessions.map((session) => session.id)).toEqual([aId]);
+    expect(scoped.sessions[0]).not.toHaveProperty('creatorPrincipalId');
+    expect(scoped.sessions[0]).not.toHaveProperty('workingDirectory');
+
+    const admin = await requestJson(handle, '/sessions/feed/baseline', rootHeaders()) as {
+      sessions: Array<{ id: string }>;
+    };
+    expect(admin.sessions.map((session) => session.id).sort()).toEqual([aId, bId].sort());
+    await handle.close();
+  });
+
   test('exposes cloned child list, status, abort, and wait DTOs', async () => {
     const projectDomain = await createProjectDomain();
     const handle = createServerRuntime(serverConfig(projectDomain));

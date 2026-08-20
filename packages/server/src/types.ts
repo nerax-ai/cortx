@@ -29,6 +29,11 @@ export interface ServerConfig {
     };
   };
   pluginSubscriptions?: Partial<PluginAdminSubscriptionLimits>;
+  sessionFeeds?: {
+    maxConnectionsGlobal?: number;
+    maxConnectionsPerPrincipal?: number;
+    maxBufferedFramesPerConnection?: number;
+  };
   /** Maximum sessions allowed to run concurrently. Idle loaded sessions do not count toward this limit. */
   maxSessions?: number;
   maxEventsPerSession?: number;

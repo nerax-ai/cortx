@@ -3,6 +3,10 @@ import type { RuntimeRunPhase, RuntimeSessionHealth, SessionProjection } from '.
 
 export interface SessionSummaryProjection {
   id: string;
+  /** Used by trusted adapters for authorization and intentionally omitted from public feed DTOs. */
+  creatorPrincipalId?: string;
+  /** Trusted-adapter ACL input; public transports must omit it. */
+  workingDirectory: string;
   createdAt: number;
   lastActivityAt: number;
   model: string;
@@ -24,11 +28,11 @@ export interface SessionSummaryBaseline {
 
 export type SessionSummaryChange =
   | { cursor: string; type: 'added' | 'updated'; sessionId: string; summary: SessionSummaryProjection }
-  | { cursor: string; type: 'removed'; sessionId: string };
+  | { cursor: string; type: 'removed'; sessionId: string; summary: SessionSummaryProjection };
 
 type PendingSessionSummaryChange =
   | { type: 'added' | 'updated'; sessionId: string; summary: SessionSummaryProjection }
-  | { type: 'removed'; sessionId: string };
+  | { type: 'removed'; sessionId: string; summary: SessionSummaryProjection };
 
 export interface RuntimeSessionRegistryOptions<TSession extends { id: string }> {
   project(session: TSession): SessionProjection;
@@ -90,7 +94,7 @@ export class RuntimeSessionRegistry<TSession extends { id: string }> {
     const session = this.#sessions.get(sessionId);
     if (!session) return undefined;
     this.#sessions.delete(sessionId);
-    this.#publish({ type: 'removed', sessionId });
+    this.#publish({ type: 'removed', sessionId, summary: this.#summary(session) });
     return session;
   }
 
@@ -166,6 +170,8 @@ export class RuntimeSessionRegistry<TSession extends { id: string }> {
 export function summarizeSessionProjection(projection: SessionProjection): SessionSummaryProjection {
   return {
     id: projection.id,
+    creatorPrincipalId: projection.creatorPrincipalId,
+    workingDirectory: projection.workingDirectory,
     createdAt: projection.createdAt,
     lastActivityAt: projection.lastActivityAt,
     model: projection.model,
@@ -182,7 +188,7 @@ export function summarizeSessionProjection(projection: SessionProjection): Sessi
 }
 
 function cloneChange(change: SessionSummaryChange): SessionSummaryChange {
-  return change.type === 'removed' ? { ...change } : { ...change, summary: { ...change.summary } };
+  return { ...change, summary: { ...change.summary } };
 }
 
 function safeNotify(callback: ChangeSubscriber, change: SessionSummaryChange): void {

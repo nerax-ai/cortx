@@ -91,6 +91,47 @@ describe('server routes', () => {
     expect(body.page.lastSequence).toBeNumber();
   });
 
+  test('forwards command identity and Runtime incarnation to the idempotent mutation boundary', async () => {
+    const created = await request('/sessions', { method: 'POST', headers: rootHeaders() });
+    const { sessionId, session } = (await created.json()) as {
+      sessionId: string;
+      session: { runtimeIncarnation: string };
+    };
+    const command = {
+      message: 'Exactly once',
+      commandId: 'command-once',
+      expectedRuntimeIncarnation: session.runtimeIncarnation,
+    };
+
+    expect((await request(`/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify(command),
+    })).status).toBe(200);
+    expect((await request(`/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify(command),
+    })).status).toBe(200);
+    expect(handle.runtime.getEventEnvelopeHistory(sessionId).filter((event) => event.event.type === 'user_message')).toHaveLength(1);
+
+    const conflict = await request(`/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ ...command, message: 'Different payload' }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ kind: 'conflict' });
+
+    const staleRuntime = await request(`/sessions/${sessionId}/abort`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ commandId: 'stale-abort', expectedRuntimeIncarnation: 'stale-runtime' }),
+    });
+    expect(staleRuntime.status).toBe(409);
+    expect(await staleRuntime.json()).toMatchObject({ kind: 'conflict' });
+  });
+
   test('streams session events with header authentication', async () => {
     const created = await request('/sessions', { method: 'POST', headers: rootHeaders() });
     const { sessionId } = (await created.json()) as { sessionId: string };
@@ -113,6 +154,34 @@ describe('server routes', () => {
     controller.abort();
     await reader.cancel().catch(() => undefined);
     expect(new TextDecoder().decode(first.value)).toContain('data:');
+  });
+
+  test('offers explicit framed replay completion for gap-aware clients', async () => {
+    const created = await request('/sessions', { method: 'POST', headers: rootHeaders() });
+    const { sessionId } = (await created.json()) as { sessionId: string };
+    await request(`/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ message: 'Frame this', commandId: 'framed-prompt' }),
+    });
+    await waitFor(() => handle.runtime.getEventEnvelopeHistory(sessionId).some((event) => event.event.type === 'done'));
+
+    const controller = new AbortController();
+    const response = await request(`/sessions/${sessionId}/events?format=envelope&protocol=frames`, {
+      headers: rootHeaders(),
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    let text = '';
+    while (!text.includes('replay-complete')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += new TextDecoder().decode(chunk.value);
+    }
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+    expect(text).toContain('"type":"durable-event"');
+    expect(text).toContain('"type":"replay-complete"');
   });
 
   test('validates JSON, models, workspaces, and profile aliases', async () => {
