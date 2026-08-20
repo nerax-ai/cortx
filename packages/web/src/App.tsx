@@ -19,6 +19,7 @@ import { ConnectionStatus } from './components/ConnectionStatus';
 import { DesktopWorkspace } from './components/DesktopWorkspace';
 import { AskUserDialog } from './components/AskUserDialog';
 import type { QueuedPrompt } from './components/PromptInput';
+import { preferredInitialToolMode } from './startup';
 
 const DEFAULT_API_KEY = import.meta.env.VITE_CORTX_API_KEY ?? 'cortx-dev-key';
 const INITIAL_EVENT_CONNECTION: WebEventConnectionState = {
@@ -130,9 +131,13 @@ export function App() {
       ]);
       setModels(availableModels);
       setToolProfiles(availableToolProfiles);
+      const initialToolMode = preferredInitialToolMode(availableToolProfiles);
       const target =
         [...existing].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0] ??
-        (await bridge.createSession({ toolMode: 'all', approvalMode: 'interactive' }));
+        (await bridge.createSession({
+          ...(initialToolMode ? { toolMode: initialToolMode } : {}),
+          approvalMode: 'interactive',
+        }));
       await bridge.connect(target.id);
       const nextSessions = await bridge.listSessions();
       activateSession(target);
