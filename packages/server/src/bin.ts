@@ -21,6 +21,7 @@ import {
 } from '@cortx/runtime';
 import { createServerRuntime } from './server.js';
 import type { ServerAuthKey } from './auth.js';
+import { configuredPluginSources } from './plugin-sources.js';
 
 interface CortxConfig {
   model: string;
@@ -59,10 +60,12 @@ const log = createLogger({
 
 function findProjectRoot(start: string): string {
   let current = resolve(start);
+  let packageFallback: string | undefined;
   while (true) {
-    if (existsSync(resolve(current, '.git')) || existsSync(resolve(current, 'package.json'))) return current;
+    if (existsSync(resolve(current, '.git'))) return current;
+    if (!packageFallback && existsSync(resolve(current, 'package.json'))) packageFallback = current;
     const parent = dirname(current);
-    if (parent === current) return resolve(start);
+    if (parent === current) return packageFallback ?? resolve(start);
     current = parent;
   }
 }
@@ -100,14 +103,9 @@ function defaultAgentSpecRoots(defaultWorkingDirectory: string): string[] {
   ];
 }
 
-function configuredPluginSources(config: CortxConfig): string[] {
-  const workspaceTools =
-    config.workspaceToolsPlugin === false
-      ? undefined
-      : typeof config.workspaceToolsPlugin === 'string' && config.workspaceToolsPlugin.trim()
-        ? config.workspaceToolsPlugin.trim()
-        : process.env.CORTX_WORKSPACE_TOOLS_PLUGIN?.trim() || undefined;
-  return [...(workspaceTools ? [workspaceTools] : []), ...(config.plugins ?? [])];
+function defaultWorkspaceToolsPluginSource(projectRoot: string): string | undefined {
+  const candidate = resolve(projectRoot, '..', 'cortx-plugins', 'workspace-tools');
+  return existsSync(resolve(candidate, 'manifest.json')) ? `file:${candidate}` : undefined;
 }
 
 async function submitPluginSource(projectDomain: ProjectDomain, source: string): Promise<void> {
@@ -130,7 +128,8 @@ async function main() {
   const config = await loadServerConfig();
   if (!config) throw new Error('No Cortx config found');
 
-  const projectRoot = findProjectRoot(resolve(config.workingDirectory ?? process.cwd()));
+  const sourceProjectRoot = findProjectRoot(import.meta.dir);
+  const projectRoot = findProjectRoot(resolve(config.workingDirectory ?? sourceProjectRoot));
   const identityStore = new ProjectIdentityStore({ projectRoot });
   const identity = identityStore.resolve({ mode: identityStore.read() ? 'retain' : 'create' });
   const registry = createFilesystemPluginRegistry({
@@ -148,7 +147,10 @@ async function main() {
     logger: log.scope('project-domain'),
   });
   await projectDomain.start();
-  for (const source of configuredPluginSources(config)) await submitPluginSource(projectDomain, source);
+  for (const source of configuredPluginSources(config, {
+    environmentWorkspaceToolsPlugin: process.env.CORTX_WORKSPACE_TOOLS_PLUGIN,
+    defaultWorkspaceToolsPlugin: defaultWorkspaceToolsPluginSource(sourceProjectRoot),
+  })) await submitPluginSource(projectDomain, source);
 
   const synax = new Synax({
     registry: projectDomain.registry,
