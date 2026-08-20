@@ -11,6 +11,34 @@ export interface RuntimeSessionMetadata {
 
 export type RuntimeApprovalMode = 'deny' | 'interactive' | 'full-access';
 
+export type RuntimeRunPhase =
+  | 'idle'
+  | 'running'
+  | 'waiting_user'
+  | 'waiting_approval'
+  | 'aborting'
+  | 'interrupted';
+
+export type RuntimeSessionHealth = 'healthy' | 'run_failed' | 'durability_failed';
+
+export interface RuntimeFollowUpAdmission {
+  inputId: string;
+  message: string;
+  acceptedAt: number;
+  admissionSequence: number;
+}
+
+export interface RuntimePendingInteraction {
+  requestId: string;
+  kind: 'question' | 'approval';
+  prompt: string;
+  context?: Record<string, unknown>;
+  allowedResponses?: string[];
+  runId: number;
+  runtimeIncarnation: string;
+  createdAt: number;
+}
+
 export interface RuntimeSessionInfo {
   id: string;
   creatorPrincipalId?: string;
@@ -34,6 +62,14 @@ export interface RuntimeSessionInfo {
   promptHistory?: string[];
   /** Cumulative provider usage across the session; context contains the latest request context facts. */
   usage?: AgentDoneUsage;
+  runtimeIncarnation: string;
+  projectionAsOfSequence: number;
+  runPhase: RuntimeRunPhase;
+  sessionHealth: RuntimeSessionHealth;
+  resumable: boolean;
+  acceptsPrompt: boolean;
+  pendingInteraction: RuntimePendingInteraction | null;
+  /** Compatibility view. Prefer runPhase. */
   isRunning: boolean;
   eventCount: number;
   metadata?: RuntimeSessionMetadata;
@@ -112,6 +148,11 @@ export interface ManagedRuntimeSession {
   envelopeSubscribers: Set<(event: import('@cortx/sdk').RuntimeAgentEventEnvelope) => void>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   isRunning: boolean;
+  runPhase: RuntimeRunPhase;
+  sessionHealth: RuntimeSessionHealth;
+  pendingInteraction?: RuntimePendingInteraction;
+  resumable: boolean;
+  followUpAdmissions: Map<string, RuntimeFollowUpAdmission>;
   runPromise?: Promise<void>;
   runId: number;
   nextEventSequence: number;
@@ -119,6 +160,8 @@ export interface ManagedRuntimeSession {
   contextMetadata: RuntimeSessionContextMetadata;
   metadata?: RuntimeSessionMetadata;
 }
+
+export type SessionProjection = RuntimeSessionInfo;
 
 export interface RuntimeSessionLocalState {
   agentSessions: SubAgentSessionStore;

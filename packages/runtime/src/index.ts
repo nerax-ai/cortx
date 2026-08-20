@@ -115,4 +115,9 @@ export type {
   RuntimeSessionMetadata,
   RuntimeSessionUpdateRequest,
   RuntimeApprovalMode,
+  RuntimeFollowUpAdmission,
+  RuntimePendingInteraction,
+  RuntimeRunPhase,
+  RuntimeSessionHealth,
+  SessionProjection,
 } from './session.js';

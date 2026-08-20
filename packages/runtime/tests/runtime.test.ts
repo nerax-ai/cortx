@@ -877,7 +877,7 @@ describe('CortxRuntime sessions', () => {
     await restoredRuntime.close();
   });
 
-  test('allows session control updates during an active run and applies them on the next turn', async () => {
+  test('rejects session control updates during an active run', async () => {
     const seenToolNames: string[][] = [];
     const runtime = new CortxRuntime({
       language: {
@@ -909,11 +909,9 @@ describe('CortxRuntime sessions', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(seenToolNames.length).toBe(1);
-    const updated = await runtime.updateSession(session.id, { toolMode: 'read-only', approvalMode: 'full-access' });
-    expect(updated).toMatchObject({
-      toolMode: 'read-only',
-      approvalMode: 'full-access',
-      isRunning: true,
+    await expect(runtime.updateSession(session.id, { toolMode: 'read-only', approvalMode: 'full-access' })).rejects.toMatchObject({
+      kind: 'session_busy',
+      details: { runPhase: 'running' },
     });
     expect(seenToolNames[0]).not.toContain('read');
 
@@ -922,7 +920,7 @@ describe('CortxRuntime sessions', () => {
     await runtime.prompt(session.id, 'next');
     await waitForEvent(events, 'done');
 
-    expect(seenToolNames[1]).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls']));
+    expect(seenToolNames[1]).not.toContain('read');
     await runtime.close();
   });
 

@@ -50,6 +50,7 @@ import {
 import type {
   ManagedRuntimeSession,
   RuntimeApprovalMode,
+  RuntimeFollowUpAdmission,
   RuntimeSessionContextMetadata,
   RuntimeSessionCreateRequest,
   RuntimeSessionInfo,
@@ -170,11 +171,6 @@ interface RuntimeSessionHostConfiguration {
   skillPaths?: string[];
   skillPacks?: string[];
   metadata?: import('./session.js').RuntimeSessionMetadata;
-}
-
-interface PendingRuntimeHost {
-  host: RuntimeCortxHost;
-  configuration: RuntimeSessionHostConfiguration;
 }
 
 function createSessionId(): string {
@@ -470,6 +466,7 @@ function resolveLanguageModelContextWindow(
 }
 
 export class CortxRuntime {
+  readonly runtimeIncarnation = crypto.randomUUID();
   private readonly sessions = new Map<string, ManagedRuntimeSession>();
   private readonly deletedSessionIds = new Set<string>();
   private readonly applicationScope = new CortxHostScope(`runtime:${crypto.randomUUID()}`, 'application');
@@ -496,7 +493,6 @@ export class CortxRuntime {
   private readonly skillPackRegistryPath?: string;
   private accepting = true;
   private closePromise?: Promise<void>;
-  private readonly pendingHosts = new Map<string, PendingRuntimeHost>();
   private readonly cleanupFailures = new Map<string, { retry: () => Promise<void>; info: RuntimeCleanupFailureInfo }>();
 
   constructor(options: CortxRuntimeOptions) {
@@ -619,6 +615,11 @@ export class CortxRuntime {
       envelopeSubscribers: new Set(),
       idleTimer: undefined,
       isRunning: false,
+      runPhase: 'idle',
+      sessionHealth: 'healthy',
+      pendingInteraction: undefined,
+      resumable: false,
+      followUpAdmissions: new Map(),
       runPromise: undefined,
       runId: 0,
       nextEventSequence: 0,
@@ -687,6 +688,12 @@ export class CortxRuntime {
         const eventSnapshots = store.listEventEnvelopes ? await store.listEventEnvelopes(snapshot.id) : [];
         session.usage = this.aggregateUsageFromEventSnapshots(session, eventSnapshots) ?? snapshot.usage;
         this.restoreSessionEventHistory(session, eventSnapshots, resumableCheckpoint);
+        if (resumableCheckpoint) {
+          session.isRunning = false;
+          session.runPhase = 'interrupted';
+          session.resumable = true;
+          session.pendingInteraction = undefined;
+        }
         await this.persistRuntimeSession(session);
         restored.push(this.info(session));
 
@@ -730,6 +737,7 @@ export class CortxRuntime {
 
   async updateSession(sessionId: string, request: RuntimeSessionUpdateRequest = {}): Promise<RuntimeSessionInfo> {
     const session = this.requireSession(sessionId);
+    this.assertSessionIdle(session);
     const model = normalizeModelId(request.model, session.model);
     const modelChanged = model !== session.model;
     const reasoningEffort =
@@ -775,19 +783,15 @@ export class CortxRuntime {
       metadata: request.metadata ?? session.metadata,
     };
     const candidate = await this.createSessionCandidate(session, configuration);
-    session.lastActivityAt = Date.now();
-    if (session.isRunning) {
-      const previousPending = this.pendingHosts.get(session.id);
-      this.pendingHosts.set(session.id, { host: candidate, configuration });
-      if (previousPending) {
-        await this.closeScope(previousPending.host.scope, `superseded session candidate:${session.id}`);
-      }
-    } else {
-      await this.cutoverSessionHost(session, candidate, configuration);
+    if (session.runPhase !== 'idle') {
+      await this.closeScope(candidate.scope, `discarded busy session candidate:${session.id}`);
+      this.assertSessionIdle(session);
     }
+    session.lastActivityAt = Date.now();
+    await this.cutoverSessionHost(session, candidate, configuration);
     this.resetIdleTimer(session);
     await this.persistRuntimeSession(session);
-    return session.isRunning ? this.info(session, configuration) : this.info(session);
+    return this.info(session);
   }
 
   getEventHistory(sessionId: string): AgentEvent[] {
@@ -889,21 +893,51 @@ export class CortxRuntime {
     this.resetIdleTimer(session);
   }
 
-  followUp(sessionId: string, message: string): void {
+  followUp(sessionId: string, message: string, inputId = crypto.randomUUID()): RuntimeFollowUpAdmission {
     const session = this.requireSession(sessionId);
     if (!message?.trim()) throw new RuntimeError('invalid_request', 'Message is required');
+    if (session.runPhase !== 'running' && session.runPhase !== 'waiting_user' && session.runPhase !== 'waiting_approval') {
+      throw new RuntimeError('invalid_request', 'Follow-up requires a running session', {
+        sessionId,
+        runPhase: session.runPhase,
+      });
+    }
+    const existing = session.followUpAdmissions.get(inputId);
+    if (existing) {
+      if (existing.message !== message) {
+        throw new RuntimeError('invalid_request', 'Follow-up input id was already used with a different payload', {
+          sessionId,
+          inputId,
+        });
+      }
+      return { ...existing };
+    }
     session.lastActivityAt = Date.now();
     session.promptHistory = appendPromptHistory(session.promptHistory, message);
+    const admission: RuntimeFollowUpAdmission = {
+      inputId,
+      message,
+      acceptedAt: session.lastActivityAt,
+      admissionSequence: session.nextEventSequence + 1,
+    };
+    session.followUpAdmissions.set(inputId, admission);
+    if (session.followUpAdmissions.size > 256) {
+      const oldest = session.followUpAdmissions.keys().next().value;
+      if (oldest) session.followUpAdmissions.delete(oldest);
+    }
     this.broadcast(session, { type: 'user_message', message, source: 'follow_up' });
     session.cortx.controller.followUp(message);
     this.resetIdleTimer(session);
     void this.persistRuntimeSession(session);
+    return { ...admission };
   }
 
   answer(sessionId: string, toolCallId: string, response: string): boolean {
     const session = this.requireSession(sessionId);
     const answered = session.cortx.controller.answerUser(toolCallId, response);
     if (!answered) return false;
+    if (session.pendingInteraction?.requestId === toolCallId) session.pendingInteraction = undefined;
+    if (session.runPhase === 'waiting_user' || session.runPhase === 'waiting_approval') session.runPhase = 'running';
     this.broadcast(session, { type: 'user_answer', toolCallId, response });
     return true;
   }
@@ -969,7 +1003,9 @@ export class CortxRuntime {
     createGenerator: () => AsyncGenerator<AgentEvent>,
     onStarted?: () => void,
   ): Promise<void> {
-    if (session.isRunning) throw new RuntimeError('session_busy', 'Agent is already running');
+    if (session.runPhase !== 'idle' && session.runPhase !== 'interrupted') {
+      throw new RuntimeError('session_busy', 'Agent is already running', { runPhase: session.runPhase });
+    }
     const runningSessions = this.runningSessionCount();
     if (runningSessions >= this.maxSessions) {
       throw new RuntimeError('capacity_exceeded', 'Maximum concurrent running sessions reached', {
@@ -1019,6 +1055,10 @@ export class CortxRuntime {
       throw error;
     }
     session.isRunning = true;
+    session.runPhase = 'running';
+    session.sessionHealth = 'healthy';
+    session.pendingInteraction = undefined;
+    session.resumable = false;
     session.cortx.setRunId(runId);
     onStarted?.();
     void this.persistRuntimeSession(session);
@@ -1111,13 +1151,6 @@ export class CortxRuntime {
     await this.closeScope(previousScope, `replaced session host:${session.id}`);
   }
 
-  private async applyPendingHost(session: ManagedRuntimeSession): Promise<void> {
-    const pending = this.pendingHosts.get(session.id);
-    if (!pending) return;
-    this.pendingHosts.delete(session.id);
-    await this.cutoverSessionHost(session, pending.host, pending.configuration);
-  }
-
   private async closeScope(scope: CortxHostScope, owner: string): Promise<void> {
     try {
       await scope.close(new Error(owner));
@@ -1151,13 +1184,11 @@ export class CortxRuntime {
     } finally {
       await this.closeScope(runScope, `settled run:${session.id}:${runId}`);
       if (session.runScope === runScope) session.runScope = undefined;
-      if (session.runId === runId) session.isRunning = false;
-      if (this.sessions.has(session.id)) {
-        try {
-          await this.applyPendingHost(session);
-        } catch (error) {
-          this.broadcast(session, eventError(error));
-        }
+      if (session.runId === runId) {
+        session.isRunning = false;
+        session.runPhase = 'idle';
+        session.pendingInteraction = undefined;
+        session.resumable = false;
       }
       if (session.runPromise && session.runId === runId) session.runPromise = undefined;
       void this.persistRuntimeSession(session);
@@ -1168,6 +1199,7 @@ export class CortxRuntime {
     if (!this.sessions.has(session.id)) return;
     session.lastActivityAt = Date.now();
     const enrichedEvent = this.enrichEvent(session, event);
+    this.applyEventProjection(session, enrichedEvent);
     const envelope: RuntimeAgentEventEnvelope = {
       sequence: ++session.nextEventSequence,
       timestamp: session.lastActivityAt,
@@ -1196,6 +1228,49 @@ export class CortxRuntime {
     for (const subscriber of session.envelopeSubscribers) {
       this.safeNotify(() => subscriber(envelope));
     }
+  }
+
+  private applyEventProjection(session: ManagedRuntimeSession, event: AgentEvent): void {
+    if (event.type === 'user_request') {
+      session.pendingInteraction = {
+        requestId: event.request.requestId,
+        kind: event.request.kind === 'tool_approval' ? 'approval' : 'question',
+        prompt: event.request.prompt,
+        context: event.request.context,
+        allowedResponses: event.request.allowedResponses,
+        runId: session.runId,
+        runtimeIncarnation: this.runtimeIncarnation,
+        createdAt: session.lastActivityAt,
+      };
+      session.runPhase = event.request.kind === 'tool_approval' ? 'waiting_approval' : 'waiting_user';
+      return;
+    }
+    if (event.type === 'user_question') {
+      const existing = session.pendingInteraction;
+      if (existing?.requestId !== event.toolCallId) {
+        session.pendingInteraction = {
+          requestId: event.toolCallId,
+          kind: 'question',
+          prompt: event.question,
+          runId: session.runId,
+          runtimeIncarnation: this.runtimeIncarnation,
+          createdAt: session.lastActivityAt,
+        };
+        session.runPhase = 'waiting_user';
+      }
+      return;
+    }
+    if (event.type === 'user_answer') {
+      if (session.pendingInteraction?.requestId === event.toolCallId) session.pendingInteraction = undefined;
+      if (session.isRunning) session.runPhase = 'running';
+      return;
+    }
+    if (event.type === 'error') {
+      session.sessionHealth = event.code === 'user_abort' ? 'healthy' : 'run_failed';
+      session.pendingInteraction = undefined;
+      return;
+    }
+    if (event.type === 'done') session.pendingInteraction = undefined;
   }
 
   private enrichEvent(session: ManagedRuntimeSession, event: AgentEvent): AgentEvent {
@@ -1307,6 +1382,9 @@ export class CortxRuntime {
     pendingQuestionReason: string,
   ): Promise<void> {
     const previousRun = session.runPromise;
+    session.runPhase = 'aborting';
+    session.pendingInteraction = undefined;
+    session.resumable = false;
     session.cortx.abort(abortReason);
     const childShutdown = session.agentSessions.abortRunning(pendingQuestionReason);
     session.cortx.controller.rejectPendingQuestions(pendingQuestionReason);
@@ -1322,11 +1400,10 @@ export class CortxRuntime {
       }
     }
     await childShutdown;
-    await this.applyPendingHost(session);
-
     if (!this.sessions.has(session.id)) return;
     if (session.runPromise === previousRun) session.runPromise = undefined;
     session.isRunning = false;
+    session.runPhase = 'idle';
     await this.persistRuntimeSession(session);
   }
 
@@ -1334,13 +1411,12 @@ export class CortxRuntime {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     if (options.deleteDurable) this.deletedSessionIds.add(session.id);
     await this.abortSession(session, 'Session cleaned up', 'Session destroyed');
-    const pending = this.pendingHosts.get(session.id);
-    this.pendingHosts.delete(session.id);
-    if (pending) await this.closeScope(pending.host.scope, `destroyed session candidate:${session.id}`);
     await this.closeScope(session.scope, `destroyed session:${session.id}`);
     session.subscribers.clear();
     session.envelopeSubscribers.clear();
     session.isRunning = false;
+    session.runPhase = 'idle';
+    session.pendingInteraction = undefined;
     this.sessions.delete(session.id);
     if (options.deleteDurable) {
       await this.runtimeDurableStore()?.deleteRuntimeSession(session.id);
@@ -1353,6 +1429,14 @@ export class CortxRuntime {
     const session = this.sessions.get(sessionId);
     if (!session) throw new RuntimeError('session_not_found', 'Session not found', { sessionId });
     return session;
+  }
+
+  private assertSessionIdle(session: ManagedRuntimeSession): void {
+    if (session.runPhase === 'idle') return;
+    throw new RuntimeError('session_busy', 'Session configuration can only change while idle', {
+      sessionId: session.id,
+      runPhase: session.runPhase,
+    });
   }
 
   private info(
@@ -1381,6 +1465,13 @@ export class CortxRuntime {
       skillPacks: configuration.skillPacks,
       promptHistory: session.promptHistory,
       usage: session.usage,
+      runtimeIncarnation: this.runtimeIncarnation,
+      projectionAsOfSequence: session.nextEventSequence,
+      runPhase: session.runPhase,
+      sessionHealth: session.sessionHealth,
+      resumable: session.resumable,
+      acceptsPrompt: session.runPhase === 'idle' && session.sessionHealth !== 'durability_failed',
+      pendingInteraction: session.pendingInteraction ? structuredClone(session.pendingInteraction) : null,
       isRunning: session.isRunning,
       eventCount: session.events.length,
       metadata: configuration.metadata,
