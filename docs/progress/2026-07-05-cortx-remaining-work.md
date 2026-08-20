@@ -9,6 +9,18 @@ language: zh-CN
 
 # Cortx 当前剩余缺口
 
+## 2026-08-20 Runtime Workbench 重构更新
+
+本轮已把 Web/Server/Runtime 的会话权威边界重新收敛：Runtime 现在独占 session、run、queued input、pending interaction、durable sequence 和能力装配事实；Server 负责授权后的 HTTP/SSE 协议转换；Web 改为 React-free `SessionController` + typed API/SSE client，React 只消费 immutable snapshot 和维护布局、draft、tab 等界面偏好。
+
+- Runtime 已拆出 Session Registry、Run Coordinator、Host Factory、Input Source、Command Ledger 和顺序持久化组件；mutation 使用稳定 `commandId` 与 Runtime incarnation fence，运行中输入由 Runtime follow-up 队列持久化、展示和取消。
+- Server 的 catalog、session、event 路由已从主组合文件拆出；全局 session baseline/feed 在缓冲和序列化前执行 principal 过滤，并提供连接、缓冲、retention、reset-required 和 replay-complete 边界。
+- Web 已删除浏览器本地自动 prompt 队列和旧 `EventBridge` 状态机，使用单一 Session Controller 处理 activation generation、历史窗口、durable gap repair、重连、全局 session feed 和可重试 mutation identity。
+- Workbench 已形成 rail / conversation / side pane 三层结构，支持 wide、drawer、390px single-pane，首批真实 side-pane contribution 为 Activity 与 Context；样式保持 UnoCSS `presetWind3` 和 reset。
+- 产品 smoke 已迁移到新 Session Controller，并继续覆盖真实 Server、Web/TUI remote client、SSE header auth、approval、event replay、sub-agent attribution、SkillPack 和 AgentSpec 链路。
+
+本轮明确未扩大到 SQLite、多 writer、Workspace 领域实体、TUI typed-client parity、远程 Web 插件 ABI 或完整 asset manager；这些仍是后续工作，不属于当前核心架构缺口。
+
 ## 当前判断
 
 Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最小 agent kernel，`@cortx/runtime` 承担多 session、多目录、workspace tool 挂载策略、skills、sub-agent、approval、AgentSpec 和 SkillPack 等 host 能力，具体 workspace tools 已下沉到兄弟项目 `cortx-plugins/workspace-tools`，server/TUI/Web 也已经按薄前端和 runtime host 分层。
@@ -25,7 +37,7 @@ Cortx 的核心架构方向已经基本成立：`@cortx/core` 已经收敛成最
 - P1 AgentSpec/SkillPack 产品化：runtime 可从 JSON 文件启动 AgentSpec，并新增只读 discovery helper；AgentSpec 现在有 `schemaVersion: 1` 契约，SkillPack 支持 `skill-pack.json` / `.cortx/skill-pack.json` v1 manifest；AgentSpec、SkillPack manifest 和本地 SkillPack install registry 已有第一版 schema migration，缺省版本和 v0 会迁到当前 v1，不支持的未来版本继续明确失败；runtime 已新增本地 SkillPack install registry，session 和 AgentSpec 均可通过已安装 pack id/name 启用 skills；server 暴露 `GET /skill-packs`、`POST /skill-packs/install`、`GET /agent-specs` 与 `POST /agent-specs/launch`，按 API key workspace scope 过滤可见资产；Web bridge/sidebar 已能列出并启动发现到的 AgentSpec，也能列出/安装 SkillPack 并为新 session 选择 pack；TUI local/remote 已有 `/agents` 列表、`/agent <name-or-path>` 直接启动、`/agent` 选择器 overlay，以及 `/skill-packs`、`/skill-pack install`、`/skill-pack session` 的第一版 SkillPack 入口；`examples/skill-packs/basic` 提供无需 JavaScript plugin code 的版本化 skill-pack 示例。
 - Web 多 session 基础：当前 Web 已有 server session list、按 workspace/project 分组、同一 project 多 session 切换、tool/control 独立创建 session、approval/abort/resume/follow-up client path。
 - Web event replay / recovery：Web bridge 现在暴露 typed event stream lifecycle，workspace header 能显示 replay/live/reconnecting/disconnected 状态、last event sequence，并提供不需要重新输入 API key 或 workspace 的 recover stream 操作。
-- P1 自动 product smoke：新增 `tests/product-dogfood-smoke.test.ts`，用 fake provider 但走真实 `createServerRuntime()`、Web `EventBridge`、TUI `RemoteRuntimeClient` 和 server SSE/token/auth 路径，覆盖多 workspace/session scope、approval answer、event replay、abort/resume route、sub-agent lifecycle attribution、SkillPack install/list 和 AgentSpec discovery。
+- P1 自动 product smoke：`tests/product-dogfood-smoke.test.ts` 用 fake provider 但走真实 `createServerRuntime()`、Web `SessionController`、TUI `RemoteRuntimeClient` 和 server SSE/token/auth 路径，覆盖多 workspace/session scope、approval answer、event replay、abort/resume route、sub-agent lifecycle attribution、SkillPack install/list 和 AgentSpec discovery。
 - TUI remote session switching：TUI remote 现在可通过 server client 列出授权 sessions，并通过 `/sessions`、`/session <id>`、`/session new <workspace>` 进行 server-owned session 列表、切换和新 workspace session 创建；本地 `/resume` transcript restore 语义保持不变。
 - P2 durable event store：runtime durable store 已新增 event envelope snapshot，FileDurableRunStore 会按 session/sequence 持久化事件并按 retention window 裁剪旧事件，restore 时回填 bounded event history，server/frontend 在进程重启后仍可 replay 关键历史。
 - P2 schema migration：durable file records 现在统一经过 migration parser；v0 session/sub-agent/event 记录可迁到当前 schema，invalid/unsupported records 仍会跳过；event replay methods 也变成 optional durable capability，旧 custom store 不会因此失去 session/sub-agent 持久化能力。
@@ -135,7 +147,7 @@ Web 保持 remote-only 薄前端，并已从单栏聊天页升级为桌面式 wo
 - 连接页已有 connecting/error/retry 基础状态。
 - Workspace header 已有 event replay/live/reconnecting/disconnected 状态和 recover stream 操作。
 - Sidebar 已有 SkillPack 列表、安装表单和新 session pack 选择入口。
-- Web 仍通过 `EventBridge` 访问 server/runtime，不直接依赖 core/runtime/workspace-tools 内部实现。
+- Web 通过 React-free `SessionController`、typed API client 和 fetch SSE transport 访问 server/runtime，不直接依赖 core/runtime/workspace-tools 内部实现。
 
 ### 缺口
 

@@ -9,7 +9,7 @@ import type {
   WebSkillPackInfo,
   WebToolProfileInfo,
   WebWorkspaceToolMode,
-} from '../bridge/event-bridge';
+} from '../client/types';
 import { visibleActivityEntries } from '../activity';
 import type { ContextUsageSummary } from '../context-usage';
 import { ActivityCard } from './ActivityTimeline';
@@ -44,7 +44,8 @@ interface ChatViewProps {
   isLoadingOlderHistory?: boolean;
   toolMode: WebWorkspaceToolMode;
   approvalMode: WebApprovalMode;
-  onSend: (message: string) => void;
+  canChangeModes?: boolean;
+  onSend: (message: string) => void | Promise<void>;
   onAbort: () => void;
   onResume: () => void;
   onSteerQueuedPrompt: (id: string) => void;
@@ -135,6 +136,7 @@ export function ChatView({
   isLoadingOlderHistory = false,
   toolMode,
   approvalMode,
+  canChangeModes = status !== 'awaiting_user',
   onSend,
   onAbort,
   onResume,
@@ -306,7 +308,7 @@ export function ChatView({
         approvalMode={approvalMode}
         contextUsage={contextUsage}
         tokenUsage={tokenUsage}
-        canChangeModes={status !== 'awaiting_user'}
+        canChangeModes={canChangeModes}
         onAbort={onAbort}
         onResume={onResume}
         onSteerQueuedPrompt={onSteerQueuedPrompt}

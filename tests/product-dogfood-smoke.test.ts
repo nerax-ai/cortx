@@ -8,7 +8,8 @@ import { AgentStore } from '../packages/store/src/index';
 import { createServerRuntime, type ServerRuntimeHandle } from '../packages/server/src/server';
 import { OFFICIAL_TOOL_PROFILE_ALIASES, type ProjectDomain } from '../packages/runtime/src/index';
 import { createWorkspaceToolProjectDomain } from '../packages/runtime/tests/helpers/project-domain';
-import { EventBridge, EventBridgeError } from '../packages/web/src/bridge/event-bridge';
+import { CortxApiError } from '../packages/web/src/client/api-client';
+import { SessionController } from '../packages/web/src/session/session-controller';
 import { RemoteRuntimeClient } from '../packages/tui/src/remote-client';
 
 const BASE_URL = 'http://cortx-smoke.test';
@@ -195,9 +196,9 @@ describe('product dogfood smoke', () => {
     });
     installAppTransport(handle);
     const webStore = new AgentStore();
-    const web = new EventBridge(webStore, 'key-a', BASE_URL);
+    const web = new SessionController({ store: webStore, apiKey: 'key-a', baseUrl: BASE_URL });
     const replayStore = new AgentStore();
-    const replayWeb = new EventBridge(replayStore, 'key-a', BASE_URL);
+    const replayWeb = new SessionController({ store: replayStore, apiKey: 'key-a', baseUrl: BASE_URL });
     const tuiB = new RemoteRuntimeClient({ baseUrl: BASE_URL, apiKey: 'key-b', fetch: activeFetch });
     const tuiA = new RemoteRuntimeClient({ baseUrl: BASE_URL, apiKey: 'key-a', fetch: activeFetch });
 
@@ -207,7 +208,6 @@ describe('product dogfood smoke', () => {
         toolMode: OFFICIAL_TOOL_PROFILE_ALIASES.all,
         approvalMode: 'interactive',
       });
-      await web.connect(webSession.id);
       const tuiSession = await tuiB.createSession({
         workingDirectory: rootB,
         toolMode: OFFICIAL_TOOL_PROFILE_ALIASES['read-only'],
@@ -216,23 +216,23 @@ describe('product dogfood smoke', () => {
 
       expect(webSession.toolMode).toBe(OFFICIAL_TOOL_PROFILE_ALIASES.all);
       expect(tuiSession.toolMode).toBe(OFFICIAL_TOOL_PROFILE_ALIASES['read-only']);
-      expect((await web.listToolProfiles()).map((profile) => profile.use)).toEqual([OFFICIAL_TOOL_PROFILE_ALIASES.all]);
+      expect((await web.api.listToolProfiles()).map((profile) => profile.use)).toEqual([OFFICIAL_TOOL_PROFILE_ALIASES.all]);
 
-      const webSessions = await web.listSessions();
+      const webSessions = await web.api.listSessions();
       expect(webSessions.map((session) => session.id)).toEqual([webSession.id]);
       expect((await tuiB.listSessions()).map((session) => session.id)).toEqual([tuiSession.id]);
       await expect(tuiB.getSession(webSession.id)).rejects.toMatchObject({ kind: 'permission_denied' });
-      await expect(web.getSession(tuiSession.id)).rejects.toBeInstanceOf(EventBridgeError);
-      await expect(web.getSession(tuiSession.id)).rejects.toMatchObject({ kind: 'permission_denied' });
+      await expect(web.api.getSession(tuiSession.id)).rejects.toBeInstanceOf(CortxApiError);
+      await expect(web.api.getSession(tuiSession.id)).rejects.toMatchObject({ kind: 'permission_denied' });
 
-      const promptRun = web.prompt(webSession.id, 'write an approved smoke file');
+      const promptRun = web.send('write an approved smoke file');
       await waitUntil(() => webStore.getState().pendingQuestion?.toolCallId === 'write-call', 'approval request');
       expect(webStore.getState().pendingQuestion).toMatchObject({
         kind: 'tool_approval',
         allowedResponses: ['yes', 'no'],
         context: { toolName: 'write', sideEffects: 'write' },
       });
-      await web.answer(webSession.id, 'write-call', 'yes');
+      await web.answer('write-call', 'yes');
       await promptRun;
       await waitUntil(() => webStore.getState().status === 'idle', 'approved run completion');
 
@@ -245,16 +245,16 @@ describe('product dogfood smoke', () => {
         entry: { status: 'complete', isError: false },
       });
 
-      await replayWeb.connect(webSession.id);
+      await replayWeb.activate(webSession.id);
       await waitUntil(
         () => replayStore.getState().messages.turns.some((turn) => turn.content.includes('approval complete')),
         'event replay',
       );
 
-      const installed = await web.installSkillPack({ path: 'review-pack', id: 'review-pack' });
+      const installed = await web.api.installSkillPack({ path: 'review-pack', id: 'review-pack' });
       expect(installed).toMatchObject({ id: 'review-pack', name: 'Review Pack', version: '1.0.0' });
       expect((await tuiA.listSkillPacks()).map((pack) => pack.id)).toContain('review-pack');
-      expect((await web.listAgentSpecs()).map((spec) => spec.name)).toContain('pack-reviewer');
+      expect((await web.api.listAgentSpecs()).map((spec) => spec.name)).toContain('pack-reviewer');
 
       await tuiB.abort(tuiSession.id);
       await tuiB.resume(tuiSession.id);
@@ -268,8 +268,8 @@ describe('product dogfood smoke', () => {
         ),
       ).toBe(true);
     } finally {
-      await replayWeb.disconnect();
-      await web.disconnect();
+      replayWeb.close();
+      web.close();
       await tuiA.close();
       await tuiB.close();
       await handle.close();
@@ -294,9 +294,9 @@ describe('product dogfood smoke', () => {
     });
     installAppTransport(handle);
     const store = new AgentStore();
-    const web = new EventBridge(store, 'key-a', BASE_URL);
+    const web = new SessionController({ store, apiKey: 'key-a', baseUrl: BASE_URL });
     const replayStore = new AgentStore();
-    const replayWeb = new EventBridge(replayStore, 'key-a', BASE_URL);
+    const replayWeb = new SessionController({ store: replayStore, apiKey: 'key-a', baseUrl: BASE_URL });
 
     try {
       const session = await web.createSession({
@@ -304,8 +304,7 @@ describe('product dogfood smoke', () => {
         toolMode: OFFICIAL_TOOL_PROFILE_ALIASES.all,
         approvalMode: 'full-access',
       });
-      await web.connect(session.id);
-      await web.prompt(session.id, 'run a child agent');
+      await web.send('run a child agent');
       await waitUntil(
         () => store.getState().agentSessions.get('agent-call')?.status === 'completed',
         'sub-agent completion',
@@ -318,7 +317,7 @@ describe('product dogfood smoke', () => {
       });
       expect(store.getState().messages.turns.some((turn) => turn.content.includes('parent observed child'))).toBe(true);
 
-      await replayWeb.connect(session.id);
+      await replayWeb.activate(session.id);
       await waitUntil(
         () => replayStore.getState().agentSessions.get('agent-call')?.status === 'completed',
         'sub-agent replay',
@@ -359,8 +358,8 @@ describe('product dogfood smoke', () => {
         ),
       ).toHaveLength(2);
     } finally {
-      await replayWeb.disconnect();
-      await web.disconnect();
+      replayWeb.close();
+      web.close();
       await handle.close();
       await projectDomain.close();
     }

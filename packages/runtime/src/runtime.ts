@@ -1094,6 +1094,29 @@ export class CortxRuntime {
     return { ...admission };
   }
 
+  cancelFollowUp(
+    sessionId: string,
+    inputId: string,
+    options: RuntimeCommandOptions = {},
+  ): Promise<boolean> {
+    return this.runSessionCommand(
+      sessionId,
+      'cancel_follow_up',
+      { inputId },
+      options,
+      async () => {
+        const session = this.requireSession(sessionId);
+        this.assertSessionMutable(session);
+        const cancelled = session.inputSource.cancel(inputId);
+        if (!cancelled || cancelled.state === 'delivered') return false;
+        session.lastActivityAt = Date.now();
+        this.sessionRegistry.changed(session);
+        await this.persistRuntimeSession(session);
+        return true;
+      },
+    );
+  }
+
   answer(
     sessionId: string,
     toolCallId: string,

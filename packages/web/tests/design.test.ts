@@ -10,6 +10,8 @@ import {
   summarizeInspector,
   truncateMiddle,
 } from '../src/design';
+import { WorkbenchContributionRegistry } from '../src/workbench/contribution-registry';
+import { resolveWorkbenchLayout } from '../src/workbench/layout';
 
 describe('web design helpers', () => {
   test('compactPath keeps the last useful workspace segments', () => {
@@ -82,5 +84,35 @@ describe('web design helpers', () => {
     expect(compactSessionId(undefined)).toBe('no session');
     expect(compactSessionId('sess_123456789')).toBe('sess_12345');
     expect(truncateMiddle('abcdefghijklmnopqrstuvwxyz', 12)).toBe('abcd...wxyz');
+  });
+
+  test('workbench layout preserves conversation priority across breakpoints', () => {
+    expect(resolveWorkbenchLayout(1440, true)).toMatchObject({ mode: 'wide', railDocked: true, sidePaneDocked: true });
+    expect(resolveWorkbenchLayout(900, true)).toMatchObject({ mode: 'drawer', railDocked: true, sidePaneDocked: false });
+    expect(resolveWorkbenchLayout(390, true)).toMatchObject({ mode: 'single-pane', railDocked: false, sidePaneDocked: false });
+  });
+
+  test('contribution registration is ordered, disposable, and listener-isolated', () => {
+    const registry = new WorkbenchContributionRegistry();
+    registry.subscribe(() => {
+      throw new Error('isolated');
+    });
+    const removeContext = registry.register({
+      id: 'context',
+      area: 'side-pane',
+      label: 'Context',
+      order: 20,
+      content: { kind: 'context' },
+    });
+    registry.register({
+      id: 'activity',
+      area: 'side-pane',
+      label: 'Activity',
+      order: 10,
+      content: { kind: 'activity' },
+    });
+    expect(registry.getSnapshot().map((entry) => entry.id)).toEqual(['activity', 'context']);
+    removeContext();
+    expect(registry.getSnapshot().map((entry) => entry.id)).toEqual(['activity']);
   });
 });

@@ -274,10 +274,10 @@ describe('web desktop UI', () => {
     expect(html).toContain('Delete Review current changes and summar…');
     expect(html).toContain('read-only');
     expect(html).toContain('full-access');
-    expect(html).toContain('Panels');
+    expect(html).toContain('Activity');
     expect(html).not.toContain('Inspector');
     expect(html).toContain('Tools');
-    expect(html).not.toContain('Turn Agents');
+    expect(html).toContain('Turn Agents');
     expect(html).not.toContain('Runtime facts and tool activity');
     expect(html).not.toContain('Session Tokens');
     expect(html).not.toContain('Elapsed');
@@ -287,7 +287,7 @@ describe('web desktop UI', () => {
     expect(html).toContain('Context');
     expect(html).toContain('Templates');
     expect(html).toContain('GPT-5.5');
-    expect(html).toContain('Queued for next turn');
+    expect(html).toContain('Runtime queued inputs');
     expect(html).toContain('Check the pending UI state after this turn');
     expect(html).toContain('Steer');
     expect(html).toContain('Edit');
@@ -301,8 +301,8 @@ describe('web desktop UI', () => {
     );
 
     expect(html).toContain('Activity');
-    expect(html).toContain('Review');
-    expect(html).toContain('Browser');
+    expect(html).toContain('Context');
+    expect(html).not.toContain('Browser');
     expect(html).toContain('Turn Tools');
     expect(html).toContain('Turn Agents');
     expect(html).toContain('Close panel');
@@ -913,7 +913,7 @@ describe('web desktop UI', () => {
     expect(prompt).not.toContain('work/cortx');
     expect(running).toContain('Type a follow-up');
     expect(running).not.toContain('turn 3');
-    expect(running).toContain('Queued for next turn');
+    expect(running).toContain('Runtime queued inputs');
     expect(running).toContain('Use this after the current turn');
     expect(running).toContain('Stop current turn');
     expect(disabled).toContain('Answer the pending request');

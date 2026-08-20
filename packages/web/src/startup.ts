@@ -1,4 +1,4 @@
-import type { WebToolProfileInfo } from './bridge/event-bridge';
+import type { WebToolProfileInfo } from './client/types';
 
 /** Prefer the full official profile when available; otherwise let the server apply its safe default. */
 export function preferredInitialToolMode(profiles: WebToolProfileInfo[]): string | undefined {

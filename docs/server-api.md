@@ -1,6 +1,6 @@
 # Cortx Server API 接口说明
 
-最后核对：2026-08-18，对照 `packages/server/src/server.ts`、`auth.ts`、`security.ts` 和 `plugin-admin-http.ts` 当前实现。
+最后核对：2026-08-20，对照 `packages/server/src/routes/*`、`server.ts`、`auth.ts`、`security.ts` 和 `plugin-admin-http.ts` 当前实现。
 
 本文档描述 `@cortx/server` 暴露给 Web、远程 TUI、桌面端或第三方客户端的 HTTP/SSE 接口。Server 借用 Host 注入的 `ProjectDomain`，并通过 Host-owned `PluginAdminService` 暴露唯一的在线插件控制面；远程客户端只持有 HTTP/SSE client，绝不能创建本地 Registry、Manager、writer lease 或自动本地降级路径。真正的 agent 执行由 `@cortx/runtime` 承接，`@cortx/core` 仍保持为无宿主状态的 agent 基座。
 
@@ -83,6 +83,7 @@ Runtime 类型错误会保持稳定结构：
 | `permission_denied` |  403 | 超出当前 API key 的 workspace/tool/approval scope |
 | `session_not_found` |  404 | session 不存在，且 durable store 中也无法恢复     |
 | `session_busy`      |  409 | 当前 session 正在运行，不能再次启动 run           |
+| `conflict`          |  409 | command id/payload、Runtime incarnation 或交互版本冲突 |
 | `capacity_exceeded` |  429 | 同时运行中的 session 数超过 `maxSessions`         |
 | `runtime_failure`   |  500 | 未归类运行时错误                                  |
 
@@ -91,6 +92,23 @@ Runtime 类型错误会保持稳定结构：
 ```json
 { "error": "Unauthorized" }
 ```
+
+### 1.6 Mutation 幂等与 Runtime fence
+
+`PATCH /sessions/:id` 以及 prompt、steer、follow-up、follow-up cancel、resume、abort、answer 等 mutation 支持并推荐携带：
+
+```json
+{
+  "commandId": "client-generated-stable-id",
+  "expectedRuntimeIncarnation": "runtime-incarnation-from-session"
+}
+```
+
+- `commandId` 在一次用户动作及其网络重试之间保持不变；相同 id + 相同 payload 返回原 admission/result，不会重复执行。
+- 相同 id 搭配不同 command kind 或 payload 返回 `409 conflict`。
+- `expectedRuntimeIncarnation` 与当前进程不一致时返回 `409 conflict`，客户端必须刷新 session/baseline 后重新决定动作。
+- 无 body 的客户端也可以使用 `Idempotency-Key` 与 `If-Runtime-Incarnation` header；JSON 字段优先。
+- Web 客户端对每个新用户动作生成新 id；不能在不同动作之间复用。
 
 ## 2. 主要资源模型
 
@@ -121,6 +139,19 @@ interface RuntimeSessionInfo {
   skillPacks?: string[];
   promptHistory?: string[];
   usage?: AgentDoneUsage;
+  runtimeIncarnation: string;
+  pluginGeneration: string;
+  projectionAsOfSequence: number;
+  eventRetention: {
+    oldestAvailableSequence: number | null;
+    lastAvailableSequence: number;
+  };
+  runPhase: 'idle' | 'running' | 'waiting_user' | 'waiting_approval' | 'aborting' | 'interrupted';
+  sessionHealth: 'healthy' | 'run_failed' | 'durability_failed';
+  resumable: boolean;
+  acceptsPrompt: boolean;
+  pendingInteraction: RuntimePendingInteraction | null;
+  queuedInputs: RuntimeFollowUpAdmission[];
   isRunning: boolean;
   eventCount: number;
   metadata?: Record<string, unknown>;
@@ -206,6 +237,8 @@ interface RuntimeAgentEventEnvelope {
 | GET    | `/workspaces/directories`      | 浏览允许 scope 内的服务端目录                |
 | POST   | `/sessions`                    | 创建 session                                 |
 | GET    | `/sessions`                    | 列出当前 principal 可见 session              |
+| GET    | `/sessions/feed/baseline`      | 获取授权过滤的最小 session summary 与 feed cursor |
+| GET    | `/sessions/feed`               | 打开授权过滤、有界的全局 session change SSE  |
 | GET    | `/sessions/:id`                | 获取 session 详情                            |
 | PATCH  | `/sessions/:id`                | 更新 session 配置                            |
 | DELETE | `/sessions/:id`                | 删除 session，并清理 durable runtime session |
@@ -213,6 +246,7 @@ interface RuntimeAgentEventEnvelope {
 | POST   | `/sessions/:id/prompt`         | 启动一次用户 prompt run                      |
 | POST   | `/sessions/:id/steer`          | 当前 run 中插入 steer 指令                   |
 | POST   | `/sessions/:id/follow-up`      | 当前 run 中追加 follow-up，完成后自动继续    |
+| POST   | `/sessions/:id/follow-up/:inputId/cancel` | 取消尚未跨过 Core delivery boundary 的 follow-up |
 | POST   | `/sessions/:id/resume`         | 从当前 messages/checkpoint 继续运行          |
 | POST   | `/sessions/:id/abort`          | 中止当前运行中的 session                     |
 | POST   | `/sessions/:id/answer`         | 回答 `user_request` 或 askUser 问题          |
@@ -401,7 +435,7 @@ interface RuntimeSessionCreateRequest {
   "workingDirectory": "/Users/me/project",
   "model": "claude-sonnet-4",
   "reasoningEffort": "medium",
-  "toolMode": "coding",
+  "toolMode": "@cortx-ai/workspace-tools/coding",
   "approvalMode": "interactive",
   "skillPacks": ["engineering"],
   "metadata": {
@@ -419,7 +453,7 @@ interface RuntimeSessionCreateRequest {
     "id": "sess_1780000000000_abcd12",
     "workingDirectory": "/Users/me/project",
     "model": "claude-sonnet-4",
-    "toolMode": "coding",
+    "toolMode": "@cortx-ai/workspace-tools/coding",
     "approvalMode": "interactive",
     "isRunning": false,
     "eventCount": 0
@@ -430,7 +464,7 @@ interface RuntimeSessionCreateRequest {
 授权行为：
 
 - `workingDirectory` 会被解析到 allowed workspace roots 内。
-- `toolMode` 和 `approvalMode` 会被 API key scope 限制。
+- `toolMode` 提交 `GET /tool-profiles` 返回的 canonical `use`，`id/name` 只用于展示；它和 `approvalMode` 都会被 API key scope 限制。
 - 如果 API key 自带 `toolMode` 或 `approvalMode`，请求未传时会自动补上 scope 默认值。
 
 ### 6.2 `GET /sessions`
@@ -724,6 +758,50 @@ interface RuntimeSessionUpdateRequest {
 
 - 审批类请求的可选响应由事件里的 `request.allowedResponses` 表达，客户端应渲染为选择控件，而不是要求用户手输 yes/no。
 
+### 7.7 `POST /sessions/:id/follow-up/:inputId/cancel`
+
+取消 Runtime 队列中尚未被 Core claim 的 follow-up。已送达、已被 claim 或不存在的 input 返回 `409 conflict`。成功响应包含更新后的权威 session projection，Web 不维护浏览器本地自动 prompt 队列。
+
+### 7.8 全局 Session Summary 同步
+
+先读取 baseline：
+
+```http
+GET /sessions/feed/baseline
+```
+
+```json
+{
+  "runtimeIncarnation": "runtime-opaque-id",
+  "cursor": "session-feed:opaque:42",
+  "sessions": [
+    {
+      "id": "sess_123",
+      "runPhase": "waiting_user",
+      "sessionHealth": "healthy",
+      "acceptsPrompt": false,
+      "projectionAsOfSequence": 81
+    }
+  ]
+}
+```
+
+再用同一个 cursor 订阅：
+
+```http
+GET /sessions/feed?after=<cursor>
+Accept: text/event-stream
+```
+
+帧类型：
+
+- `session-change`：带 `changeType: added | updated | removed`；新增/更新携带最小 summary。
+- `replay-complete`：baseline cursor 之后的积压已发送，后续为 live。
+- `reset-required`：cursor 过期、Runtime incarnation 改变或单连接缓冲溢出；丢弃本地 summary cache 并重新读取 baseline。
+- `heartbeat`：保活，不代表领域变化。
+
+Server 在进入连接缓冲前按 creator/admin 和 workspace scope 过滤；不会先缓冲其他 principal 的 summary 再丢弃。连接数和缓冲分别受逐 principal 与全局上限约束。
+
 ## 8. 事件历史与 SSE
 
 ### 8.1 推荐消费流程
@@ -774,6 +852,13 @@ Envelope 响应：
       }
     }
   ],
+  "runtimeIncarnation": "runtime-opaque-id",
+  "retention": {
+    "oldestAvailableSequence": 1,
+    "lastAvailableSequence": 240
+  },
+  "resetRequired": false,
+  "replayComplete": true,
   "page": {
     "hasMoreBefore": false,
     "hasMoreAfter": true,
@@ -812,6 +897,7 @@ Query：
 | `format` | string | 传 `envelope` 时使用推荐 envelope 格式         |
 | `replay` | string | 默认 replay 历史；传 `false` 只订阅 live event |
 | `after`  | number | envelope 模式下只回放 sequence 大于该值的事件  |
+| `protocol` | string | 传 `frames` 启用显式 replay/reset/heartbeat 协议 |
 
 推荐请求：
 
@@ -838,11 +924,23 @@ data: {}
 
 - Envelope SSE 使用 `sequence` 作为 SSE `id`。
 - Server 先订阅 live event，再读取 snapshot，并缓冲窗口内 live event，避免快照和订阅之间漏事件。
-- `{}` 是 replay-complete/keepalive heartbeat。客户端收到第一次 heartbeat 后，才把 catch-up buffer 一次性切到 live。
+- 旧兼容模式仍使用 `{}` 表示 replay-complete/heartbeat；新客户端必须使用 `protocol=frames`。
 - 浏览器客户端必须用 `fetch()`、`AbortController` 和 `response.body.getReader()`；关闭时先 abort，再 `await reader.cancel()` 并等待 pump settlement。
 - SSE parser 需要支持跨 chunk 的 CRLF、注释、多个 `data:` 行和空行分帧，不能假设一个 chunk 等于一个 event。
 - 客户端按 envelope `sequence` 去重。断线后使用当前最后 sequence 重新请求 `replay=false&after=<lastSequence>`，等待 heartbeat 后再恢复 live 状态。
 - credential 只能放在 `Authorization` header；任何 URL credential 都返回 `400`。
+
+`protocol=frames` 的 `data` 是以下 tagged frame 之一：
+
+```json
+{ "type": "durable-event", "envelope": { "sequence": 201, "event": { "type": "text" } } }
+{ "type": "stream-frame", "frame": { "kind": "frame", "runId": 2, "offset": 8, "event": { "type": "text_delta" } } }
+{ "type": "replay-complete", "lastSequence": 201, "runtimeIncarnation": "runtime-opaque-id" }
+{ "type": "reset-required", "reason": "history-truncated", "retention": { "oldestAvailableSequence": 300, "lastAvailableSequence": 480 } }
+{ "type": "heartbeat", "timestamp": 1780000000000 }
+```
+
+Durable event 使用连续 session `sequence`；transient stream frame 使用 run-local `offset`，不占用 durable sequence。客户端遇到 `nextSequence > lastSequence + 1` 时保留当前画面、拉取 `history?after=<lastSequence>` 补洞，再按序应用缓冲 live frame；不能静默跨过缺口。
 
 ### 8.4 插件管理 SSE
 

@@ -370,10 +370,10 @@ function publicSummary(
 
 function publicChange(change: SessionSummaryChange): Record<string, unknown> {
   return change.type === 'removed'
-    ? { cursor: change.cursor, type: change.type, sessionId: change.sessionId }
+    ? { cursor: change.cursor, changeType: change.type, sessionId: change.sessionId }
     : {
         cursor: change.cursor,
-        type: change.type,
+        changeType: change.type,
         sessionId: change.sessionId,
         summary: publicSummary(change.summary),
       };

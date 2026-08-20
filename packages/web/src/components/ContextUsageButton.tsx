@@ -42,9 +42,11 @@ function MetricGroup({ title, children }: { title: string; children: ReactNode }
 export function ContextUsagePanel({
   summary,
   sessionTokenUsage,
+  embedded = false,
 }: {
   summary: ContextUsageSummary;
   sessionTokenUsage?: TokenUsage;
+  embedded?: boolean;
 }) {
   const sessionHitRate = sessionCacheHitRate(sessionTokenUsage);
   const usedTokens = summary.usedTokens ?? 0;
@@ -61,7 +63,7 @@ export function ContextUsagePanel({
   const [showDetails, setShowDetails] = useState(false);
 
   return (
-    <div className="w-[380px] rounded-xl border border-zinc-200 bg-white p-4 text-zinc-950 shadow-2xl shadow-zinc-200/80">
+    <div className={`${embedded ? 'w-full border-0 bg-transparent shadow-none' : 'w-[380px] rounded-xl border border-zinc-200 bg-white shadow-2xl shadow-zinc-200/80'} p-4 text-zinc-950`}>
       <div className="flex items-center justify-between gap-4">
         <div className="text-sm font-medium text-zinc-950">Current Request Context</div>
         <div className="font-mono text-xs text-zinc-500">

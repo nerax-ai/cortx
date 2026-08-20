@@ -11,7 +11,7 @@ import type {
   WebSkillPackInfo,
   WebToolProfileInfo,
   WebWorkspaceToolMode,
-} from '../bridge/event-bridge';
+} from '../client/types';
 import { compactPath, surface } from '../design';
 import type { ContextUsageSummary } from '../context-usage';
 import { ContextUsageButton } from './ContextUsageButton';
@@ -21,6 +21,7 @@ export interface QueuedPrompt {
   id: string;
   text: string;
   createdAt: number;
+  state?: 'queued' | 'interrupted';
 }
 
 type PromptMenuItem =
@@ -42,7 +43,7 @@ type PromptMenuItem =
     };
 
 interface PromptInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string) => void | Promise<void>;
   skills: WebSkillInfo[];
   agentSpecs?: WebAgentSpecInfo[];
   skillPacks?: WebSkillPackInfo[];
@@ -587,6 +588,7 @@ export function PromptInput({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [historyDraft, setHistoryDraft] = useState('');
   const [selectedMenuIndex, setSelectedMenuIndex] = useState(0);
+  const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   useAutosizeTextArea(textareaRef, value);
   const history = useMemo(
@@ -597,7 +599,7 @@ export function PromptInput({
   const placeholder = disabled
     ? 'Answer the pending request in the dialog...'
     : status === 'running'
-      ? 'Type a follow-up. Enter queues it after the current turn.'
+      ? 'Type a follow-up. Runtime will deliver it after the current turn.'
       : 'Ask Cortx to inspect, change, or explain this workspace...';
   const toolModeOptions = useMemo(() => profileSelectOptions(toolProfiles, toolMode), [toolProfiles, toolMode]);
   const menuItems = useMemo<PromptMenuItem[]>(() => [
@@ -726,7 +728,7 @@ export function PromptInput({
 
     if (shouldSubmitPromptInput(e)) {
       e.preventDefault();
-      submit();
+      void submit();
     }
   }
 
@@ -754,12 +756,19 @@ export function PromptInput({
     resetHistoryNavigation();
   }
 
-  function submit() {
+  async function submit() {
     const trimmed = value.trim();
-    if (!trimmed || disabled) return;
-    onSend(trimmed);
-    rememberHistory(trimmed);
-    setValue('');
+    if (!trimmed || disabled || sending) return;
+    setSending(true);
+    try {
+      await onSend(trimmed);
+      rememberHistory(trimmed);
+      setValue('');
+    } catch {
+      // Keep the draft in place; the workbench-level status surface reports the failure.
+    } finally {
+      setSending(false);
+    }
   }
 
   function editQueuedPrompt(prompt: QueuedPrompt) {
@@ -807,12 +816,17 @@ export function PromptInput({
           {queuedPrompts.length > 0 && (
             <div className="mx-3 mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50">
               <div className="border-b border-zinc-200 px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-zinc-400">
-                Queued for next turn
+                Runtime queued inputs
               </div>
               <div className="divide-y divide-zinc-200">
                 {queuedPrompts.map((prompt) => (
                   <div key={prompt.id} className="flex items-start gap-3 px-3 py-2">
-                    <p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-5 text-zinc-700">{prompt.text}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="whitespace-pre-wrap text-sm leading-5 text-zinc-700">{prompt.text}</p>
+                      <span className="mt-1 inline-block text-[10px] uppercase tracking-[0.14em] text-zinc-400">
+                        {prompt.state ?? 'queued'}
+                      </span>
+                    </div>
                     <div className="flex shrink-0 items-center gap-1">
                       <button
                         type="button"
@@ -853,7 +867,7 @@ export function PromptInput({
             }}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            disabled={disabled}
+            disabled={disabled || sending}
             rows={1}
             className="max-h-52 min-h-18 w-full resize-none border-0 bg-transparent px-4 py-4 text-[15px] leading-6 text-zinc-950 outline-none placeholder:text-zinc-400 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 disabled:opacity-40"
           />
@@ -901,7 +915,7 @@ export function PromptInput({
                 aria-label={status === 'running' ? 'Stop current turn' : 'Send message'}
                 tone={status === 'running' ? 'danger' : 'primary'}
                 onClick={status === 'running' ? onAbort : submit}
-                disabled={disabled || (status !== 'running' && !value.trim())}
+                disabled={disabled || sending || (status !== 'running' && !value.trim())}
                 className="flex h-8 w-8 items-center justify-center rounded-full !p-0 leading-none"
               >
                 <SendIcon running={status === 'running'} />
@@ -919,7 +933,7 @@ function profileSelectOptions(
   current: WebWorkspaceToolMode,
 ): Array<PromptSelectOption<WebWorkspaceToolMode>> {
   const options = profiles.map((profile) => ({
-    value: profile.id,
+    value: profile.use,
     label: profile.name ?? labelFromToolProfileId(profile.id),
   }));
   if (current && !options.some((option) => option.value === current)) {

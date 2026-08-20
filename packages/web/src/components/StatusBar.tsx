@@ -1,5 +1,5 @@
 import type { AgentStatus, TokenUsage } from '@cortx/store';
-import type { WebRuntimeSessionInfo } from '../bridge/event-bridge';
+import type { WebRuntimeSessionInfo } from '../client/types';
 
 interface StatusBarProps {
   status: AgentStatus;

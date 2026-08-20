@@ -4,7 +4,7 @@ import { compactPath, compactSessionId, surface } from '../design';
 import type {
   WebRuntimeSessionInfo,
   WebWorkspaceDirectoryListing,
-} from '../bridge/event-bridge';
+} from '../client/types';
 
 interface SessionSidebarProps {
   session: WebRuntimeSessionInfo | null;
@@ -66,6 +66,17 @@ function sessionTitle(session: WebRuntimeSessionInfo): string {
   return firstPrompt ? truncatePromptTitle(firstPrompt) : compactSessionId(session.id, 15);
 }
 
+export function sessionStatusLabel(session: WebRuntimeSessionInfo): string {
+  if (session.sessionHealth === 'durability_failed') return 'storage error';
+  if (session.runPhase === 'waiting_user') return 'needs input';
+  if (session.runPhase === 'waiting_approval') return 'needs approval';
+  if (session.runPhase === 'aborting') return 'stopping';
+  if (session.runPhase === 'interrupted') return session.resumable ? 'resumable' : 'interrupted';
+  if (session.runPhase === 'running' || session.isRunning) return 'running';
+  if (session.sessionHealth === 'run_failed') return 'last run failed';
+  return 'ready';
+}
+
 function groupSessions(sessions: WebRuntimeSessionInfo[]): ProjectGroup[] {
   const groups = new Map<string, WebRuntimeSessionInfo[]>();
   for (const item of sessions) {
@@ -81,7 +92,7 @@ function groupSessions(sessions: WebRuntimeSessionInfo[]): ProjectGroup[] {
         workingDirectory,
         sessions: sortedSessions,
         latestActivityAt: sortedSessions[0]?.lastActivityAt ?? 0,
-        runningCount: sortedSessions.filter((item) => item.isRunning).length,
+        runningCount: sortedSessions.filter((item) => item.isRunning || (item.runPhase !== undefined && item.runPhase !== 'idle')).length,
       } satisfies ProjectGroup;
     })
     .sort((a, b) => b.latestActivityAt - a.latestActivityAt);
@@ -518,7 +529,7 @@ export function SessionSidebar({
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="truncate font-medium">{title}</span>
                                   <span className={activeSession ? 'text-zinc-300' : 'text-zinc-400'}>
-                                    {item.isRunning ? 'running' : 'ready'}
+                                    {sessionStatusLabel(item)}
                                   </span>
                                 </div>
                                 <div className={`mt-1 truncate font-mono ${activeSession ? 'text-zinc-300' : 'text-zinc-400'}`}>

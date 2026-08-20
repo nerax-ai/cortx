@@ -219,6 +219,17 @@ describe('RuntimeInputSource', () => {
     expect(source.get('input:two')?.state).toBe('delivered');
     expect(source.acknowledge('input:one')).toBe(true);
   });
+
+  test('cancels only inputs that have not crossed the Core delivery boundary', () => {
+    const source = new RuntimeInputSource();
+    source.admit('cancel-me', 'later', 1);
+    expect(source.cancel('cancel-me')).toMatchObject({ inputId: 'cancel-me', state: 'queued' });
+    expect(source.visible()).toEqual([]);
+
+    source.admit('claimed', 'already claimed', 2);
+    source.consumeFollowUps('one-at-a-time');
+    expect(() => source.cancel('claimed')).toThrow('already being delivered');
+  });
 });
 
 describe('SessionCommandQueue', () => {

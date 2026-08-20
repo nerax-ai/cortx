@@ -89,6 +89,19 @@ export class RuntimeInputSource implements AgentFollowUpSource {
     return true;
   }
 
+  cancel(inputId: string): RuntimeFollowUpAdmission | undefined {
+    const admission = this.#admissions.get(inputId);
+    if (!admission) return undefined;
+    if (admission.state === 'delivered') return { ...admission };
+    if (this.#claimed.has(inputId)) {
+      throw new RuntimeError('conflict', 'Follow-up is already being delivered and can no longer be cancelled', {
+        inputId,
+      });
+    }
+    this.#admissions.delete(inputId);
+    return { ...admission };
+  }
+
   consumeFollowUps(mode: DeliveryMode): AgentFollowUpDelivery[] {
     const queued = [...this.#admissions.entries()].filter(
       ([inputId, admission]) => admission.state === 'queued' && !this.#claimed.has(inputId),

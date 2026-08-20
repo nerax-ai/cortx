@@ -1,5 +1,5 @@
 import type { AgentState } from '@cortx/store';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import type { QueuedPrompt } from './PromptInput';
 import type { ContextUsageSummary } from '../context-usage';
 import type {
@@ -14,12 +14,14 @@ import type {
   WebToolProfileInfo,
   WebWorkspaceDirectoryListing,
   WebWorkspaceToolMode,
-} from '../bridge/event-bridge';
+} from '../client/types';
 import { surface } from '../design';
 import { ChatView } from './ChatView';
 import { InspectorPanel, type WorkspacePanelTab } from './InspectorPanel';
 import { SessionSidebar } from './SessionSidebar';
 import { WorkspaceHeader } from './WorkspaceHeader';
+import { createDefaultWorkbenchRegistry } from '../workbench/contribution-registry';
+import { WorkbenchFrame } from '../workbench/WorkbenchFrame';
 
 interface DesktopWorkspaceProps {
   state: AgentState;
@@ -37,7 +39,9 @@ interface DesktopWorkspaceProps {
   approvalMode: WebApprovalMode;
   eventConnection: WebEventConnectionState;
   eventHistory: WebEventHistoryState;
-  onSend: (message: string) => void;
+  errorNotice?: string | null;
+  onDismissError?: () => void;
+  onSend: (message: string) => void | Promise<void>;
   onAbort: () => void;
   onResume: () => void;
   onSteerQueuedPrompt: (id: string) => void;
@@ -148,6 +152,8 @@ export function DesktopWorkspace({
   approvalMode,
   eventConnection,
   eventHistory,
+  errorNotice,
+  onDismissError,
   onSend,
   onAbort,
   onResume,
@@ -170,7 +176,10 @@ export function DesktopWorkspace({
   const contextUsage = contextUsageForSession(state, session);
   const workspaceAgentSpecs = filterAgentSpecsForWorkspace(agentSpecs, selectedWorkingDirectory);
   const workspaceSkillPacks = filterSkillPacksForWorkspace(skillPacks, selectedWorkingDirectory);
-  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  const [registry] = useState(createDefaultWorkbenchRegistry);
+  const contributions = useSyncExternalStore(registry.subscribe, registry.getSnapshot, registry.getSnapshot);
+  const [railOpen, setRailOpen] = useState(false);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(true);
   const [workspacePanelTab, setWorkspacePanelTab] = useState<WorkspacePanelTab>('activity');
 
   function openWorkspacePanel(tab: WorkspacePanelTab) {
@@ -178,87 +187,129 @@ export function DesktopWorkspace({
     setWorkspacePanelOpen(true);
   }
 
-  return (
-    <div className={`${surface.page} flex h-screen overflow-hidden`}>
-      <div className="hidden w-[252px] shrink-0 md:block">
-        <SessionSidebar
-          session={session}
-          sessions={sessions}
-          selectedWorkingDirectory={selectedWorkingDirectory}
-          onCreateSession={onCreateSession}
-          onBrowseWorkspaceDirectories={onBrowseWorkspaceDirectories}
-          onSelectProject={onSelectProject}
-          onSwitchSession={onSwitchSession}
-          onDeleteSession={onDeleteSession}
-        />
-      </div>
+  const rail = (
+    <SessionSidebar
+      session={session}
+      sessions={sessions}
+      selectedWorkingDirectory={selectedWorkingDirectory}
+      onCreateSession={onCreateSession}
+      onBrowseWorkspaceDirectories={onBrowseWorkspaceDirectories}
+      onSelectProject={async (workingDirectory) => {
+        setRailOpen(false);
+        await onSelectProject(workingDirectory);
+      }}
+      onSwitchSession={async (sessionId) => {
+        setRailOpen(false);
+        await onSwitchSession(sessionId);
+      }}
+      onDeleteSession={onDeleteSession}
+    />
+  );
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <WorkspaceHeader
-          status={state.status}
-          session={session}
-          iteration={state.iteration}
-          eventConnection={eventConnection}
-          onRecoverEventStream={onRecoverEventStream}
-          panelOpen={workspacePanelOpen}
-          activePanel={workspacePanelTab}
-          onOpenPanel={openWorkspacePanel}
-          onClosePanel={() => setWorkspacePanelOpen(false)}
-        />
+  const header = (
+    <WorkspaceHeader
+      status={state.status}
+      session={session}
+      iteration={state.iteration}
+      eventConnection={eventConnection}
+      onRecoverEventStream={onRecoverEventStream}
+      panelOpen={workspacePanelOpen}
+      activePanel={workspacePanelTab}
+      panelItems={contributions.map((contribution) => ({ value: contribution.id, label: contribution.label }))}
+      onOpenPanel={openWorkspacePanel}
+      onClosePanel={() => setWorkspacePanelOpen(false)}
+    />
+  );
+
+  const conversation = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {session?.sessionHealth === 'durability_failed' && (
+        <div role="alert" className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800">
+          Runtime persistence failed. New mutations are disabled until storage is repaired; the visible history remains available for diagnosis.
+        </div>
+      )}
+      {eventHistory.truncated && (
+        <div role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          Earlier events were truncated by retention. The conversation starts at the oldest recoverable Runtime fact.
+        </div>
+      )}
+      {errorNotice && (
         <div
-          className={`grid min-h-0 flex-1 grid-cols-1 ${
-            workspacePanelOpen ? 'xl:grid-cols-[minmax(0,1fr)_384px]' : ''
-          }`}
+          role="status"
+          aria-live="polite"
+          className="flex items-center justify-between gap-3 border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800"
         >
-          <ChatView
-            sessionId={session?.id ?? state.sessionId}
-            messages={state.messages}
-            activity={state.activity}
-            toolCalls={state.toolCalls}
-            agentSessions={state.agentSessions}
-            contextUsage={contextUsage}
-            tokenUsage={state.tokenUsage}
-            status={state.status}
-            error={state.error}
-            skills={sessionSkills}
-            agentSpecs={workspaceAgentSpecs}
-            skillPacks={workspaceSkillPacks}
-            selectedSkillPackIds={selectedSkillPackIds}
-            toolProfiles={toolProfiles}
-            models={models}
-            model={session?.model}
-            reasoningEffort={session?.reasoningEffort}
-            promptHistory={session?.promptHistory}
-            queuedPrompts={queuedPrompts}
-            hasOlderHistory={eventHistory.sessionId === session?.id && eventHistory.hasMoreBefore}
-            isLoadingOlderHistory={eventHistory.sessionId === session?.id && eventHistory.loadingOlder}
-            toolMode={toolMode}
-            approvalMode={approvalMode}
-            onSend={onSend}
-            onAbort={onAbort}
-            onResume={onResume}
-            onSteerQueuedPrompt={onSteerQueuedPrompt}
-            onDeleteQueuedPrompt={onDeleteQueuedPrompt}
-            onLoadOlderHistory={onLoadOlderHistory}
-            onLaunchAgentSpec={onLaunchAgentSpec}
-            onSkillPackSelectionChange={onSkillPackSelectionChange}
-            onModelChange={onModelChange}
-            onReasoningEffortChange={onReasoningEffortChange}
-            onToolModeChange={onToolModeChange}
-            onApprovalModeChange={onApprovalModeChange}
-          />
-          {workspacePanelOpen && (
-            <div className="hidden min-h-0 border-l border-zinc-200 xl:block">
-              <InspectorPanel
-                activity={state.activity}
-                activeTab={workspacePanelTab}
-                onTabChange={setWorkspacePanelTab}
-                onClose={() => setWorkspacePanelOpen(false)}
-              />
-            </div>
+          <span>{errorNotice}</span>
+          {onDismissError && (
+            <button type="button" onClick={onDismissError} className={`min-h-9 rounded px-2 py-1 text-xs hover:bg-rose-100 ${surface.focus}`}>
+              Dismiss
+            </button>
           )}
         </div>
-      </main>
+      )}
+      <ChatView
+        sessionId={session?.id ?? state.sessionId}
+        messages={state.messages}
+        activity={state.activity}
+        toolCalls={state.toolCalls}
+        agentSessions={state.agentSessions}
+        contextUsage={contextUsage}
+        tokenUsage={state.tokenUsage}
+        status={state.status}
+        error={state.error}
+        skills={sessionSkills}
+        agentSpecs={workspaceAgentSpecs}
+        skillPacks={workspaceSkillPacks}
+        selectedSkillPackIds={selectedSkillPackIds}
+        toolProfiles={toolProfiles}
+        models={models}
+        model={session?.model}
+        reasoningEffort={session?.reasoningEffort}
+        promptHistory={session?.promptHistory}
+        queuedPrompts={queuedPrompts}
+        hasOlderHistory={eventHistory.sessionId === session?.id && eventHistory.hasMoreBefore}
+        isLoadingOlderHistory={eventHistory.sessionId === session?.id && eventHistory.loadingOlder}
+        toolMode={toolMode}
+        approvalMode={approvalMode}
+        canChangeModes={session ? session.runPhase === 'idle' && session.sessionHealth !== 'durability_failed' : state.status === 'idle'}
+        onSend={onSend}
+        onAbort={onAbort}
+        onResume={onResume}
+        onSteerQueuedPrompt={onSteerQueuedPrompt}
+        onDeleteQueuedPrompt={onDeleteQueuedPrompt}
+        onLoadOlderHistory={onLoadOlderHistory}
+        onLaunchAgentSpec={onLaunchAgentSpec}
+        onSkillPackSelectionChange={onSkillPackSelectionChange}
+        onModelChange={onModelChange}
+        onReasoningEffortChange={onReasoningEffortChange}
+        onToolModeChange={onToolModeChange}
+        onApprovalModeChange={onApprovalModeChange}
+      />
     </div>
+  );
+
+  const sidePane = (
+    <InspectorPanel
+      activity={state.activity}
+      contextUsage={contextUsage}
+      tokenUsage={state.tokenUsage}
+      contributions={contributions}
+      activeTab={workspacePanelTab}
+      onTabChange={setWorkspacePanelTab}
+      onClose={() => setWorkspacePanelOpen(false)}
+    />
+  );
+
+  return (
+    <WorkbenchFrame
+      rail={rail}
+      header={header}
+      conversation={conversation}
+      sidePane={sidePane}
+      railOpen={railOpen}
+      sidePaneOpen={workspacePanelOpen}
+      onRailOpenChange={setRailOpen}
+      onSidePaneOpenChange={setWorkspacePanelOpen}
+    />
   );
 }

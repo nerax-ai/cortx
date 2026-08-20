@@ -40,12 +40,12 @@ const STATUS_TONES: Record<AgentStatus, StatusTone> = {
 };
 
 export const surface = {
-  page: 'min-h-screen bg-[#f7f7f5] text-zinc-950 antialiased',
-  panel: 'border border-zinc-200 bg-white shadow-sm shadow-zinc-200/50',
-  softPanel: 'border border-zinc-200 bg-[#f7f7f5]',
+  page: 'min-h-screen bg-[var(--cortx-surface-page)] text-[var(--cortx-text)] antialiased',
+  panel: 'border border-[var(--cortx-border)] bg-[var(--cortx-surface-panel)] shadow-sm shadow-zinc-200/50',
+  softPanel: 'border border-[var(--cortx-border)] bg-[var(--cortx-surface-soft)]',
   muted: 'text-zinc-500',
   subtle: 'text-zinc-600',
-  focus: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/20',
+  focus: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cortx-focus)]',
 };
 
 export function statusTone(status: AgentStatus): StatusTone {

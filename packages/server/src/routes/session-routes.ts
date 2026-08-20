@@ -35,6 +35,7 @@ export const SESSION_ENDPOINT_POLICIES = [
   { method: 'POST', path: '/sessions/:id/prompt', access: 'creator-or-admin' },
   { method: 'POST', path: '/sessions/:id/steer', access: 'creator-or-admin' },
   { method: 'POST', path: '/sessions/:id/follow-up', access: 'creator-or-admin' },
+  { method: 'POST', path: '/sessions/:id/follow-up/:inputId/cancel', access: 'creator-or-admin' },
   { method: 'POST', path: '/sessions/:id/resume', access: 'creator-or-admin' },
   { method: 'POST', path: '/sessions/:id/abort', access: 'creator-or-admin' },
   { method: 'POST', path: '/sessions/:id/answer', access: 'creator-or-admin' },
@@ -136,6 +137,23 @@ export function mountSessionRoutes(app: Hono, deps: SessionRouteDependencies): v
       readRuntimeCommandOptions(c, body),
     );
     return { ok: true, admission, session: runtime.getSession(id) };
+  }));
+
+  app.post('/sessions/:id/follow-up/:inputId/cancel', async (c) => respond(c, async () => {
+    const id = c.req.param('id');
+    await deps.authorizeSession(c, id);
+    const body = await readOptionalJson(c);
+    const cancelled = await runtime.cancelFollowUp(
+      id,
+      c.req.param('inputId'),
+      readRuntimeCommandOptions(c, body),
+    );
+    if (!cancelled) {
+      throw new RuntimeError('conflict', 'Follow-up is no longer cancellable', {
+        inputId: c.req.param('inputId'),
+      });
+    }
+    return { ok: true, session: runtime.getSession(id) };
   }));
 
   app.post('/sessions/:id/resume', async (c) => respond(c, async () => {

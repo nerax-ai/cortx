@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AgentStatus } from '@cortx/store';
-import type { WebEventConnectionState, WebRuntimeSessionInfo } from '../bridge/event-bridge';
+import type { WebEventConnectionState, WebRuntimeSessionInfo } from '../client/types';
 import { compactPath, statusTone, surface } from '../design';
 import type { WorkspacePanelTab } from './InspectorPanel';
 
@@ -14,11 +14,13 @@ interface WorkspaceHeaderProps {
   activePanel?: WorkspacePanelTab;
   onOpenPanel?: (tab: WorkspacePanelTab) => void;
   onClosePanel?: () => void;
+  panelItems?: Array<{ value: WorkspacePanelTab; label: string }>;
 }
 
 const CONNECTION_LABELS: Record<WebEventConnectionState['phase'], string> = {
   connecting: 'Connecting',
   replaying: 'Replaying',
+  resyncing: 'Resyncing',
   live: 'Live',
   reconnecting: 'Reconnecting',
   disconnected: 'Disconnected',
@@ -28,6 +30,7 @@ const CONNECTION_LABELS: Record<WebEventConnectionState['phase'], string> = {
 const CONNECTION_CLASSES: Record<WebEventConnectionState['phase'], string> = {
   connecting: 'border-sky-200 bg-sky-50 text-sky-700',
   replaying: 'border-amber-200 bg-amber-50 text-amber-700',
+  resyncing: 'border-amber-200 bg-amber-50 text-amber-700',
   live: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   reconnecting: 'border-amber-200 bg-amber-50 text-amber-700',
   disconnected: 'border-rose-200 bg-rose-50 text-rose-700',
@@ -65,10 +68,9 @@ function EventConnectionPill({
   );
 }
 
-const PANEL_ITEMS: Array<{ value: WorkspacePanelTab; label: string }> = [
+const DEFAULT_PANEL_ITEMS: Array<{ value: WorkspacePanelTab; label: string }> = [
   { value: 'activity', label: 'Activity' },
-  { value: 'review', label: 'Review' },
-  { value: 'browser', label: 'Browser' },
+  { value: 'context', label: 'Context' },
 ];
 
 function PanelLauncher({
@@ -76,11 +78,13 @@ function PanelLauncher({
   activePanel,
   onOpenPanel,
   onClosePanel,
+  panelItems,
 }: {
   panelOpen: boolean;
   activePanel: WorkspacePanelTab;
   onOpenPanel: (tab: WorkspacePanelTab) => void;
   onClosePanel: () => void;
+  panelItems: Array<{ value: WorkspacePanelTab; label: string }>;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -93,14 +97,14 @@ function PanelLauncher({
         onClick={() => setOpen((current) => !current)}
         className={`flex h-8 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 hover:bg-zinc-50 ${surface.focus}`}
       >
-        <span>{panelOpen ? PANEL_ITEMS.find((item) => item.value === activePanel)?.label ?? 'Panels' : 'Panels'}</span>
+        <span>{panelOpen ? panelItems.find((item) => item.value === activePanel)?.label ?? 'Panels' : 'Panels'}</span>
         <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3 w-3 text-zinc-400">
           <path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 w-44 overflow-hidden rounded-xl border border-zinc-200 bg-white p-1 shadow-xl shadow-zinc-200/70">
-          {PANEL_ITEMS.map((item) => {
+          {panelItems.map((item) => {
             const selected = panelOpen && activePanel === item.value;
             return (
               <button
@@ -147,6 +151,7 @@ export function WorkspaceHeader({
   activePanel = 'activity',
   onOpenPanel,
   onClosePanel,
+  panelItems = DEFAULT_PANEL_ITEMS,
 }: WorkspaceHeaderProps) {
   const tone = statusTone(status);
 
@@ -176,6 +181,7 @@ export function WorkspaceHeader({
           activePanel={activePanel}
           onOpenPanel={onOpenPanel}
           onClosePanel={onClosePanel}
+          panelItems={panelItems}
         />
       )}
     </header>
